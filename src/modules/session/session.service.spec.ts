@@ -68,6 +68,7 @@ import {
   EngineStatus,
   GroupEvent,
   IncomingCallEvent,
+  InboundTicket,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { BaileysSessionStore } from '../../engine/adapters/baileys-session-store';
 import {
@@ -6020,6 +6021,65 @@ describe('SessionService', () => {
       expect(socketPayload).toEqual(webhookPayload);
       expect(socketPayload).toMatchObject({ id: 'wa-out-1', messageId: 'wa-out-1', status: 'read' });
       expect(socketPayload.ack).toBeDefined();
+    });
+
+    // A webhook chatId condition matches an ack or failure only when the payload names the chat.
+    it('carries the chat an engine update names on the ack and failure events', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+
+      callbacks.onMessageAck!('wa-out-1', 'failed', '120363000@g.us');
+      await flush();
+
+      expect(eventsGateway.emitMessageAck).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ messageId: 'wa-out-1', chatId: '120363000@g.us' }),
+      );
+      expect(dispatchedEvents('message.ack')[0][2]).toMatchObject({ chatId: '120363000@g.us' });
+      expect(dispatchedEvents('message.failed')[0][2]).toMatchObject({ chatId: '120363000@g.us' });
+    });
+
+    // On PostgreSQL the engine hands each emit the ticket it was admitted with. Without it the
+    // message takes the ticketless path: the chat order gate and the media memory bound stop applying.
+    describe('hands the admission ticket of an emit to the projector', () => {
+      const ticket: InboundTicket = {
+        reserve: () => true,
+        holdUntil: () => undefined,
+        drop: () => undefined,
+        revoked: false,
+      };
+
+      it('for an inbound message', async () => {
+        const callbacks = await startAndCaptureCallbacks();
+        const projector = (lifecycle as unknown as { messages: MessageProjector }).messages;
+        const handle = jest.spyOn(projector, 'handleInboundMessage').mockImplementation(() => undefined);
+        const inbound = makeMessage({ fromMe: false });
+
+        callbacks.onMessage!(inbound, ticket);
+
+        expect(handle).toHaveBeenCalledWith('sess-uuid-1', mockEngine, inbound, ticket);
+      });
+
+      it('for an own-send echo', async () => {
+        const callbacks = await startAndCaptureCallbacks();
+        const projector = (lifecycle as unknown as { messages: MessageProjector }).messages;
+        const handle = jest.spyOn(projector, 'handleOwnSendEcho').mockImplementation(() => undefined);
+        const echo = makeMessage({ fromMe: true });
+
+        callbacks.onMessageCreate!(echo, ticket);
+
+        expect(handle).toHaveBeenCalledWith('sess-uuid-1', mockEngine, echo, ticket);
+      });
+    });
+
+    // The Baileys history capture clears the previews of messages already revoked in the database
+    // from what this returns.
+    it('hands the revocations the projector stored for a history batch back to the engine', async () => {
+      const callbacks = await startAndCaptureCallbacks();
+      const projector = (lifecycle as unknown as { messages: MessageProjector }).messages;
+      const revoked = [makeMessage({ id: 'h1', type: 'revoked', body: '' })];
+      jest.spyOn(projector, 'persistHistoryMessages').mockResolvedValue(revoked);
+
+      expect(await callbacks.onHistoryMessages!([makeMessage({ id: 'h1' })])).toBe(revoked);
     });
 
     it("reflects delivery on the stored message: 'delivered' updates status to DELIVERED (#220)", async () => {
