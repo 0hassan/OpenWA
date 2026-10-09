@@ -218,8 +218,10 @@ export class WebhookRedriveService implements OnModuleDestroy {
       else if (outcome === 'cancelled') result.skipped++;
       else {
         result.failed++;
-        // Terminal failures update their own attempt count in the shared recorder.
-        if (outcome !== 'failed') await this.bumpAttempts(row);
+        // A failure the delivery path records raises this row's attempts itself. One it refuses before
+        // sending (a body over the payload cap after the hooks) leaves the row as it was, so the attempt is
+        // counted here; otherwise that row would head every batch.
+        if (outcome !== 'failed' || (await this.attemptsUnchanged(row))) await this.bumpAttempts(row);
       }
     } catch (error) {
       result.failed++;
@@ -241,6 +243,15 @@ export class WebhookRedriveService implements OnModuleDestroy {
       .where('failure.id = :id', { id })
       .getOne();
     return row?.payload ?? null;
+  }
+
+  /** Whether the row still carries the attempt count the batch read, that is, nothing recorded the failure. */
+  private async attemptsUnchanged(row: WebhookDeliveryFailure): Promise<boolean> {
+    const current = await this.failureRepository.findOne({
+      where: { id: row.id },
+      select: { id: true, attempts: true },
+    });
+    return current !== null && current.attempts === row.attempts;
   }
 
   /** Count the failed replay on the row. Best-effort: the row is already on record either way. */

@@ -69,6 +69,9 @@ describe('WebhookRedriveService', () => {
         ReturnType<WebhookDeliveryService['redeliver']>,
         Parameters<WebhookDeliveryService['redeliver']>
       >(async (webhook, sessionId, event, key, data) => {
+        // A preflight refusal (a body over the payload cap after the hooks): reported as failed, with
+        // nothing recorded, so the row keeps the attempt count it had.
+        if (data.refuse === true) return 'failed';
         if (data.fail === true) {
           const recorded = await recordWebhookDeliveryFailure(
             failures,
@@ -127,6 +130,24 @@ describe('WebhookRedriveService', () => {
     );
     expect(await failures.count()).toBe(0);
     expect(await service.redrive({})).toMatchObject({ delivered: 0, remaining: 0 });
+  });
+
+  it('counts a replay the delivery path refused before sending, so that row does not head every batch', async () => {
+    const refused = await addFailure({ attempts: 1, payload: { id: 'big', refuse: true } });
+    const other = await addFailure({ attempts: 1, createdAt: new Date(Date.now() - 30_000) });
+
+    expect(await service.redrive({ limit: 1 })).toMatchObject({ failed: 1, remaining: 2 });
+    // The recorder raised nothing for a refusal, so the redrive counts the attempt itself, once.
+    expect((await failures.findOneByOrFail({ id: refused.id })).attempts).toBe(2);
+
+    await service.redrive({ limit: 1 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual([refused.idempotencyKey, other.idempotencyKey]);
+  });
+
+  it('raises the attempts of a replay the recorder already counted by one, not two', async () => {
+    const row = await addFailure({ attempts: 3, payload: { id: 'm', fail: true } });
+    await service.redrive({});
+    expect((await failures.findOneByOrFail({ id: row.id })).attempts).toBe(4);
   });
 
   it('reads each retained payload only as its replay starts, never the whole batch at once', async () => {
