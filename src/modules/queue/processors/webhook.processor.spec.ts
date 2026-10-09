@@ -154,6 +154,25 @@ describe('WebhookProcessor', () => {
     expect(hookManager.execute).toHaveBeenCalledWith('webhook:delivered', expect.anything(), expect.anything());
   });
 
+  // With the queue on, the worker is the only party that retires a queued outbox row: left open, the
+  // reconciler replays every queued delivery to the receiver again.
+  it('retires the outbox row once the receiver answers 2xx', async () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await processor.process(makeJob());
+
+    expect(outbox.close).toHaveBeenCalledTimes(1);
+    expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+  });
+
+  it('keeps the outbox row when an attempt fails with retries left', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+    await expect(processor.process(makeJob({ maxRetries: 3 }, 0))).rejects.toThrow();
+
+    expect(outbox.close).not.toHaveBeenCalled();
+  });
+
   it('sets X-OpenWA-Retry-Count to the attempt number', async () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
@@ -399,6 +418,15 @@ describe('WebhookProcessor', () => {
       expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).not.toHaveBeenCalled();
       expect(hookManager.execute).not.toHaveBeenCalled();
+    });
+
+    it('retires the outbox row of a job whose webhook is gone, so the sweep does not replay it', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await processor.process(makeJob());
+
+      expect(outbox.close).toHaveBeenCalledTimes(1);
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
     });
 
     it('treats a failed webhook read as a failed attempt: retried, and dead-lettered on the last one', async () => {
