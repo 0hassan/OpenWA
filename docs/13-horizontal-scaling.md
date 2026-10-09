@@ -467,8 +467,8 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ['ALL']
-              # Only for the root entrypoint's chown and the gosu privilege drop.
-              add: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'SETGID', 'SETUID']
+              # The root entrypoint's chown, the gosu privilege drop, and init forwarding signals after it.
+              add: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'KILL', 'SETGID', 'SETUID']
           resources:
             requests:
               memory: '512Mi'
