@@ -147,6 +147,25 @@ describe('PluginLoaderService — sandbox tier routing', () => {
     expect(pluginOf(loader).status).toBe(PluginStatus.DISABLED);
   });
 
+  it('tears down the second worker when a re-enabled plugin is disabled again', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+
+    await loader.enablePlugin('p1');
+    await loader.disablePlugin('p1');
+    await loader.enablePlugin('p1');
+    await loader.disablePlugin('p1');
+
+    // Each enable starts its own worker and each disable has to end that one. A disable that joined the
+    // settled teardown of the first cycle would report success and leave the second worker running.
+    expect(loader.hosts).toHaveLength(2);
+    for (const host of loader.hosts) {
+      expect(host.runLifecycle).toHaveBeenCalledWith('onDisable', expect.any(Number));
+      expect(host.terminate).toHaveBeenCalledTimes(1);
+    }
+    expect(pluginOf(loader).status).toBe(PluginStatus.DISABLED);
+  });
+
   it('dedups duplicate hook-subscribe from the worker so a flood cannot grow the host registry', async () => {
     const loader = makeLoader();
     seed(loader, { builtIn: false, instance: null });
