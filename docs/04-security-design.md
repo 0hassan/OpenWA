@@ -112,7 +112,8 @@ found where it was saved, or replaced. Try these in order. If every key stopped 
    key is no longer active (revoked, expired or deleted). While the file holds a live key, the
    startup banner ends with `(full key in <path>)`. Read it with `cat data/.api-key`, with
    `docker compose exec openwa-api cat /app/data/.api-key` on the compose deployment, or with
-   `kubectl exec openwa-0 -- cat /app/data/.api-key` on the Helm chart (release `openwa`). The key
+   `kubectl exec openwa-0 -- cat /app/data/.api-key` on the Helm chart (release `openwa`). The file has no
+   trailing newline, so the shell prompt follows the key on the same line: copy only the key. The key
    manages keys only while it still meets step 2's conditions. Once it is demoted from `admin`,
    given any `allowedSessions` or `allowedChats`, or given `allowedIps` that exclude your address,
    the file and the banner line remain but key management is refused; go on to step 2 or 3.

@@ -190,7 +190,8 @@ docker compose -f docker-compose.dev.yml up -d
 ```
 
 **Your API key.** The first boot generates an admin API key, prints it once in the log and stores it at
-`/app/data/.api-key` inside the container. Read it with `docker exec openwa-api cat /app/data/.api-key`,
+`/app/data/.api-key` inside the container. Read it with `docker exec openwa-api cat /app/data/.api-key`
+(the file has no trailing newline, so the shell prompt follows the key on the same line; copy only the key),
 then use it to sign in to the dashboard and as the `X-API-Key` header wherever this README shows
 `YOUR_API_KEY`. Later boots log only a masked prefix. See [API Key](docs/README.md#api-key).
 

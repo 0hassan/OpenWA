@@ -1420,6 +1420,14 @@ retention/encryption to completed archives externally; see the [backup and resto
 
 > A: Keys are stored hashed, so the database cannot give it back. Try the key in `data/.api-key` (or `BOOTSTRAP_KEY_FILE`), or the `API_MASTER_KEY` value set when the key table was last seeded, which still works while that key is an active, unscoped ADMIN key. Failing that, use another unscoped ADMIN key to mint a replacement. With neither, stop the instance and write a new key's hash into the lost key's row in the main database, which keeps every other key working. The steps are in [Recovering a lost admin key](./04-security-design.md#recovering-a-lost-admin-key).
 
+**Q: The key from `data/.api-key` is refused with `Invalid API key`. What is wrong?**
+
+> A: A `401 Invalid API key` means the key's hash is not in the key table this instance reads. The usual
+> causes, in order: the pasted string is not the stored key (the file has no trailing newline, so a shell
+> prompt follows the key on the same line; copy only the key); another instance or database answers
+> than the one that generated it; or `API_KEY_PEPPER` was set or changed after the key was created, which
+> invalidates every key (see [Security](./04-security-design.md)).
+
 ### Webhook Questions
 
 **Q: What events can I subscribe to?**
