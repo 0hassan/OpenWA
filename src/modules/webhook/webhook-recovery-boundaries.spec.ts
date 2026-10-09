@@ -431,11 +431,11 @@ describe('webhook recovery across live ownership and configuration changes', () 
       payload: { id: 1 },
       attempts: 5,
     });
-    const build = () =>
+    const build = (webhook: Record<string, unknown> = {}) =>
       new WebhookDeliveryService(
         webhooks,
         failures,
-        new ConfigService({ webhook: {} }),
+        new ConfigService({ webhook }),
         new HookManager(),
         new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent)),
       );
@@ -466,6 +466,42 @@ describe('webhook recovery across live ownership and configuration changes', () 
     it('records the plain exhaustion reason when nothing was recorded before', async () => {
       expect(await build().recordReplayExhaustion(spent('key-plain'), primary.url)).toBe(true);
       expect((await failures.find()).map(row => row.lastError)).toEqual(['Webhook replay budget exhausted']);
+    });
+
+    it('leaves a terminal failure that is already on record as it is', async () => {
+      await failures.save(
+        failures.create({
+          webhookId: primary.id,
+          sessionId: primary.sessionId,
+          event: 'message.received',
+          url: primary.url,
+          idempotencyKey: 'key-failed',
+          attempts: 3,
+          lastStatusCode: 503,
+          lastError: 'HTTP 503: Service Unavailable',
+        }),
+      );
+
+      expect(await build().recordReplayExhaustion(spent('key-failed'), primary.url)).toBe(true);
+
+      // The receiver's own answer is what the operator has to act on; the generic reason would replace it.
+      const rows = await failures.find();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ attempts: 3, lastStatusCode: 503, lastError: 'HTTP 503: Service Unavailable' });
+    });
+
+    it('stores no event body on the exhaustion row while payload retention is off', async () => {
+      await build().recordReplayExhaustion(spent('key-private'), primary.url);
+
+      const [row] = await failures.find({ select: { id: true, payload: true } });
+      expect(row.payload).toBeNull();
+    });
+
+    it('keeps the event body on the exhaustion row for a redrive while payload retention is on', async () => {
+      await build({ failurePayloadRetentionHours: 24 }).recordReplayExhaustion(spent('key-kept'), primary.url);
+
+      const [row] = await failures.find({ select: { id: true, payload: true } });
+      expect(row.payload).toEqual({ id: 1 });
     });
   });
 
