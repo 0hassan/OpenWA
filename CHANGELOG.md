@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop a dashboard Logs export from downloading rows after sign-out when its last page was throttled.
 - Stop reopening a just-saved dashboard template from loading its old values, which a second save wrote back.
 - Stop an operator webhook redrive at its next row on shutdown.
+- Stop an operator ingress dead-letter redrive at its next row on shutdown, leaving the rows it did not reach unchanged.
 - Run a plugin's `onDisable` once when shutdown, uninstall or an update overlaps a disable already in progress.
 - Answer `503` and keep the previous version when shutdown begins before an update of a plugin the operator switched on has applied.
 - Disable plugins whose enable is still running at shutdown, after the running ones, and refuse new plugin enables during teardown.

@@ -3,6 +3,7 @@ import { IngressEnqueueService } from './ingress-enqueue.service';
 import { IntegrationDeliveryFailure } from './entities/integration-delivery-failure.entity';
 import { IngressEvent } from './entities/ingress-event.entity';
 import { Repository } from 'typeorm';
+import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
 
 describe('RedriveService', () => {
   let repo: jest.Mocked<Partial<Repository<IntegrationDeliveryFailure>>>;
@@ -71,6 +72,7 @@ describe('RedriveService', () => {
         payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
       },
       'redrive:f1',
+      expect.any(AbortSignal),
     );
     expect(repo.update).toHaveBeenCalledWith({ id: 'f1' }, { redriven: true });
     expect(repo.update).toHaveBeenCalledWith({ id: 'f2' }, { redriven: true });
@@ -214,8 +216,94 @@ describe('RedriveService', () => {
     expect(ingressEnqueue.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ deliveryId: 'f3', sessionId: undefined }),
       'redrive:f3',
+      expect.any(AbortSignal),
     );
     // A legacy row without a deliveryId predates persist-before-ack — there is no event row to retire.
     expect(events.update).not.toHaveBeenCalled();
+  });
+
+  describe('shutdown', () => {
+    const failure = (id: string, deliveryId: string) => ({
+      id,
+      direction: 'inbound',
+      pluginId: 'p',
+      instanceId: 'i',
+      deliveryId,
+      payload: { route: 'chatwoot', ingress: { headers: {}, query: {}, body: '{}', rawBody: '{}' } },
+      sessionId: 's',
+      redriven: false,
+      attempts: 0,
+    });
+    const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+
+    it('stops at the next row and leaves the rows it did not reach open and unchanged', async () => {
+      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1'), failure('f2', 'd2'), failure('f3', 'd3')]);
+      (repo.count as jest.Mock).mockResolvedValue(2);
+      let finishFirst!: () => void;
+      (ingressEnqueue.enqueue as jest.Mock).mockImplementationOnce(
+        () => new Promise(resolve => (finishFirst = () => resolve({ outcome: 'queued' }))),
+      );
+      const svc = makeSvc();
+      const running = svc.redriveInstance('p', 'i', null);
+      while (!finishFirst) await tick();
+
+      const destroyed = svc.onModuleDestroy();
+      finishFirst();
+
+      expect(await running).toEqual({ redriven: 1, remaining: 2, batchSize: 100 });
+      await destroyed;
+      expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
+      expect(repo.update).toHaveBeenCalledTimes(1);
+      expect(repo.update).toHaveBeenCalledWith({ id: 'f1' }, { redriven: true });
+    });
+
+    it('leaves a row open and unchanged when its enqueue is refused because shutdown began', async () => {
+      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1'), failure('f2', 'd2')]);
+      (repo.count as jest.Mock).mockResolvedValue(2);
+      const svc = makeSvc();
+      let destroyed: Promise<void> | undefined;
+      (ingressEnqueue.enqueue as jest.Mock).mockImplementationOnce(() => {
+        destroyed = svc.onModuleDestroy();
+        return Promise.reject(new Error('The operation was aborted'));
+      });
+
+      expect(await svc.redriveInstance('p', 'i', null)).toEqual({ redriven: 0, remaining: 2, batchSize: 100 });
+      await destroyed;
+      expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(events.update).not.toHaveBeenCalled();
+    });
+
+    it('still surfaces an enqueue failure that is not a shutdown', async () => {
+      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1')]);
+      (ingressEnqueue.enqueue as jest.Mock).mockRejectedValueOnce(new Error('database is gone'));
+
+      await expect(makeSvc().redriveInstance('p', 'i', null)).rejects.toThrow('database is gone');
+    });
+
+    it('waits at most the dispatch timeout for a replay still in hand', async () => {
+      jest.useFakeTimers();
+      try {
+        (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1')]);
+        (ingressEnqueue.enqueue as jest.Mock).mockReturnValueOnce(new Promise(() => undefined));
+        const svc = makeSvc();
+        void svc.redriveInstance('p', 'i', null);
+        await jest.advanceTimersByTimeAsync(0);
+        let settled = false;
+        const destroyed = svc.onModuleDestroy().then(() => (settled = true));
+
+        await jest.advanceTimersByTimeAsync(INGRESS_DISPATCH_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await jest.advanceTimersByTimeAsync(1);
+        await destroyed;
+        expect(settled).toBe(true);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('has nothing to wait for when no redrive is running', async () => {
+      await expect(makeSvc().onModuleDestroy()).resolves.toBeUndefined();
+    });
   });
 });
