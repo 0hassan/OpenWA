@@ -1002,6 +1002,12 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       where: { webhookId: row.webhookId, idempotencyKey: row.idempotencyKey, attempts: MoreThan(0) },
     });
     if (existing > 0) return true;
+    // A delivery that was shed or refused before sending was recorded with its reason as an attempts-0 row,
+    // which the terminal row below replaces; keep that reason on it.
+    const unsent = await this.failureRepository.findOne({
+      where: { webhookId: row.webhookId, idempotencyKey: row.idempotencyKey, attempts: 0 },
+      select: { id: true, lastError: true },
+    });
     const recorded = await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
       webhookId: row.webhookId,
       sessionId: row.sessionId,
@@ -1009,7 +1015,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       url,
       idempotencyKey: row.idempotencyKey,
       attempts: Math.max(1, row.attempts),
-      lastError: 'Webhook replay budget exhausted',
+      lastError: unsent?.lastError
+        ? `Webhook replay budget exhausted; last error: ${unsent.lastError}`
+        : 'Webhook replay budget exhausted',
       ...(this.keepsFailurePayload() ? { payload: row.payload } : {}),
     });
     if (recorded === true) incrementWebhookDeliveryFailures();

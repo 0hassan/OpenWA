@@ -372,6 +372,54 @@ describe('webhook recovery across live ownership and configuration changes', () 
     expect(await failures.count()).toBe(0);
   });
 
+  describe('a spent replay budget', () => {
+    const spent = (idempotencyKey: string) => ({
+      id: 'outbox-row',
+      webhookId: primary.id,
+      sessionId: primary.sessionId,
+      event: 'message.received',
+      idempotencyKey,
+      payload: { id: 1 },
+      attempts: 5,
+    });
+    const build = () =>
+      new WebhookDeliveryService(
+        webhooks,
+        failures,
+        new ConfigService({ webhook: {} }),
+        new HookManager(),
+        new WebhookOutboxService(ds.getRepository(WebhookOutboxEvent)),
+      );
+
+    it('keeps the reason a shed delivery was recorded with, which the generic row would replace', async () => {
+      await failures.save(
+        failures.create({
+          webhookId: primary.id,
+          sessionId: primary.sessionId,
+          event: 'message.received',
+          url: primary.url,
+          idempotencyKey: 'key-shed',
+          attempts: 0,
+          lastError: 'Webhook payload is 210 bytes after webhook:before hooks, exceeds 50',
+        }),
+      );
+
+      expect(await build().recordReplayExhaustion(spent('key-shed'), primary.url)).toBe(true);
+
+      const rows = await failures.find();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].attempts).toBe(5);
+      expect(rows[0].lastError).toBe(
+        'Webhook replay budget exhausted; last error: Webhook payload is 210 bytes after webhook:before hooks, exceeds 50',
+      );
+    });
+
+    it('records the plain exhaustion reason when nothing was recorded before', async () => {
+      expect(await build().recordReplayExhaustion(spent('key-plain'), primary.url)).toBe(true);
+      expect((await failures.find()).map(row => row.lastError)).toEqual(['Webhook replay budget exhausted']);
+    });
+  });
+
   it('does not replay a row whose pre-checks were under way when destroy began', async () => {
     const repository = ds.getRepository(WebhookOutboxEvent);
     const outbox = new WebhookOutboxService(repository);
