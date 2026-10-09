@@ -184,6 +184,26 @@ describe('chat-scoped WebSocket rooms', () => {
     }
   });
 
+  it('publishes the chat rooms when Redis fans out, though this node tracks no restricted socket', async () => {
+    const previous = process.env.REDIS_ENABLED;
+    process.env.REDIS_ENABLED = 'true';
+    try {
+      // A restricted socket on another replica: the adapter reaches it through its rooms, but this node
+      // never tracks it. Dropping the tracking keeps the rooms the subscribe granted.
+      const remote = await connect('remote', [PHONE]);
+      gateway.handleDisconnect(remote as unknown as Socket);
+      const unrestricted = await connect('unrestricted', null);
+      gateway.emitMessage('s1', { chatId: PHONE });
+      await flush();
+      expect(resolveIds).toHaveBeenCalledWith({ allowedChats: [PHONE] });
+      expect(events(remote)).toHaveLength(1);
+      expect(events(unrestricted)).toHaveLength(1);
+    } finally {
+      if (previous === undefined) delete process.env.REDIS_ENABLED;
+      else process.env.REDIS_ENABLED = previous;
+    }
+  });
+
   it('resolves a phone/LID mapping learned after subscription', async () => {
     const allowed = await connect('allowed', [PHONE]);
     gateway.emitMessage('s1', { chatId: '123456@lid' });
