@@ -7265,7 +7265,7 @@ describe('SessionService', () => {
         (messageRepository.create as jest.Mock).mockImplementation((data: Record<string, unknown>) => ({ ...data }));
         (messageRepository.save as jest.Mock).mockClear();
 
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           {
             id: 'h1',
             from: 'peer@c.us',
@@ -7303,7 +7303,7 @@ describe('SessionService', () => {
           return Promise.resolve([]);
         });
 
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           {
             id: 'h1',
             from: 'peer@c.us',
@@ -7350,7 +7350,7 @@ describe('SessionService', () => {
           kind: 'group',
           ...over,
         });
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           histMsg({ id: 'h-in', fromMe: false, author: '628111@c.us' }),
           histMsg({ id: 'h-out', fromMe: true, author: '628999@c.us' }),
         ]);
@@ -7379,7 +7379,7 @@ describe('SessionService', () => {
         (messageRepository.find as jest.Mock).mockResolvedValue([]); // nothing pre-seen
         (messageRepository.create as jest.Mock).mockImplementation((data: Record<string, unknown>) => ({ ...data }));
 
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           {
             id: 'h-img',
             from: 'me@c.us',
@@ -7422,7 +7422,7 @@ describe('SessionService', () => {
         const callbacks = await startAndCaptureCallbacks();
         const { qb, execute } = setupBulkQb();
 
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           {
             id: 'h-eph',
             from: 'peer@c.us',
@@ -7450,7 +7450,7 @@ describe('SessionService', () => {
         const callbacks = await startAndCaptureCallbacks();
         const { qb } = setupBulkQb();
 
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           {
             id: 'h-eph-default',
             from: 'peer@c.us',
@@ -7479,7 +7479,7 @@ describe('SessionService', () => {
         const callbacks = await startAndCaptureCallbacks();
         const { qb } = setupBulkQb();
 
-        callbacks.onHistoryMessages?.([
+        await callbacks.onHistoryMessages?.([
           {
             id: 'h-normal',
             from: 'peer@c.us',
