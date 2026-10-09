@@ -27,8 +27,8 @@ CVE-2026-102278
 #
 # Same shape as the entries above: the only affected copy is the one bundled inside the npm CLI
 # (/usr/local/lib/node_modules/npm/node_modules/undici, 6.28.0 in npm 12.1.0). The application tree
-# is at the fix on its own: undici is a direct dependency at ^8.10.2, which package-lock.json
-# resolves to 8.10.2, so this ID-level ignore cannot hide an application-tree finding. Drop this
+# is at the fix on its own: undici is a direct dependency whose range starts at or above the fixed
+# 8.10.2, so this ID-level ignore cannot hide an application-tree finding. Drop this
 # entry once npm ships a bundle with undici >= 6.28.1.
 CVE-2026-19534
 
