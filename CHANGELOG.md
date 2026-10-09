@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Allow chat-restricted API keys to subscribe to chat WebSocket events.
 - Allow chat-restricted MCP keys to read and send within their chat allowlist using the REST authorization rules.
-- Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` filter scopes delivery events per chat.
+- Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` or `kind` filter scopes delivery events per chat.
 - Filter stored messages by time, direction, type or message reference, with stable message-time pagination.
 - Scope built-in message search and group detail/settings to a chat-restricted key's allowed chats; reject plugin search for these keys.
 - Expose poll choices and selection mode in message events, stored messages, history, and dashboard chats.
@@ -84,6 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.
+- Answer `400` instead of `500` when a plugin upload arrives under an unexpected multipart field name.
 - Refuse Baileys animated stickers over 500 frames and run at most two sticker conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
@@ -93,7 +94,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Preserve chat-scoped WebSocket event order while resolving chat identities.
-- Preserve poll choices across dashboard echoes and keep revoked messages cleared.
 - Serialize explicitly selected empty Go redrive slices as empty arrays.
 - Emit Baileys API reaction updates, including reaction removal.
 - Restore legacy webhook failures and normalize terminal duplicates before SQLite schema synchronization.
@@ -104,15 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve pending message mutations when REST storage wins an own-send echo.
 - Cancel archived media preview downloads when their components unmount.
 - Refresh Baileys pairing secrets and prevent stale QR renders during linking.
-- Upgrade proxy-addr to 2.0.8 to correct IPv4-mapped IPv6 proxy trust matching.
+- Upgrade proxy-addr to 2.0.8 (GHSA-jqcg-44mw-7w3h, critical) to correct IPv4-mapped IPv6 proxy trust matching.
 - Upgrade source-map-js to 1.2.2 to validate indexed source-map offsets.
 - Fix Baileys first-contact addresses and reject phone numbers reported as unregistered before sending.
-- Release send idempotency keys when transport explicitly reports that nothing was sent.
 - Preserve archived media and reactions during concurrent metadata updates.
 - Keep sent media when merging onto an echo row fails.
-- Keep inline media when its WhatsApp message ID is unavailable.
 - Enforce chat media size limits using decoded payload bytes.
-- Bound archived dashboard previews alongside inline media.
 - Preserve the Java failure constructor and empty Go redrive filters.
 - Keep narrow chat panes scrollable and prevent message actions from shrinking previews.
 - Open archived images in the dashboard media viewer without fetching them again.
@@ -120,7 +117,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve webhook outbox payloads until delivery or durable failure storage succeeds.
 - Enforce webhook replay retention and keep later eligible failures moving through batches.
 - Keep one terminal webhook failure per receiver idempotency key.
-- Retain send idempotency keys after engine-stage failures, including HTTP 409.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 
 ### Documentation
@@ -137,6 +133,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `handlebars` 4.7.9 to 4.7.10, closing two critical advisories in which a crafted template could inject JavaScript into compiled output. It reaches the root tree only through `ts-jest`, so it is dev-only and nothing that ships changes.
 - `vitest` 2.1 to 5 in the JavaScript SDK tree, closing its dev-only advisories, and `typescript` 5.9 to 7. Its unit tests now need Node 22.12+; the published package still supports Node 18.
+- `@modelcontextprotocol/sdk` 1.30.0 to 1.32.1, closing a high-severity advisory in its OAuth client (GHSA-6qxp-vccf-f47h). It ships in the runtime tree, which uses only the server side.
+- `sharp` ^0.35.4 to ^0.35.5, closing a high-severity advisory in its bundled librsvg (GHSA-wq5f-xc86-pv6w). It ships in the runtime tree.
+- `shell-quote` override raised from ^1.10.0 to ^1.11.0, closing a critical command-injection advisory in `quote()` (GHSA-pqg4-j6r4-53mv). It reaches the root tree only through `concurrently`, so it is dev-only.
 - `music-metadata` 11.13.0 to 11.16.1, the parser Baileys uses to read an outgoing audio file's duration. It closes three advisories in which a crafted audio file could abort the process or exhaust memory (GHSA-5gfj-9q3v-qfp3, GHSA-8j4c-6x6g-rq3j, GHSA-f94x-6692-553q).
 
 ### Upgrade notes (behavior changes)
@@ -152,6 +151,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
 - Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working until it is edited.
+- With `DATABASE_SSL=true`, the PostgreSQL certificate is now verified against `DATABASE_HOST` even when it is an IP address (`pg` 8.23.1). A certificate that names only `localhost` stops matching a connection by IP: use the certificate's DNS name as the host or add the IP to its subject alternative names. `DATABASE_SSL_REJECT_UNAUTHORIZED=false` remains the escape hatch.
+- The first boot builds three indexes on `messages` (`IDX_messages_session_timestamp_id`, `IDX_messages_session_chat_timestamp_id` and `IDX_messages_session_direction_timestamp_id`) not concurrently; on a large table boot takes longer, on PostgreSQL writes to that table wait until each build finishes, and the table with its indexes grows by about 240 MB per million messages.
 - Baileys answers `400` for an animated sticker with more than 500 frames.
 - New Baileys pairings show `Ubuntu` instead of `OpenWA` as the device name in Linked Devices; set `BAILEYS_BROWSER_NAME=OpenWA` to keep the old name. Linked sessions are unaffected.
 - `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.
