@@ -52,12 +52,18 @@ describe('chat-scoped WebSocket rooms', () => {
       )
       .filter(frame => frame.type === 'event');
   const flush = () => new Promise<void>(resolve => setImmediate(resolve));
-  const connect = async (id: string, chats: string[] | null, sessions: string[] | null = ['s1'], sessionId = 's1') => {
+  const connect = async (
+    id: string,
+    chats: string[] | null,
+    sessions: string[] | null = ['s1'],
+    sessionId = 's1',
+    subscribed = ['*'],
+  ) => {
     current[id] = key(id, chats, sessions);
     const client = socket(id);
     clients.push(client);
     await gateway.handleConnection(client as unknown as Socket);
-    await subscribe(client, ['*'], sessionId);
+    await subscribe(client, subscribed, sessionId);
     return client;
   };
 
@@ -284,6 +290,21 @@ describe('chat-scoped WebSocket rooms', () => {
     gateway.emitMessage('s2', { chatId: PHONE });
     await flush();
     expect(events(allowed)).toHaveLength(2);
+  });
+
+  // connect() subscribes with '*', which the wildcard rooms serve. Subscribing to one named event instead
+  // leaves only the room named for that event to match, on the named session and on the wildcard session.
+  it.each<[string, string, string[]]>([
+    ['a named session', 's1', ['s1:message.received']],
+    ['the wildcard session', '*', ['s1:message.received', 's2:message.received']],
+  ])('delivers a chat event to a restricted subscriber of one named event on %s', async (_label, sessionId, sent) => {
+    const allowed = await connect('allowed', [PHONE], null, sessionId, ['message.received']);
+    gateway.emitMessage('s1', { chatId: PHONE });
+    gateway.emitMessage('s2', { chatId: PHONE });
+    gateway.emitMessageEdited('s1', { chatId: PHONE, messageId: 'm1', body: 'edited' });
+    await flush();
+    const received = events(allowed).map(frame => `${frame.payload.sessionId}:${frame.payload.event}`);
+    expect(received.sort()).toEqual(sent);
   });
 
   it('grants no stream rooms to an allowlist with no chattable identities', async () => {
