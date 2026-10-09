@@ -649,7 +649,8 @@ lifecycle (`session_created`, `session_started`, `session_stopped`, `session_for
 (`session_rebind_rejected`, written as a WARN row), messages
 (`message_sent`, `message_failed`), send-pacing enforcement (`send_pacing_blocked`, sampled to at
 most one row per session per minute; `send_breaker_tripped`, never sampled), webhooks (`webhook_created`, `webhook_deleted`,
-`webhook_triggered`, `webhook_failed`), rate-limit enforcement (`rate_limit_exceeded`, sampled to at
+`webhook_triggered`, `webhook_failed`), the delivery-failure redrive (`webhook_deliveries_redriven`, one row per
+batch), rate-limit enforcement (`rate_limit_exceeded`, sampled to at
 most one row per subject+kind per minute), the queue dashboard (`queue_board_mutated`), integration
 plugin instances (`integration_instance_created`, `integration_instance_updated`,
 `integration_instance_secret_regenerated`, `integration_instance_deleted`,
