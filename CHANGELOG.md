@@ -12,12 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow chat-restricted API keys to subscribe to chat WebSocket events.
 - Allow chat-restricted MCP keys to read and send within their chat allowlist using the REST authorization rules.
 - Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` or `kind` filter scopes delivery events per chat.
-- Filter stored messages by time, direction, type or message reference, with stable message-time pagination.
+- Filter stored messages by time, direction, type or message reference, with stable message-time pagination; the SDKs take these filters from the next SDK release after 0.5.1.
 - Scope built-in message search and group detail/settings to a chat-restricted key's allowed chats; reject plugin search for these keys.
-- Expose poll choices and selection mode in message events, stored messages, history, and dashboard chats.
-- Expose optional last-message types in chat lists and SDKs.
-- Add bounded webhook failure redrive with optional payload retention.
-- Expose caller-supplied send idempotency keys in all five SDKs.
+- Expose poll choices and selection mode in message events, stored messages, history, and dashboard chats; the SDKs type them from the next SDK release after 0.5.1.
+- Expose optional last-message types in chat lists and, from the next SDK release after 0.5.1, in the SDKs.
+- Add bounded webhook failure redrive with optional payload retention; the SDKs expose it from the next SDK release after 0.5.1.
+- Expose caller-supplied send idempotency keys in all five SDKs from the next SDK release after 0.5.1; the 0.5.1 JavaScript and PHP packages ignore the extra argument.
 - Add optional 24-hour idempotency keys to twelve single-recipient send routes.
 - Add opt-in archive-only chat media with dashboard previews.
 - Report RSVPs to WhatsApp events as an `event.response` webhook and WebSocket event on Baileys (#1788, thanks @jelasus).
