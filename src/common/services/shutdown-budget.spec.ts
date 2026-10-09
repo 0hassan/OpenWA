@@ -121,7 +121,10 @@ describe('shutdown time budget', () => {
       containerSecurityContext: { capabilities: { add: string[] } };
     };
     expect(values.containerSecurityContext.capabilities.add).toContain('KILL');
-    expect(readFileSync(join(root, 'docs/13-horizontal-scaling.md'), 'utf8')).toMatch(/add: \[[^\]]*'KILL'[^\]]*\]/);
+    const scaling = readFileSync(join(root, 'docs/13-horizontal-scaling.md'), 'utf8');
+    expect(scaling).toMatch(/add: \[[^\]]*'KILL'[^\]]*\]/);
+    // Kubernetes' default grace of 30 s is shorter than the teardown can take, so the example sets the deadline.
+    expect(scaling).toContain(`terminationGracePeriodSeconds: ${SHUTDOWN_KILL_DEADLINE_MS / 1000}`);
   });
 
   it('destroys open sockets at the HTTP close, which the table counts as 0 s', () => {

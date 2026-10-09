@@ -423,6 +423,9 @@ spec:
       labels:
         app: openwa
     spec:
+      # The teardown can take up to 63 s on a clustered replica (src/common/services/shutdown-budget.ts), so
+      # Kubernetes' default grace of 30 s would SIGKILL a slow stop half way. Match the shipped chart.
+      terminationGracePeriodSeconds: 75
       # OS-level containment is defence in depth for the plugin sandbox (see docs/30-plugin-sandboxing.md):
       # it limits the privileges the API process holds, not what a plugin inside that process can reach.
       # Without it the API process, and every plugin loaded into it, keeps whatever the container runtime
