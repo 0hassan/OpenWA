@@ -237,3 +237,28 @@ test('an archived audio player reports its arrival so a bottom-pinned thread sta
   await rtl.waitFor(() => assert.ok(container.querySelector('audio.chat-audio-media'), 'audio did not render'));
   assert.equal(reports, 1, 'the thread is told once that the placeholder became a player');
 });
+
+test('previews mounted together start their fetches apart, so a burst stays under the gateway throttle', async () => {
+  const starts: number[] = [];
+  const preview = (key: number) =>
+    createElement(ArchivedMediaPreview, {
+      key,
+      kind: 'audio',
+      fallback,
+      load: async () => {
+        starts.push(Date.now());
+        return new Blob(['x']);
+      },
+    });
+  const { container } = rtl.render(createElement('div', null, [0, 1, 2, 3].map(preview)));
+  await rtl.waitFor(() => assert.equal(container.querySelectorAll('audio.chat-audio-media').length, 4), {
+    timeout: 3000,
+  });
+  assert.equal(starts.length, 4);
+  for (let i = 1; i < starts.length; i++) {
+    assert.ok(
+      starts[i] - starts[i - 1] >= 100,
+      `fetches ${i - 1} and ${i} started ${starts[i] - starts[i - 1]} ms apart`,
+    );
+  }
+});

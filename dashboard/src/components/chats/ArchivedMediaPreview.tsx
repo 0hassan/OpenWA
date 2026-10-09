@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
 import MediaLightbox from './MediaLightbox';
+import { loadArchivedMedia } from '../../utils/archivedMediaLoad';
 
 export type ArchivedMediaKind = 'image' | 'video' | 'audio';
 
@@ -100,8 +101,7 @@ function ArchivedMediaPreview({
     if (state.phase !== 'loading') return undefined;
     let cancelled = false;
     const controller = new AbortController();
-    loadRef
-      .current(controller.signal)
+    loadArchivedMedia(controller.signal, () => loadRef.current(controller.signal))
       .then(blob => {
         if (cancelled) return;
         const url = URL.createObjectURL(blob);
