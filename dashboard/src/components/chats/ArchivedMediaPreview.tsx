@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
 import MediaLightbox from './MediaLightbox';
 
@@ -9,6 +9,11 @@ interface ArchivedMediaPreviewProps {
   /** Fetches the archived bytes (the per-message media route). Called at most once per mount. */
   load: (signal: AbortSignal) => Promise<Blob>;
   alt?: string;
+  /**
+   * The thread's scroll container. The lazy-load observer measures against it: with the implicit viewport
+   * root the margin below is clipped to the container's own box and the lead never happens.
+   */
+  scrollRootRef?: RefObject<Element | null>;
   /** Rendered instead of the preview when the fetch fails, the download button, so the bytes stay reachable. */
   fallback: ReactNode;
   measureMedia?: (el: Element | null) => void;
@@ -28,7 +33,15 @@ type PreviewState = { phase: 'waiting' | 'loading' | 'failed' } | { phase: 'read
 // request per archived message at once. Where IntersectionObserver is unavailable (old browsers, the
 // jsdom test runtime) it loads immediately rather than never. The object URL is revoked on unmount so
 // the parent's media cap unmounts older previews as the thread grows.
-function ArchivedMediaPreview({ kind, load, alt, fallback, measureMedia, onMediaLoad }: ArchivedMediaPreviewProps) {
+function ArchivedMediaPreview({
+  kind,
+  load,
+  alt,
+  scrollRootRef,
+  fallback,
+  measureMedia,
+  onMediaLoad,
+}: ArchivedMediaPreviewProps) {
   const [state, setState] = useState<PreviewState>({ phase: 'waiting' });
   const [imageOpen, setImageOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
@@ -65,11 +78,11 @@ function ArchivedMediaPreview({ kind, load, alt, fallback, measureMedia, onMedia
         }
       },
       // A screen's worth of lead so the bytes are usually there by the time the bubble scrolls in.
-      { rootMargin: '600px 0px' },
+      { root: scrollRootRef?.current ?? null, rootMargin: '600px 0px' },
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [state.phase]);
+  }, [state.phase, scrollRootRef]);
 
   // Phase 2: fetch once. A response landing after unmount is dropped rather than turned into a URL
   // nothing would ever revoke.

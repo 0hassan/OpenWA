@@ -133,3 +133,35 @@ test('unmount aborts an archived media request still waiting for its bytes', asy
   assert.equal(signal!.aborted, true);
   assert.deepEqual(created, []);
 });
+
+test('the lazy-load observer measures against the thread scroll container, so its lead is not clipped', async () => {
+  const seen: Array<{ root: unknown; rootMargin: string | undefined }> = [];
+  class FakeObserver {
+    constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+      seen.push({ root: options?.root, rootMargin: options?.rootMargin });
+    }
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  const scroller = document.createElement('div');
+  const target = globalThis as { IntersectionObserver?: unknown };
+  target.IntersectionObserver = FakeObserver;
+  try {
+    rtl.render(
+      createElement(ArchivedMediaPreview, {
+        kind: 'image',
+        fallback,
+        load: () => new Promise<Blob>(() => undefined),
+        scrollRootRef: { current: scroller },
+      }),
+    );
+    // Without the scroller as root, the implicit viewport root clips the margin to the scroller's box.
+    assert.deepEqual(seen, [{ root: scroller, rootMargin: '600px 0px' }]);
+  } finally {
+    delete target.IntersectionObserver;
+  }
+});

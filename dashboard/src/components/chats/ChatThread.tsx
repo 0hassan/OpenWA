@@ -354,6 +354,7 @@ function ChatThread({
                     kind={previewKind}
                     load={signal => sessionApi.getMessageMediaBlob(sessionId, activeChat.id, waMessageId, signal)}
                     alt={mediaInfo.filename || t('chats.media.image')}
+                    scrollRootRef={messagesContainerRef}
                     fallback={downloadButton}
                     measureMedia={measureMedia}
                     onMediaLoad={onMediaLoad}
