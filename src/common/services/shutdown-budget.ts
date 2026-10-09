@@ -49,8 +49,8 @@
  *
  * Waits with no cap of their own, which only the force-exit bounds: the bulk-message destroy hook (a
  * lookup and an update per processing batch), the pending-message reaper (it awaits its running
- * sweep, whose in-hand row re-emits message:persisted to plugin hooks) and the session ownership
- * release. They wait on the database, and the reaper also on plugin hooks. A wedged database ends the
+ * sweep, which is database statements only: the message:persisted re-emission of its in-hand row is
+ * not awaited) and the session ownership release. They wait on the database. A wedged database ends the
  * stop at the force-exit, with status 1, before the kill; the stages behind these waits (worker close,
  * usage flush, plugin onDisable) get only the time that is left.
  */
