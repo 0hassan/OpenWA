@@ -96,7 +96,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Preserve chat-scoped WebSocket event order while resolving chat identities.
-- Serialize explicitly selected empty Go redrive slices as empty arrays.
 - Emit Baileys API reaction updates, including reaction removal.
 - Restore legacy webhook failures and normalize terminal duplicates before SQLite schema synchronization.
 - Exclude retained webhook replay payloads from database backup reads.
@@ -112,7 +111,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve archived media and reactions during concurrent metadata updates.
 - Keep sent media when merging onto an echo row fails.
 - Enforce chat media size limits using decoded payload bytes.
-- Preserve the Java failure constructor and empty Go redrive filters.
 - Keep narrow chat panes scrollable and prevent message actions from shrinking previews.
 - Open archived images in the dashboard media viewer without fetching them again.
 - Forward container shutdown signals after dropping process privileges in Compose and Helm.
