@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import MediaLightbox from './MediaLightbox';
 import { loadArchivedMedia } from '../../utils/archivedMediaLoad';
 
@@ -49,6 +50,7 @@ function ArchivedMediaPreview({
   measureMedia,
   onMediaLoad,
 }: ArchivedMediaPreviewProps) {
+  const { t } = useTranslation();
   const [state, setState] = useState<PreviewState>({ phase: 'waiting' });
   const [imageOpen, setImageOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
@@ -131,7 +133,9 @@ function ArchivedMediaPreview({
       <div
         ref={anchorRef}
         className={`message-media-omitted message-media-archived-loading${kind === 'audio' ? ' message-media-archived-loading-audio' : ''}`}
+        role="status"
         aria-busy="true"
+        aria-label={t('common.loading')}
       >
         <Loader2 size={14} className="animate-spin" />
       </div>

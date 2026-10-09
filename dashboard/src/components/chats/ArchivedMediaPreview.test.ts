@@ -18,6 +18,8 @@ const revoked: string[] = [];
 before(async () => {
   const { installJsdomGlobals } = await import('../../test-helpers/jsdom.ts');
   await installJsdomGlobals();
+  const { i18nReady } = await import('../../i18n/index.ts');
+  await i18nReady;
   rtl = await import('@testing-library/react');
   ({ default: ArchivedMediaPreview } = await import('./ArchivedMediaPreview.tsx'));
   // jsdom implements neither.
@@ -261,4 +263,11 @@ test('previews mounted together start their fetches apart, so a burst stays unde
       `fetches ${i - 1} and ${i} started ${starts[i] - starts[i - 1]} ms apart`,
     );
   }
+});
+
+test('an archived placeholder is announced as loading, not left as an unnamed element', () => {
+  rtl.render(
+    createElement(ArchivedMediaPreview, { kind: 'image', fallback, load: () => new Promise<Blob>(() => undefined) }),
+  );
+  assert.ok(rtl.screen.getByRole('status', { name: 'Loading...' }));
 });
