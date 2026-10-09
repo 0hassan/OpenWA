@@ -144,7 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A stop that runs 67 s past the shutdown delay now exits with status 1 instead of being killed (137), which matters if you alert on exit codes.
 - A sandboxed plugin's `onDisable` now shares one 10 s cap with all other plugins at shutdown, and a worker still running then dies with the process.
 - `docker-compose.dev.yml` now waits up to 75 s on a stuck stop instead of Docker's 10 s default.
-- The queue worker close cap fell from 15 s to 10 s, so a queued webhook or plugin ingress job still running then is re-run after the next start; receivers must deduplicate on `X-OpenWA-Idempotency-Key`.
+- Queue workers now stop taking jobs when shutdown begins and wait at most 10 s for running ones, so a queued webhook or plugin ingress job still running then is re-run after the next start; receivers must deduplicate on `X-OpenWA-Idempotency-Key`.
 - Boot fails on a `PORT` with surrounding whitespace or a whitespace-only `PORT`; remove the padding.
 - Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
 - Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
