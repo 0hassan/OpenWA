@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The JavaScript SDK smoke check sends requests through both built clients, so the Node 18 CI lane covers the request path.
 - Retire the whatsapp-web.js download-mimetype install patch; inbound media downloads now pass the mimetype themselves.
 - A whatsapp-web.js inbound media download the page answers with nothing logs a warning, and one WhatsApp Web rejects is logged with the rejection's name, message and WhatsApp Web build instead of the minified `t: t`.
+- A status post the engine refuses is logged with its session and type, as a failed chat send already is.
 - Storage import abort messages name the `STORAGE_IMPORT_MAX_BYTES` or `STORAGE_IMPORT_MAX_ENTRIES` setting that stopped them.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
 - The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, so phone-number pairing works without setting `BAILEYS_BROWSER_NAME`.
