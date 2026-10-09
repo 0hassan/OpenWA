@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Set `PGSSLMODE` in the `psql` import command `restore.sh` prints when `DATABASE_SSL=true`.
 - Use the `OPENWA_DATA_DIR` volume's `media/`, even before it exists, for a leftover `STORAGE_LOCAL_PATH=./uploads` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./uploads`.
 - Read the `./data` database defaults and `./data/...` paths in `./.env` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./data`.
+- Stop `backup.sh` and `restore.sh` with an error when `./.env` or `.env.generated` exists but the running user cannot read it, instead of using the default data paths.
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
 - Cap the total bytes one storage import extracts at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.

@@ -62,6 +62,8 @@
 #       a ./data path or absolute media path from the environment are read as written, an
 #       environment ./uploads is exempt from the empty-volume rule, and a skipped non-empty ./uploads
 #       is named in a warning
+#   (aj) a ./.env this user cannot read stops backup and restore, where it used to read as a file that
+#       sets nothing and send both to the default paths (skipped as root)
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2156,6 +2158,45 @@ if [ "$(cat "$AI/pg/pg_dump-args" 2>/dev/null || true)" != "data/s3cret|-h|data|
   fail "(ai) Postgres settings from .env.generated were rewritten: $(cat "$AI/pg/pg_dump-args" 2>&1)"
 fi
 pass "(ai) a host run backs up and restores the volume's databases, media, sessions and plugins, not the working directory's"
+
+echo ""
+echo "==> (aj) a ./.env this user cannot read stops backup and restore"
+# A file that exists but cannot be opened (written by sudo or deploy tooling, say) read as a layer that
+# sets nothing. Backup then archived the stale database at the default path and exited 0, and restore
+# wrote to the default paths while the app opened the ones the file names. Root ignores the mode bits.
+if [ "$(id -u)" -ne 0 ]; then
+  AJ="$WORK/aj"
+  mkdir -p "$AJ/src/data" "$AJ/dst"
+  make_fixture "$AJ/src/data/main.sqlite" "aj-main"
+  make_fixture "$AJ/src/data/openwa.sqlite" "aj-data"
+  (cd "$AJ/src" && BACKUP_DIR="$AJ/out" "$BACKUP" >/dev/null 2>&1) || fail "(aj) the setup backup failed"
+  ARCHIVE_AJ="$(ls "$AJ"/out/openwa-backup-*.tar.gz)"
+  for AJ_DIR in src dst; do
+    printf 'DATABASE_NAME=./data/active.sqlite\n' >"$AJ/$AJ_DIR/.env"
+    chmod 000 "$AJ/$AJ_DIR/.env"
+  done
+  set +e
+  OUT_AJ_BACKUP="$(cd "$AJ/src" && BACKUP_DIR="$AJ/out-unread" "$BACKUP" 2>&1)"
+  RC_AJ_BACKUP=$?
+  OUT_AJ_RESTORE="$(cd "$AJ/dst" && "$RESTORE" "$ARCHIVE_AJ" 2>&1)"
+  RC_AJ_RESTORE=$?
+  set -e
+  if [ "$RC_AJ_BACKUP" -eq 0 ] || ! printf '%s' "$OUT_AJ_BACKUP" | grep -q 'cannot be read'; then
+    fail "(aj) backup went on past an unreadable ./.env (rc $RC_AJ_BACKUP): $OUT_AJ_BACKUP"
+  fi
+  if ls "$AJ"/out-unread/openwa-backup-*.tar.gz >/dev/null 2>&1; then
+    fail "(aj) backup archived the default path past an unreadable ./.env"
+  fi
+  if [ "$RC_AJ_RESTORE" -eq 0 ] || ! printf '%s' "$OUT_AJ_RESTORE" | grep -q 'cannot be read'; then
+    fail "(aj) restore went on past an unreadable ./.env (rc $RC_AJ_RESTORE): $OUT_AJ_RESTORE"
+  fi
+  if [ -e "$AJ/dst/data" ]; then
+    fail "(aj) restore wrote into the default data dir past an unreadable ./.env"
+  fi
+  pass "(aj) an unreadable ./.env stops backup and restore before any state moves"
+else
+  echo "SKIP: (aj) running as root, which ignores the permission bits this case relies on"
+fi
 
 echo ""
 echo "All smoke tests passed!"
