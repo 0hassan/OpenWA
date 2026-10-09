@@ -44,6 +44,30 @@ test('a load aborted while it waits for its turn never starts', async () => {
   assert.equal(ran, false);
 });
 
+test('loads that gave up their turn leave no gap for the loads behind them', async () => {
+  // Four previews from the chat the operator just left: the first starts at once, the rest are still
+  // waiting when it unmounts. The next chat's first preview must not sit out their turns.
+  const left = Array.from({ length: 6 }, () => new AbortController());
+  const started: number[] = [];
+  const first = loadArchivedMedia(left[0].signal, async () => {
+    started.push(Date.now());
+    return 'x';
+  });
+  const abandoned = left
+    .slice(1)
+    .map(controller => assert.rejects(loadArchivedMedia(controller.signal, async () => 'x')));
+  for (const controller of left.slice(1)) controller.abort();
+  await first;
+  await Promise.all(abandoned);
+  const t0 = Date.now();
+  await loadArchivedMedia(new AbortController().signal, async () => {
+    started.push(Date.now());
+    return 'y';
+  });
+  assert.ok(started[1] - started[0] < 300, `the next chat waited ${started[1] - started[0]} ms behind abandoned turns`);
+  assert.ok(Date.now() - t0 < 300);
+});
+
 test('a throttled load is retried and then resolves', async () => {
   let calls = 0;
   const value = await loadArchivedMedia(

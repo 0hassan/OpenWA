@@ -6,24 +6,43 @@ import { retryThrottled } from './fetchAllPages.ts';
 // otherwise the newest previews are the ones refused and stay download buttons for good. A 429 that
 // still arrives (a lower configured limit, another tab) is retried like fetchAllPages retries a page.
 const START_GAP_MS = 125;
-let nextStart = 0;
+let lastStart = 0;
+let timer: ReturnType<typeof setTimeout> | undefined;
+const waiting: Array<() => void> = [];
+
+// One timer hands out the turns, a gap apart. A load that gives up its turn (its preview unmounted) leaves
+// the queue, so it costs the loads behind it nothing.
+function pump(): void {
+  if (timer !== undefined || waiting.length === 0) return;
+  timer = setTimeout(
+    () => {
+      timer = undefined;
+      const next = waiting.shift();
+      if (next) {
+        lastStart = Date.now();
+        next();
+      }
+      pump();
+    },
+    Math.max(0, lastStart + START_GAP_MS - Date.now()),
+  );
+}
 
 function waitForTurn(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(signal.reason);
-  const now = Date.now();
-  const startAt = Math.max(now, nextStart);
-  nextStart = startAt + START_GAP_MS;
-  if (startAt === now) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
+    const turn = () => {
       signal.removeEventListener('abort', onAbort);
       resolve();
-    }, startAt - now);
+    };
+    const onAbort = () => {
+      const at = waiting.indexOf(turn);
+      if (at >= 0) waiting.splice(at, 1);
+      reject(signal.reason);
+    };
+    waiting.push(turn);
     signal.addEventListener('abort', onAbort, { once: true });
+    pump();
   });
 }
 
