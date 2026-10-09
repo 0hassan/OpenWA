@@ -6,11 +6,11 @@ import { Readable, PassThrough, Transform, pipeline } from 'stream';
 import { LoggerService } from '../services/logger.service';
 
 /** Per-entry buffer cap for an import (200 MiB — 4× the inbound media cap). Bounds a decompression bomb. */
-const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
+export const DEFAULT_IMPORT_MAX_BYTES = 200 * 1024 * 1024;
 /** Max number of entries an import archive may contain. Bounds an entry-count DoS. */
-const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
+export const DEFAULT_IMPORT_MAX_ENTRIES = 100_000;
 /** Cap on the bytes one import extracts in total (10 GiB). The two caps above still allow terabytes. */
-const DEFAULT_IMPORT_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
+export const DEFAULT_IMPORT_MAX_TOTAL_BYTES = 10 * 1024 * 1024 * 1024;
 
 /**
  * True when a storage read failed because the object is simply not there.

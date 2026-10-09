@@ -44,7 +44,14 @@ jest.mock('archiver', () => {
   return { TarArchive };
 });
 
-import { createExportStream, ExportFileSource, importFromStream } from './storage-transfer';
+import {
+  createExportStream,
+  DEFAULT_IMPORT_MAX_BYTES,
+  DEFAULT_IMPORT_MAX_ENTRIES,
+  DEFAULT_IMPORT_MAX_TOTAL_BYTES,
+  ExportFileSource,
+  importFromStream,
+} from './storage-transfer';
 
 const FILE_BYTES = 256 * 1024;
 const files = Array.from({ length: 12 }, (_, i) => `media/file-${String.fromCharCode(97 + i)}.bin`);
@@ -362,5 +369,15 @@ describe('createExportStream and the per-entry import cap', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_BYTES'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`(${FILE_BYTES} bytes)`));
+  });
+});
+
+// docs/14, .env.example and the upgrade notes state these figures, and an operator sizes an import
+// against them: a drifted default changes what an import is allowed to extract without a word.
+describe('storage import caps', () => {
+  it('ship at the documented defaults', () => {
+    expect(DEFAULT_IMPORT_MAX_BYTES).toBe(209_715_200);
+    expect(DEFAULT_IMPORT_MAX_ENTRIES).toBe(100_000);
+    expect(DEFAULT_IMPORT_MAX_TOTAL_BYTES).toBe(10_737_418_240);
   });
 });
