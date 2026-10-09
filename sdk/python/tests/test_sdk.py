@@ -837,6 +837,13 @@ class TestWebhooks:
         client.webhooks.redrive_delivery_failures()
         assert backend.last_call.body == {}
 
+    def test_redrive_delivery_failures_keeps_an_explicit_empty_ids_list(self):
+        # The gateway reads ids: [] as "replay nothing" and an omitted ids as "replay up to 100 rows".
+        result = {"redriven": 0, "delivered": 0, "enqueued": 0, "failed": 0, "skipped": 0, "remaining": 3}
+        backend = MockBackend().on("POST", "/api/webhooks/delivery-failures/redrive", body=result)
+        make_client(backend).webhooks.redrive_delivery_failures({"ids": []})
+        assert backend.last_call.body == {"ids": []}
+
 
 class TestStatus:
     def test_send_image_video_forward_nested_media_body(self):
