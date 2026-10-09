@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -261,6 +262,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           take: batchSize,
         });
         for (const row of rows) {
+          // A synchronous database driver (the SQLite default) answers every statement at once, so without
+          // this the pass over a large backlog never lets a timer, request or keep-alive run.
+          await yieldToEventLoop();
           if (this.stop.signal.aborted) return retired;
           if (!hasPayload(row)) {
             kept.push(row.id);

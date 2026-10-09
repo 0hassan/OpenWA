@@ -612,6 +612,26 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     expect(await failures.count()).toBe(250);
   });
 
+  it('lets the event loop run between rows, which a synchronous driver would otherwise starve for the whole pass', async () => {
+    for (let i = 0; i < 120; i++) await insertEvent(`y${i}`, {});
+    // better-sqlite3 answers every statement at once, so without a yield the pass is one unbroken chain of
+    // microtasks: no timer, request or keep-alive callback runs until it ends, however many rows it holds.
+    let ticks = 0;
+    let probing = true;
+    const probe = (): void => {
+      if (!probing) return;
+      ticks += 1;
+      setImmediate(probe);
+    };
+    setImmediate(probe);
+
+    await service.pruneOlderThan(7, 90);
+    probing = false;
+
+    expect(await events.count({ where: { dispatchState: 'failed' } })).toBe(120);
+    expect(ticks).toBeGreaterThan(60);
+  });
+
   it('prunes aged settled markers while the hand-off is still waiting', async () => {
     await insertEvent('dispatched', { dispatchState: 'dispatched', payload: null });
     await insertEvent('stranded', {});
