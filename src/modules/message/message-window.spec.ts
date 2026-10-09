@@ -131,6 +131,38 @@ describe('message-time selection', () => {
     );
   });
 
+  // The membership check is switched on by the selection itself. orderBy 'timestamp' does that alone,
+  // so the cases below keep the default order: each filter has to switch the check on in its own right.
+  it.each(['direction', 'type', 'since', 'until'] as const)(
+    'rejects a cursor outside a selection narrowed only by %s',
+    async filter => {
+      const repo = ds.getRepository(Message);
+      await repo.update({ waMessageId: 'm10' }, { type: 'image' });
+      const row = (waMessageId: string): Promise<Message> => repo.findOneByOrFail({ waMessageId });
+      // m1 is outgoing and m11 is text; m0 is the oldest in message time and m200 is newer than 1010 s.
+      const cases = {
+        direction: [{ direction: MessageDirection.INCOMING }, await row('m1')],
+        type: [{ type: 'image' }, await row('m11')],
+        since: [{ since: 1050_000 }, await row('m0')],
+        until: [{ until: 1010_000 }, await row('m200')],
+      } as const;
+      const [selection, anchor] = cases[filter];
+
+      await expect(service.getMessages('s1', { ...selection, after: anchor.id })).rejects.toThrow(
+        'Unknown cursor for this message selection',
+      );
+    },
+  );
+
+  it.each([
+    ['since', { since: 1000_000 }],
+    ['until', { until: 1060_000 }],
+  ] as const)('counts the rows without a message time when only %s bounds the selection', async (_bound, options) => {
+    const page = await service.getMessages('s1', options);
+
+    expect(page.unknownTimestampTotal).toBe(1);
+  });
+
   it('keeps legacy ingestion order and unknown-time rows when new options are absent', async () => {
     const legacy = await service.getMessages('s1');
     expect(legacy.total).toBe(241);
