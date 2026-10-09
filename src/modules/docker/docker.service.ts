@@ -501,7 +501,7 @@ export class DockerService implements OnModuleInit {
    * Stop a managed profile's container and RETAIN it for a later re-enable.
    *
    * Deliberately stop-only — no `container.remove()`. The bundled docker-socket-proxy
-   * (tecnativa/docker-socket-proxy, pinned v0.4.2) never reads its `DELETE` env flag: its
+   * (tecnativa/docker-socket-proxy, pinned v0.5.0) never reads its `DELETE` env flag: its
    * haproxy.cfg method gate is `deny unless METH_GET || env(POST)`, so container deletion is
    * admitted only as an undocumented side effect of POST being enabled — a contract any proxy
    * upgrade may withdraw. Stopping needs nothing beyond POST /containers/{id}/stop, which the
