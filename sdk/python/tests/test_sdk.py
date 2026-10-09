@@ -831,6 +831,8 @@ class TestWebhooks:
         client = make_client(backend)
         assert client.webhooks.redrive_delivery_failures({"sessionId": "s", "limit": 10}) == result
         assert backend.last_call.method == "POST"
+        # The mock route is a substring match, so the full URL is what pins the path suffix.
+        assert backend.last_call.url == "http://localhost:2785/api/webhooks/delivery-failures/redrive"
         assert backend.last_call.body == {"sessionId": "s", "limit": 10}
         client.webhooks.redrive_delivery_failures()
         assert backend.last_call.body == {}
