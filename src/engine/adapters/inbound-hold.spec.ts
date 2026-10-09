@@ -1,11 +1,12 @@
 import { EventEmitter } from 'events';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { WAState } from 'whatsapp-web.js';
+import { WAState, type Message as WwebjsMessage } from 'whatsapp-web.js';
 import type { Repository } from 'typeorm';
 import type { WAMessage, WASocket } from '@whiskeysockets/baileys';
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { WhatsAppWebJsAdapter } from './whatsapp-web-js.adapter';
+import { plannedInboundDownload } from './wwebjs-messaging';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineRegistry } from '../engine-registry.service';
@@ -615,6 +616,12 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
     getContact: jest.fn().mockResolvedValue(null),
     hasQuotedMsg: false,
   });
+  // The account's own send as whatsapp-web.js echoes it: `from` is the account, `to` the conversation.
+  const ownEcho = (id: string, to: string, page?: jest.Mock, body = '') => ({
+    ...incoming(id, '628123@c.us', page, body),
+    to,
+    fromMe: true,
+  });
 
   beforeEach(() => {
     process.env.INBOUND_MEDIA_CONCURRENCY = '1';
@@ -825,5 +832,99 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
       .filter(f => f.startsWith('wwebjs-') && f.endsWith('.ts') && !f.endsWith('.spec.ts'))
       .filter(f => readFileSync(join(__dirname, f), 'utf8').includes('admitInbound'));
     expect(callers).toEqual(['wwebjs-message-events.ts']);
+  });
+
+  it('holds the room for an own media echo until its row is written, so the next echo waits', async () => {
+    const h = heldProjector();
+    const release = h.stall('echo1');
+    const { client } = build(h.callbacks);
+    const first = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    const second = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    client.emit('message_create', ownEcho('echo1', '628111@c.us', first));
+    client.emit('message_create', ownEcho('echo2', '628222@c.us', second));
+    await flush();
+
+    // One slot of room: the first payload waits for its insert, so the second page download has not started.
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    release();
+    await flush();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(h.inserted()).toEqual(['echo1', 'echo2']);
+  });
+
+  it('commits an own text echo after the own media echo it arrived behind in its chat', async () => {
+    const h = heldProjector();
+    const { client } = build(h.callbacks);
+    const page = deferred<{ mimetype: string; data: string }>();
+    client.emit(
+      'message_create',
+      ownEcho(
+        'echo-image',
+        '628111@c.us',
+        jest.fn(() => page.promise),
+      ),
+    );
+    client.emit('message_create', ownEcho('echo-text', '628111@c.us', undefined, 'after'));
+    await flush();
+    // The text is processed meanwhile, but its hook and row wait for the image.
+    expect(h.hookStarts).toEqual([]);
+    expect(h.inserted()).toEqual([]);
+
+    page.resolve({ mimetype: 'image/png', data: 'QUJD' });
+    await flush();
+    expect(h.hookStarts).toEqual(['echo-image', 'echo-text']);
+    expect(h.inserted()).toEqual(['echo-image', 'echo-text']);
+  });
+
+  it('asks the room for a slot only for an own echo that downloads, and stores no status echo', async () => {
+    const h = heldProjector();
+    const admitInbound = jest.fn(h.callbacks.admitInbound);
+    const { client } = build({ ...h.callbacks, admitInbound });
+    const page = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    client.emit('message_create', ownEcho('echo-image', '628111@c.us', page));
+    client.emit('message_create', ownEcho('echo-status', 'status@broadcast', page));
+    client.emit('message_create', ownEcho('echo-text', '628111@c.us', undefined, 'hi'));
+    await flush();
+
+    expect(admitInbound.mock.calls.map(([a]) => [a.id, a.status, a.needsRoom])).toEqual([
+      ['echo-image', false, true],
+      ['echo-status', true, false],
+      ['echo-text', false, false],
+    ]);
+    expect(page).toHaveBeenCalledTimes(1);
+    expect(h.inserted()).toEqual(['echo-image', 'echo-text']);
+  });
+
+  it('settles the ticket of an own echo its handler never takes, so the chat is not held up', async () => {
+    const h = heldProjector();
+    // The handler ignores the ticket it is handed: only the adapter's own settle can release it.
+    const { client } = build({ ...h.callbacks, onMessageCreate: () => undefined });
+    client.emit('message_create', ownEcho('echo', '628111@c.us'));
+    client.emit('message', incoming('after', '628111@c.us', undefined, 'hello'));
+    await flush();
+
+    expect(h.inserted()).toEqual(['after']);
+  });
+
+  it.each<[string, boolean, number, Record<string, string>, boolean]>([
+    ['an image', true, 3, {}, true],
+    ['an image with media downloads disabled', true, 3, { MEDIA_DOWNLOAD_ENABLED: 'false' }, false],
+    ['media declared over the cap', true, 5000, { MEDIA_DOWNLOAD_MAX_BYTES: '1000' }, false],
+    ['a text', false, 0, {}, false],
+  ])('plans a download for %s exactly when processing downloads it', async (_case, media, size, vars, planned) => {
+    Object.assign(process.env, vars);
+    const h = heldProjector();
+    const admitInbound = jest.fn(h.callbacks.admitInbound);
+    const { client } = build({ ...h.callbacks, admitInbound });
+    const page = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    const msg = { ...incoming('a', '628111@c.us', media ? page : undefined), _data: { mimetype: 'image/png', size } };
+
+    expect(plannedInboundDownload(msg as unknown as WwebjsMessage)).toBe(planned);
+    client.emit('message', msg);
+    await flush();
+
+    expect(admitInbound).toHaveBeenCalledWith(expect.objectContaining({ id: 'a', needsRoom: planned }));
+    expect(page).toHaveBeenCalledTimes(planned ? 1 : 0);
   });
 });
