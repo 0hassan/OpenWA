@@ -136,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `handlebars` 4.7.9 to 4.7.10, closing two critical advisories in which a crafted template could inject JavaScript into compiled output. It reaches the root tree only through `ts-jest`, so it is dev-only and nothing that ships changes.
 - `vitest` 2.1 to 5 in the JavaScript SDK tree, closing its dev-only advisories, and `typescript` 5.9 to 7. Its unit tests now need Node 22.12+; the published package still supports Node 18.
+- `music-metadata` 11.13.0 to 11.16.1, the parser Baileys uses to read an outgoing audio file's duration. It closes three advisories in which a crafted audio file could abort the process or exhaust memory (GHSA-5gfj-9q3v-qfp3, GHSA-8j4c-6x6g-rq3j, GHSA-f94x-6692-553q).
 
 ### Upgrade notes (behavior changes)
 
