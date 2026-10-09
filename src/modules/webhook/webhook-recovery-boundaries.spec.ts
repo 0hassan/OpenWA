@@ -187,6 +187,55 @@ describe('webhook recovery across live ownership and configuration changes', () 
     expect(post).toHaveBeenCalledTimes(2);
   });
 
+  it('points a replayed row at its new queue job, so the next sweep enqueues nothing', async () => {
+    const config = new ConfigService({ queue: { enabled: true }, webhook: { timeout: 1000 } });
+    const repository = ds.getRepository(WebhookOutboxEvent);
+    const outbox = new WebhookOutboxService(repository);
+    const live = new Set<string>();
+    const queue = {
+      add: jest.fn((_name: string, _data: unknown, options: { jobId: string }) => {
+        live.add(options.jobId);
+        return Promise.resolve({});
+      }),
+      getJob: jest.fn((id: string) =>
+        Promise.resolve(live.has(id) ? { getState: () => Promise.resolve('waiting') } : undefined),
+      ),
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
+    };
+    const delivery = new WebhookDeliveryService(
+      webhooks,
+      failures,
+      config,
+      new HookManager(),
+      outbox,
+      undefined,
+      queue as never,
+    );
+    const reconciler = new WebhookReconcilerService(webhooks, outbox, delivery, config);
+    const options = { intervalMs: 1000, graceMs: 0, batchSize: 10, maxAttempts: 5 };
+    // A crash before the add left a row that names a job which was never created.
+    await outbox.open({
+      webhookId: primary.id,
+      sessionId: primary.sessionId,
+      event: 'message.received',
+      idempotencyKey: 'key-a',
+      deliveryId: 'job-never-added',
+      payload: { id: 1 },
+    });
+    await repository.update({ idempotencyKey: 'key-a' }, { createdAt: new Date(Date.now() - 600_000) });
+
+    expect(await reconciler.sweep(options)).toMatchObject({ replayed: 1, skipped: 0 });
+    const [[, , added]] = queue.add.mock.calls;
+    expect(await repository.findOneByOrFail({ idempotencyKey: 'key-a' })).toMatchObject({
+      state: 'queued',
+      deliveryId: added.jobId,
+    });
+
+    // The replacement job is alive: with the row pointing at it, the sweep leaves the row alone.
+    expect(await reconciler.sweep(options)).toMatchObject({ replayed: 0, skipped: 1 });
+    expect(queue.add).toHaveBeenCalledTimes(1);
+  });
+
   it('rechecks the receiver after a held webhook hook before the first POST', async () => {
     const config = new ConfigService({ webhook: { failurePayloadRetentionHours: 24 } });
     const hooks = new HookManager();

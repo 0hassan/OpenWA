@@ -1697,6 +1697,24 @@ describe('WebhookDeliveryService', () => {
       expect(jobData).not.toHaveProperty('replayData');
     });
 
+    it('points the outbox row of a replay at the job it queued', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      const webhook = createMockWebhook({ events: ['message.received'] });
+
+      await expect(queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {})).resolves.toBe(
+        'enqueued',
+      );
+
+      // A replay is queued under a new delivery id, and the sweep looks a queued row's job up by the id the
+      // row holds: left on the old one it finds no job and enqueues the event again.
+      const [, , opts] = (webhookQueue.add as jest.Mock).mock.calls[0] as [string, WebhookJobData, { jobId: string }];
+      expect(outboxService.markQueued).toHaveBeenCalledTimes(1);
+      expect(outboxService.markQueued).toHaveBeenCalledWith(webhook.id, 'stored-key', opts.jobId);
+    });
+
     it('carries the pre-hook event data in the job only while payload retention is on', async () => {
       const queueService = await buildQueueService((key: string, def?: unknown) => {
         if (key === 'queue.enabled') return true;
