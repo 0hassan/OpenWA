@@ -7051,12 +7051,12 @@ All client commands are sent on the Socket.IO event named **`message`** using a 
 { type, sessionId, events, requestId }
 ```
 
-| Field       | Type                                     | Applies to             | Description                                               |
-| ----------- | ---------------------------------------- | ---------------------- | --------------------------------------------------------- |
-| `type`      | `"subscribe" \| "unsubscribe" \| "ping"` | all                    | Command discriminator.                                    |
-| `sessionId` | string                                   | subscribe, unsubscribe | A session id, or `"*"` for all sessions.                  |
-| `events`    | string[]                                 | subscribe              | Event names to subscribe to, or `["*"]` for all.          |
-| `requestId` | string (optional)                        | all                    | Echoed back on the matching server reply for correlation. |
+| Field       | Type                                     | Applies to             | Description                                                                                                                              |
+| ----------- | ---------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`      | `"subscribe" \| "unsubscribe" \| "ping"` | all                    | Command discriminator.                                                                                                                   |
+| `sessionId` | string                                   | subscribe, unsubscribe | A session id, or `"*"` for all sessions.                                                                                                 |
+| `events`    | string[]                                 | subscribe              | Event names to subscribe to, or `["*"]` for all.                                                                                         |
+| `requestId` | string (optional)                        | all                    | Echoed back on the matching server reply for correlation. At most 128 characters; any other value is dropped and the reply carries none. |
 
 A `ping` carries only `{ type: "ping", requestId? }`.
 

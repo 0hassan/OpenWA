@@ -78,6 +78,19 @@ const CHAT_EVENTS = new Set([
   'event.response',
 ]);
 
+/**
+ * The frame with a `requestId` that is not a short string dropped. A reply that carried client JSON back
+ * made the transport serialize whatever structure the client nested in it, which is not the client's to
+ * choose; the handlers below then never see anything but a string or nothing.
+ */
+function withSafeRequestId(message: WSClientMessage | null | undefined): WSClientMessage | null | undefined {
+  if (typeof message !== 'object' || message === null || Array.isArray(message)) return message;
+  const { requestId } = message as { requestId?: unknown };
+  if (requestId === undefined) return message;
+  if (typeof requestId === 'string' && requestId.length <= MAX_REQUEST_ID_LENGTH) return message;
+  return { ...message, requestId: undefined };
+}
+
 function chatRoom(sessionId: string, event: string, chatId: string): string {
   return `${buildRoomName(sessionId, event)}:chat:${encodeURIComponent(chatId)}`;
 }
@@ -117,6 +130,8 @@ const QR_ALLOWED_ROLES: ReadonlySet<string> = new Set([ApiKeyRole.OPERATOR, ApiK
  * subscription rooms, far above every event of every session a client would follow.
  */
 const MAX_SUBSCRIBE_SESSION_ID_LENGTH = 128;
+// A request id only correlates a reply with its request, so only a short string is ever echoed back.
+const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_ROOMS_PER_SOCKET = 4096;
 
 /** Why an API key's live WebSocket sockets are being torn down — drives the client-facing message. */
@@ -489,7 +504,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   @SubscribeMessage('message')
   // A client may emit 'message' with no payload or with null, so the body is typed as possibly nil and
   // every read is guarded: such a frame answers INVALID_MESSAGE instead of throwing in the handler.
-  async handleMessage(@ConnectedSocket() client: Socket, @MessageBody() message: WSClientMessage | null | undefined) {
+  async handleMessage(@ConnectedSocket() client: Socket, @MessageBody() incoming: WSClientMessage | null | undefined) {
+    const message = withSafeRequestId(incoming);
     // Per-key token bucket on every inbound frame. Keyed by the validated key id; a socket
     // whose handshake validation is still in flight has no key yet and is metered by IP.
     // Over-budget frames get an error frame back and are NOT dispatched to a handler — in

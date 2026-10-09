@@ -1192,6 +1192,27 @@ describe('EventsGateway rate limiting', () => {
       };
       expect(otherSubnet.type).not.toBe('error');
     });
+
+    it('echoes a request id only when it is a short string, never structure the client built', async () => {
+      process.env.WS_RATE_LIMIT_FRAME_PER_SECOND = '1000';
+      process.env.WS_RATE_LIMIT_FRAME_BURST = '1000';
+      const gw = buildGateway();
+      const send = async (message: unknown) =>
+        (await gw.handleMessage(asSocket(makeSock('a', {}, '203.0.113.9')), message as WSClientMessage)) as {
+          requestId?: unknown;
+          code?: string;
+        };
+
+      expect((await send({ type: 'ping', requestId: 'r1' })).requestId).toBe('r1');
+      expect((await send({ type: 'ping', requestId: 'x'.repeat(128) })).requestId).toBe('x'.repeat(128));
+      // A reply that carried client JSON back made the transport serialize whatever the client nested in it.
+      for (const hostile of ['x'.repeat(129), { a: { b: 1 } }, ['r'], 7, true, null]) {
+        expect((await send({ type: 'ping', requestId: hostile })).requestId).toBeUndefined();
+        const refused = await send({ type: 'no-such-type', requestId: hostile });
+        expect(refused.code).toBe('INVALID_MESSAGE');
+        expect(refused.requestId).toBeUndefined();
+      }
+    });
   });
 
   describe('per-key simultaneous socket cap', () => {
