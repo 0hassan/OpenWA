@@ -60,6 +60,7 @@ describe('webhook recovery across live ownership and configuration changes', () 
     const delivery = {
       isLocallyPending: jest.fn((key: string) => key === 'key0'),
       isQueueJobPending: jest.fn((id: string) => Promise.resolve(id === 'job1' || id === 'job2')),
+      hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
       // Like the real redeliver, a delivered replay retires its own outbox row.
       redeliver: jest.fn(async (webhook: Webhook, _sessionId: string, _event: string, key: string) => {
         await outbox.close(webhook.id, key, 'dispatched');

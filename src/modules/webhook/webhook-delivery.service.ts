@@ -979,6 +979,23 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * A finished job: its worker settled the delivery, so an outbox row still queued for it is a leftover and
+   * not a stranded send. Anything unreadable answers false here; isQueueJobPending already holds the
+   * conservative answer for that case.
+   */
+  async hasQueueJobCompleted(deliveryId: string): Promise<boolean> {
+    if (!this.webhookQueue) return false;
+    try {
+      await producerReady(this.webhookQueue);
+      const job = await this.webhookQueue.getJob(deliveryId);
+      return job ? (await job.getState()) === 'completed' : false;
+    } catch (error) {
+      this.logger.warn('Could not inspect queued webhook delivery', { deliveryId, error: String(error) });
+      return false;
+    }
+  }
+
   /** Finish a spent outbox replay budget only after its failure record is durable. */
   async recordReplayExhaustion(row: ReplayableDelivery, url: string): Promise<boolean> {
     const existing = await this.failureRepository.count({

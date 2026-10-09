@@ -44,6 +44,7 @@ describe('WebhookReconcilerService', () => {
     isLocallyPending: jest.Mock;
     recordReplayExhaustion: jest.Mock;
     isQueueJobPending: jest.Mock;
+    hasQueueJobCompleted: jest.Mock;
   };
   let webhooks: { findOne: jest.Mock };
   let service: WebhookReconcilerService;
@@ -58,6 +59,7 @@ describe('WebhookReconcilerService', () => {
       redeliver: jest.fn().mockResolvedValue('delivered'),
       recordReplayExhaustion: jest.fn().mockResolvedValue(true),
       isQueueJobPending: jest.fn().mockResolvedValue(false),
+      hasQueueJobCompleted: jest.fn().mockResolvedValue(false),
       isLocallyPending: jest.fn().mockReturnValue(false),
     };
     webhooks = {
@@ -163,6 +165,22 @@ describe('WebhookReconcilerService', () => {
     await service.sweep(OPTS);
     expect(delivery.redeliver).not.toHaveBeenCalled();
     expect(outbox.close).not.toHaveBeenCalled();
+  });
+
+  it('closes a queued row whose job already completed instead of replaying it', async () => {
+    // A worker settled the job but its outbox row was left behind (a worker that never closes the outbox, or a
+    // failed close). A replay would POST an event the receiver already has, up to the budget, and then record
+    // a failure for a delivery that succeeded.
+    outbox.findStale.mockResolvedValue([row({ state: 'queued', deliveryId: 'job' })]);
+    delivery.hasQueueJobCompleted.mockResolvedValue(true);
+
+    const stats = await service.sweep(OPTS);
+
+    expect(outbox.close).toHaveBeenCalledWith('wh-1', 'stored-key_wh-1', 'dispatched');
+    expect(delivery.redeliver).not.toHaveBeenCalled();
+    expect(outbox.countAttempt).not.toHaveBeenCalled();
+    expect(delivery.recordReplayExhaustion).not.toHaveBeenCalled();
+    expect(stats).toMatchObject({ skipped: 1, replayed: 0, failed: 0 });
   });
 
   it('does not replay to a subscription that is gone or switched off', async () => {

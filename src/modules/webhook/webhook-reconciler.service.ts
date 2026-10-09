@@ -163,6 +163,14 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
           stats.skipped++;
           continue;
         }
+        if (row.deliveryId && (await this.delivery.hasQueueJobCompleted(row.deliveryId))) {
+          // A worker settled this job and its outbox row was left behind (a worker that never closes the
+          // outbox, or a close that failed). It is not stranded: a replay would POST an event the receiver
+          // already has, up to the budget, and then record a failure for a delivery that succeeded.
+          await this.outbox.close(row.webhookId, row.idempotencyKey, 'dispatched');
+          stats.skipped++;
+          continue;
+        }
         if (row.attempts >= opts.maxAttempts) {
           // A database fault may have prevented every terminal failure write. Keep the outbox
           // payload until this handoff succeeds, without sending beyond the replay budget.
