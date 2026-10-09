@@ -2807,3 +2807,34 @@ test('a message sent while the first page is still loading survives the page lan
   await within(thread).findByText('hello from alice');
   await waitFor(() => assert.equal(within(thread).queryAllByText('sent while loading').length, 1));
 });
+
+function receiveEvent(event: string, data: Record<string, unknown>): void {
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  socket.receive('message', {
+    type: 'event',
+    timestamp: new Date(1_700_003_000_000).toISOString(),
+    payload: { event, sessionId: SESSION.id, data },
+  });
+}
+
+test('an edit arriving after the newest message was deleted for everyone does not refill the sidebar preview', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const room = container.querySelector('.room-messages') as HTMLElement;
+  await within(room).findByText('hello from alice');
+  const sidebar = container.querySelector('.chats-sidebar') as HTMLElement;
+  const id = OMITTED_MEDIA_MESSAGE_2.waMessageId as string;
+
+  revoke(CHAT.id, id);
+  await waitFor(() => assert.ok(!within(sidebar).queryByText('hello from alice')));
+  receiveEvent('message.edited', { messageId: id, chatId: CHAT.id, body: 'late edit', timestamp: 1_700_003_001 });
+  await flush();
+
+  assert.ok(
+    !within(sidebar).queryByText('late edit'),
+    'the edit of a deleted message came back as the sidebar preview',
+  );
+  assert.ok(!within(room).queryByText('late edit'), 'the edit of a deleted message came back into the thread');
+});
