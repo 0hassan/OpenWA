@@ -26,6 +26,8 @@ import { resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
 import { createHash } from 'crypto';
 import * as path from 'path';
+import * as ts from 'typescript';
+import * as vm from 'vm';
 import * as qrcode from 'qrcode';
 import { InternalServerErrorException, UnprocessableEntityException, BadRequestException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -5892,6 +5894,54 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     pageServing(5, { decrypt: () => Promise.reject(failure) });
 
     await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
+  });
+
+  // puppeteer ships downloadMediaInPage into the page as Function#toString(), so it can reach nothing of this
+  // module: a constant or helper it closes over resolves in Node, where every test above runs it, and throws
+  // ReferenceError in the page, where every download then fails. The source is compiled from the file with the
+  // project's compiler options and run in a context holding only the page's window and AbortController. The
+  // loaded copy is not used: coverage instruments it with counters the page does not have.
+  function shippedToPage(): typeof downloadMediaInPage {
+    const root = path.join(__dirname, '..', '..', '..');
+    const { config } = ts.readConfigFile(path.join(root, 'tsconfig.json'), name => fs.readFileSync(name, 'utf8')) as {
+      config: { compilerOptions: Record<string, unknown> };
+    };
+    const { options } = ts.convertCompilerOptionsFromJson({ ...config.compilerOptions, module: 'CommonJS' }, root);
+    const file = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
+    const start = file.indexOf('async function downloadMediaInPage');
+    expect(start).toBeGreaterThan(-1);
+    const compiled = ts.transpileModule(file.slice(start, file.indexOf('\n}\n', start) + 2), {
+      compilerOptions: options,
+    }).outputText;
+    // Declared alongside whatever helpers the compiler hoisted, then sent as its own text, as puppeteer does.
+    const declared = vm.runInNewContext(`${compiled}\n;downloadMediaInPage`) as { toString(): string };
+    return vm.runInNewContext(`(${declared.toString()})`, {
+      window: (globalThis as unknown as { window: unknown }).window,
+      AbortController,
+    }) as typeof downloadMediaInPage;
+  }
+
+  const clip = { mimetype: 'video/mp4', filename: 'clip.mp4' };
+  it.each<[string, number, PageCase, unknown]>([
+    ['a payload within the cap', 3, {}, { ...clip, sizeBytes: 3, data: Buffer.alloc(3).toString('base64') }],
+    ['a payload over the cap', 5000, {}, { ...clip, sizeBytes: 5000, data: '' }],
+    ['unresolved media', 3, { stage: 'INIT' }, { ...clip, sizeBytes: 3, data: Buffer.alloc(3).toString('base64') }],
+    ['a message the page does not hold', 3, { msgId: 'M2' }, null],
+    ['media the phone is re-uploading', 3, { stage: 'REUPLOADING' }, null],
+    ['media whose resolve step fails', 3, { stage: 'INIT', resolvedStage: 'ERROR_MISSING' }, undefined],
+    ['media still fetching after the resolve step', 3, { stage: 'INIT', resolvedStage: 'FETCHING' }, undefined],
+    ['media the server no longer has', 3, { decrypt: notFound }, undefined],
+  ])('reaches nothing outside the page when it runs there: %s', async (_case, bytes, page, expected) => {
+    pageServing(bytes, page);
+
+    await expect(shippedToPage()({ msgId: page.msgId ?? 'M1', maxBytes: 1000 })).resolves.toEqual(expected);
+  });
+
+  it('reaches nothing outside the page when a download fails with any other error', async () => {
+    const failure = Object.assign(new Error('boom'), { status: 500 });
+    pageServing(3, { decrypt: () => Promise.reject(failure) });
+
+    await expect(shippedToPage()({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
   });
 
   // downloadMediaInPage copies the page side of Message#downloadMedia. The fingerprint pins the whole
