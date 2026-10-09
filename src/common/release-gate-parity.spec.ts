@@ -76,6 +76,48 @@ describe('release gate parity (the tag path runs every branch gate)', () => {
 });
 
 /**
+ * Running the same commands is not enough: a gate stops a release only when its failure does. A step
+ * that carries `continue-on-error` or an `if`, or a publishing job that no longer waits for a gate job,
+ * keeps every command above in place and still lets a tag publish with the suite red.
+ */
+describe('release gate jobs can stop the publish jobs', () => {
+  type GateStep = { if?: unknown; 'continue-on-error'?: unknown };
+  type GateJob = { needs?: string | string[]; if?: unknown; 'continue-on-error'?: unknown; steps?: GateStep[] };
+  const jobs = (): Record<string, GateJob> =>
+    (yaml.load(fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8')) as { jobs?: Record<string, GateJob> })
+      .jobs ?? {};
+  const GATES = ['lint', 'test', 'test-postgres', 'dashboard', 'scripts-smoke', 'chart'];
+  const needsOf = (job: GateJob): string[] => (typeof job.needs === 'string' ? [job.needs] : (job.needs ?? []));
+  const closure = (start: string): Set<string> => {
+    const seen = new Set<string>();
+    const queue = [start];
+    for (let name = queue.pop(); name !== undefined; name = queue.pop()) {
+      for (const need of needsOf(jobs()[name] ?? {})) {
+        if (!seen.has(need)) {
+          seen.add(need);
+          queue.push(need);
+        }
+      }
+    }
+    return seen;
+  };
+
+  it.each(GATES)('%s runs unconditionally and a failing step fails the job', gate => {
+    const job = jobs()[gate];
+    expect(job).toBeDefined();
+    expect(job.if).toBeUndefined();
+    expect(job['continue-on-error']).toBeUndefined();
+    const softened = (job.steps ?? []).filter(step => step.if !== undefined || step['continue-on-error'] !== undefined);
+    expect(softened).toEqual([]);
+  });
+
+  it.each(['docker', 'release'])('%s waits, directly or through another job, for every gate job', publisher => {
+    expect(jobs()[publisher]).toBeDefined();
+    expect(GATES.filter(gate => !closure(publisher).has(gate))).toEqual([]);
+  });
+});
+
+/**
  * A tag is a prerelease or it is not, and every release channel has to agree. The image channels
  * (X.Y, latest) and the promote job treat any tag with a '-' suffix as a prerelease; when the
  * GitHub Release matched only -rc/-beta/-alpha, a tag such as v1.2.0-next.1 stayed off `latest` on
