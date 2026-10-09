@@ -1,10 +1,27 @@
-import { IsString, IsOptional, IsEnum, IsArray, ArrayUnique, IsDateString, MinLength, Validate } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsEnum,
+  IsArray,
+  ArrayMaxSize,
+  ArrayUnique,
+  IsDateString,
+  MinLength,
+  Validate,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { MaxCodePoints } from '../../../common/validation/max-code-points';
 import { ApiKeyRole } from '../entities/api-key.entity';
 import { IsIpOrCidrConstraint } from './is-ip-or-cidr.validator';
 import { IsSessionIdConstraint } from './is-session-id.validator';
 import { IsChatIdConstraint } from './is-chat-id.validator';
+
+/**
+ * The most chats one key may be restricted to. A chat-restricted WebSocket holds a room per allowed id, two
+ * address forms per phone, within the 4096 a socket may hold, and search binds one SQL parameter per
+ * expanded id; past this bound a key could neither subscribe nor search without an opaque failure.
+ */
+export const ALLOWED_CHATS_MAX = 2000;
 
 export class CreateApiKeyDto {
   @ApiProperty({
@@ -61,6 +78,7 @@ export class CreateApiKeyDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(ALLOWED_CHATS_MAX)
   @IsString({ each: true })
   @ArrayUnique()
   @Validate(IsChatIdConstraint, { each: true })
@@ -175,6 +193,7 @@ export class UpdateApiKeyDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(ALLOWED_CHATS_MAX)
   @IsString({ each: true })
   @ArrayUnique()
   @Validate(IsChatIdConstraint, { each: true })
