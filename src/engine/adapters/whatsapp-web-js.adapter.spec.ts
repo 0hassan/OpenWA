@@ -5830,6 +5830,19 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     expect(toBase64).not.toHaveBeenCalled();
   });
 
+  it('looks the message up by an id the WhatsApp Web build stores under $1', async () => {
+    // A bare `_serialized` read sends the page an empty id, which finds no message and comes back null.
+    pageServing(3);
+    const renamed = { ...understated(runInPage), id: { $1: 'M1' } };
+
+    await expect(cap(renamed)).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      data: Buffer.alloc(3).toString('base64'),
+    });
+    expect(runInPage).toHaveBeenCalledWith(downloadMediaInPage, { msgId: 'M1', maxBytes: 1000 });
+  });
+
   it('still inlines a payload within the cap', async () => {
     pageServing(3);
 
