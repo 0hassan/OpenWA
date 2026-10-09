@@ -1998,6 +1998,25 @@ describe('BaileysAdapter messaging', () => {
     );
   });
 
+  // Brazil, Mexico and Argentina numbers exist on WhatsApp under another digit string than the one typed (the
+  // ninth digit). The number check reports the id WhatsApp knows, and the send goes there, not to the typed one.
+  it.each([
+    ['the phone jid', null, '551187654321@s.whatsapp.net'],
+    ['the lid known for it', '484848@lid', '484848@lid'],
+  ])('sendTextMessage addresses a first-contact send to the id the number check reported: %s', async (_, lid, to) => {
+    fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
+    fakeSock.onWhatsApp.mockResolvedValue([{ jid: '551187654321@s.whatsapp.net', exists: true }]);
+    const getLIDForPN = jest.fn((pn: string) => Promise.resolve(pn === '551187654321@s.whatsapp.net' ? lid : null));
+    fakeSock.signalRepository = { lidMapping: { getLIDForPN } };
+    const adapter = await readyAdapter();
+
+    await adapter.sendTextMessage('5511987654321@c.us', 'hello');
+
+    expect(fakeSock.onWhatsApp).toHaveBeenCalledWith('5511987654321@s.whatsapp.net');
+    expect(getLIDForPN).toHaveBeenLastCalledWith('551187654321@s.whatsapp.net');
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith(to, { text: 'hello', linkPreview: null }, safeSendOptions());
+  });
+
   it('sendTextMessage honors the chat disappearing timer when one is cached (#473)', async () => {
     fakeSock.sendMessage.mockResolvedValue({ key: { id: 'OUT1' }, messageTimestamp: 1700000001 });
     const adapter = await readyAdapter();
