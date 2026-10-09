@@ -229,3 +229,26 @@ test('a walk stops once the key it started with is signed out or replaced', asyn
   );
   assert.equal(refused, 3, 'the walk did not reach the last retry');
 });
+
+test('a walk does not send its retry when the key is signed out during the throttle wait', async () => {
+  const { fetchPage } = fakeSource(1_000, 200);
+  const sentWith: Array<string | null> = [];
+  let refused = false;
+  await assert.rejects(
+    fetchAllPages(
+      async (limit, offset) => {
+        sentWith.push(sessionStorage.getItem('openwa_api_key'));
+        if (offset === 200 && !refused) {
+          refused = true;
+          // The refusal settles first; the operator signs out while the walk waits to retry it.
+          setTimeout(() => sessionStorage.removeItem('openwa_api_key'), 5);
+          throw httpError(429);
+        }
+        return fetchPage(limit, offset);
+      },
+      { retryDelayMs: 40 },
+    ),
+    /Signed out/,
+  );
+  assert.deepEqual(sentWith, ['key-a', 'key-a'], 'the retry went out after the sign-out');
+});
