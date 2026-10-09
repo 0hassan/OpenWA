@@ -520,6 +520,29 @@ describe('WebhookProcessor', () => {
       expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'k', attempts: 1 }));
     });
 
+    // A failed job leaves its outbox row as the only replay copy, so it is retired once a failure row owns
+    // the event, whether that row is new or was already on record, and not before.
+    it.each<[string, typeof failureRows]>([
+      ['a new row', []],
+      ['a row already on record', [{ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 3 }]],
+    ])('retires the outbox row once the stall is recorded in %s', async (_label, existing) => {
+      failureRows.push(...existing);
+
+      await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
+
+      expect(outbox.close).toHaveBeenCalledTimes(1);
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('keeps the outbox row when the stall row cannot be written', async () => {
+      failureRepo.insert.mockRejectedValue(new Error('disk unavailable'));
+
+      await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
+
+      expect(failureRepo.insert).toHaveBeenCalledTimes(1);
+      expect(outbox.close).not.toHaveBeenCalled();
+    });
+
     it('still records the stall against the enqueue-time URL when the webhook row cannot be read', async () => {
       repo.findOne.mockRejectedValue(new Error('db down'));
 
