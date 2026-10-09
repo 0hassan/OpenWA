@@ -274,6 +274,19 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ [key]: '36500' })).not.toThrow();
   });
 
+  // The same 36500-day cutoff bound, in hours. A malformed value fell back to 0 downstream, which keeps no
+  // payload on a failure row and leaves the redrive endpoint nothing to replay, with no boot error.
+  it('rejects a malformed or oversized WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS and keeps 0 (no payload kept)', () => {
+    const key = 'WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS';
+    for (const bad of ['24h', '-1', '1.5']) {
+      expect(() => validateEnv({ [key]: bad })).toThrow(new RegExp(`${key} must be a non-negative integer`));
+    }
+    expect(() => validateEnv({ [key]: '876001' })).toThrow(new RegExp(`${key} must be at most 876000`));
+    for (const ok of ['0', '24', '876000']) {
+      expect(() => validateEnv({ [key]: ok })).not.toThrow();
+    }
+  });
+
   it('rejects a non-positive / non-integer WEBHOOK_MAX_PAYLOAD_BYTES (0 would reject every dispatch)', () => {
     expect(() => validateEnv({ WEBHOOK_MAX_PAYLOAD_BYTES: '0' })).toThrow(/WEBHOOK_MAX_PAYLOAD_BYTES/);
     expect(() => validateEnv({ WEBHOOK_MAX_PAYLOAD_BYTES: 'abc' })).toThrow(/WEBHOOK_MAX_PAYLOAD_BYTES/);
