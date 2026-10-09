@@ -123,6 +123,23 @@ describe('chat-scoped WebSocket rooms', () => {
     expect(events(unrestricted)).toHaveLength(1);
   });
 
+  it('keeps group join requests away from a restricted key, since they name people outside its chats', async () => {
+    const group = '120363000000000001@g.us';
+    const restricted = await connect('restricted', [group]);
+    const unrestricted = await connect('unrestricted', null);
+    gateway.emitGroupJoinRequest('s1', { groupId: group, participantIds: ['628999000999@c.us'] });
+    gateway.emitGroupUpdate('s1', { groupId: group, subject: 'Renamed' });
+    await flush();
+    // The REST membership-request routes refuse these keys for the same reason: a requester is, by
+    // definition, not in the allowed chats, and listing the queue names them.
+    expect(events(restricted).map(frame => frame.payload.event)).toEqual(['group.update']);
+    expect(events(unrestricted).map(frame => frame.payload.event)).toEqual(['group.join_request', 'group.update']);
+    expect(await subscribe(restricted, ['group.join_request'])).toMatchObject({
+      type: 'error',
+      code: 'FORBIDDEN_EVENTS',
+    });
+  });
+
   it('performs no chat lookups for a local stream without restricted subscribers', async () => {
     const previous = process.env.REDIS_ENABLED;
     process.env.REDIS_ENABLED = 'false';

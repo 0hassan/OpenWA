@@ -63,6 +63,9 @@ import type {
 import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
 import type { DeliveryStatus } from '../../engine/interfaces/whatsapp-engine.interface';
 
+// The events a chat-restricted key may receive, each delivered only for a chat inside its allowlist.
+// group.join_request is not one of them: it names the people asking to join, who are outside the
+// allowed chats by definition, and the REST membership-request routes refuse these keys for that reason.
 const CHAT_EVENTS = new Set([
   'message.received',
   'message.sent',
@@ -73,7 +76,6 @@ const CHAT_EVENTS = new Set([
   'group.join',
   'group.leave',
   'group.update',
-  'group.join_request',
   'presence.update',
   'event.response',
 ]);
