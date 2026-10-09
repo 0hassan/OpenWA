@@ -43,6 +43,7 @@ import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
+import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { ConversationMapping } from '../integration/entities/conversation-mapping.entity';
 import { IngressEvent } from '../integration/entities/ingress-event.entity';
 import { LidMapping } from '../../engine/identity/lid-mapping.entity';
@@ -1341,6 +1342,9 @@ describe('SessionService', () => {
       expect(managerDelete).toHaveBeenCalledWith(WebhookOutboxEvent, { sessionId: 'sess-uuid-1' });
       expect(managerDelete).toHaveBeenCalledWith(WebhookDeliveryFailure, { sessionId: 'sess-uuid-1' });
       expect(managerDelete).toHaveBeenCalledWith(IntegrationDeliveryFailure, { sessionId: 'sess-uuid-1' });
+      // Send idempotency claims hold the stored response of a send for 24 h: a session re-created under
+      // the same id must not replay one of the deleted session's.
+      expect(managerDelete).toHaveBeenCalledWith(SendIdempotencyKey, { sessionId: 'sess-uuid-1' });
       // Kept on purpose: a re-paired session is rebound to its conversations, ingress rows are the
       // instance-keyed dedup record, and LID mappings are a global cache.
       const deleted = managerDelete.mock.calls.map(([entity]) => entity as unknown);
