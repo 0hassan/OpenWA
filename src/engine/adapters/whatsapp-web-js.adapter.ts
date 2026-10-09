@@ -351,13 +351,25 @@ export class WhatsAppWebJsAdapter extends EventEmitter implements IWhatsAppEngin
       // as a rejection, which boundedReady adopts and rethrows past the only exit that builds the marker,
       // leaving every call site to emit with no media field at all. It is the same "no usable media"
       // outcome as the timeout below, so it takes the same null sentinel.
-      const download = downloadCappedMedia(msg, maxBytes).catch((error: unknown) => {
-        this.logger.warn('Inbound media download failed; emitting the omitted marker', {
-          msgId,
-          error: String(error),
+      const download = downloadCappedMedia(msg, maxBytes)
+        .then(result => {
+          // The page answers null or undefined for media it cannot serve (re-uploading, a failed resolve, a
+          // 404), and the omitted marker alone gives nobody a line to post.
+          if (!result) {
+            this.logger.warn('Inbound media download returned nothing; emitting the omitted marker', {
+              msgId,
+              answer: String(result),
+            });
+          }
+          return result;
+        })
+        .catch((error: unknown) => {
+          this.logger.warn('Inbound media download failed; emitting the omitted marker', {
+            msgId,
+            error: String(error),
+          });
+          return null;
         });
-        return null;
-      });
       resolveBounded(
         withInboundDownloadTimeout(download, inboundMediaTimeoutMs(), () =>
           this.logger.warn(

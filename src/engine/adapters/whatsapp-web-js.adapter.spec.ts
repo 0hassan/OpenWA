@@ -5832,6 +5832,21 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     expect(toBase64).not.toHaveBeenCalled();
   });
 
+  it.each<[string, { stage?: string; resolvedStage?: string }, string]>([
+    ['a page that does not offer the media yet', { stage: 'REUPLOADING' }, 'null'],
+    ['media whose resolve step fails', { stage: 'INIT', resolvedStage: 'ERROR_MISSING' }, 'undefined'],
+  ])('says why %s leaves the omitted marker', async (_case, page, answer) => {
+    pageServing(3, page);
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+
+    await expect(cap(understated(runInPage))).resolves.toEqual(expect.objectContaining({ omitted: true }));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'Inbound media download returned nothing; emitting the omitted marker',
+      expect.objectContaining({ msgId: 'M1', answer }),
+    );
+  });
+
   it('looks the message up by an id the WhatsApp Web build stores under $1', async () => {
     // A bare `_serialized` read sends the page an empty id, which finds no message and comes back null.
     pageServing(3);
@@ -5889,11 +5904,16 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     });
   });
 
-  it('rethrows any other download error', async () => {
-    const failure = Object.assign(new Error('boom'), { status: 500 });
+  // puppeteer rebuilds a page exception from its class name alone, and WhatsApp Web's classes are minified
+  // (`t: t`), so the page names the rejection itself, with the build it came from.
+  it('names any other download error with its WhatsApp Web build', async () => {
+    const failure = Object.assign(new Error('bad type'), { name: 'InvalidMediaFileType', status: 500 });
     pageServing(5, { decrypt: () => Promise.reject(failure) });
+    (g.window as { Debug?: unknown }).Debug = { VERSION: '2.3000.1' };
 
-    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
+    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(
+      'InvalidMediaFileType: bad type (WhatsApp Web 2.3000.1)',
+    );
   });
 
   // puppeteer ships downloadMediaInPage into the page as Function#toString(), so it can reach nothing of this
@@ -5940,8 +5960,11 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
   it('reaches nothing outside the page when a download fails with any other error', async () => {
     const failure = Object.assign(new Error('boom'), { status: 500 });
     pageServing(3, { decrypt: () => Promise.reject(failure) });
+    (g.window as { Debug?: unknown }).Debug = { VERSION: '2.3000.1' };
 
-    await expect(shippedToPage()({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
+    await expect(shippedToPage()({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(
+      'Error: boom (WhatsApp Web 2.3000.1)',
+    );
   });
 
   // downloadMediaInPage copies the page side of Message#downloadMedia. The fingerprint pins the whole
@@ -5975,9 +5998,20 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
       'f70f7cd8393bc60149745b7901bb96eece28a2940eaee4725e71ce615cf9ec73',
     );
     expect(literals(own)).toEqual(literals(upstream));
-    // The copy measures the decrypted length instead of reporting the declared `size`.
+    // The copy measures the decrypted length instead of reporting the declared `size`, and names a
+    // rejection from its `name`, `message` and the page's `Debug.VERSION`.
     expect(members(own)).toEqual(
-      [...members(upstream).filter(m => m !== 'size'), 'byteLength', 'maxBytes', 'msgId', 'sizeBytes'].sort(),
+      [
+        ...members(upstream).filter(m => m !== 'size'),
+        'byteLength',
+        'maxBytes',
+        'msgId',
+        'sizeBytes',
+        'name',
+        'message',
+        'Debug',
+        'VERSION',
+      ].sort(),
     );
     expect(call(own, 'downloadMedia')).toBe(call(upstream, 'downloadMedia'));
     expect(call(own, 'downloadAndMaybeDecrypt')).toBe(

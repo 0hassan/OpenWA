@@ -159,7 +159,13 @@ export async function downloadMediaInPage(args: {
     return { ...meta, data: await w.WWebJS.arrayBufferToBase64Async(decrypted) };
   } catch (e) {
     if ((e as { status?: number } | null)?.status === 404) return undefined;
-    throw e;
+    // WhatsApp Web's rejection classes are minified, and puppeteer rebuilds a page exception from the class
+    // name alone (`t: t`). Name the rejection here, with the build it came from.
+    const thrown = e as { name?: unknown; message?: unknown } | null;
+    const build = (window as unknown as { Debug?: { VERSION?: unknown } }).Debug?.VERSION;
+    throw new Error(`${String(thrown?.name)}: ${String(thrown?.message)} (WhatsApp Web ${String(build)})`, {
+      cause: e,
+    });
   }
 }
 
