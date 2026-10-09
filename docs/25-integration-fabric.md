@@ -281,7 +281,10 @@ row), and a row whose instance or bound session was deleted is dropped, since re
 deleted instance and a session delete purges its dead letters. A delivery whose completed job was
 already removed from the queue, or whose job lookup failed while Redis was down (or, for a Redis
 slow to start at boot, not yet connected within that first-connect wait), is dead-lettered anyway and
-may already have been delivered: check before redriving it. A dead-letter row the prune writes takes
+may already have been delivered: check before redriving it. The check that avoids a second open
+dead-letter row for one delivery reads before it writes, so two nodes pruning the same row at the same
+moment (replicas started together) can leave two, and redriving both delivers it twice. A dead-letter
+row the prune writes takes
 its conversation id from the plugin's current manifest route, as the live path does, so a row whose
 plugin package or route is gone, whose route declares no `conversationId` pointer, or whose pointer
 does not resolve in that delivery carries none and its redrive takes the per-instance lane. There is
