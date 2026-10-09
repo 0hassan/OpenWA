@@ -702,7 +702,7 @@
     },
     "chats": {
       "label": "Akses obrolan (opsional)",
-      "hint": "Satu obrolan per baris: ID grup yang diakhiri @g.us, ID kontak yang diakhiri @c.us atau @lid, atau nomor telepon. Kosongkan untuk semua obrolan. Kunci yang dibatasi obrolan hanya dapat menggunakan rute yang terbuka untuk kunci dengan cakupan obrolan; WebSocket kejadian dan MCP menolaknya.",
+      "hint": "Satu obrolan per baris: ID grup yang diakhiri @g.us, ID kontak yang diakhiri @c.us atau @lid, atau nomor telepon. Kosongkan untuk semua obrolan. Kunci yang dibatasi obrolan hanya dapat menggunakan rute yang terbuka untuk kunci dengan cakupan obrolan; akses lewat WebSocket kejadian dan MCP tetap terbatas pada obrolan tersebut.",
       "invalid": "Bukan ID obrolan atau nomor telepon: {{value}}"
     },
     "expiry": {

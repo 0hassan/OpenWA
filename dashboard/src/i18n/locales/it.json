@@ -708,7 +708,7 @@
     },
     "chats": {
       "label": "Accesso alle chat (facoltativo)",
-      "hint": "Una chat per riga: un ID di gruppo che termina con @g.us, un ID di contatto che termina con @c.us o @lid, oppure un numero di telefono. Lascia vuoto per tutte le chat. Una chiave limitata alle chat può usare solo le rotte aperte a questo tipo di chiave; il WebSocket degli eventi e MCP la rifiutano.",
+      "hint": "Una chat per riga: un ID di gruppo che termina con @g.us, un ID di contatto che termina con @c.us o @lid, oppure un numero di telefono. Lascia vuoto per tutte le chat. Una chiave limitata alle chat può usare solo le rotte aperte a questo tipo di chiave; il suo accesso tramite il WebSocket degli eventi e MCP resta limitato a queste chat.",
       "invalid": "Non è un ID chat né un numero di telefono: {{value}}"
     },
     "expiry": {
