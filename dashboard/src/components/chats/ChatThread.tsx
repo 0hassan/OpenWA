@@ -11,6 +11,7 @@ import {
   type ChatMessageView,
 } from '../../utils/chatMessages';
 import { shouldFetchOlderMessages } from '../../utils/scrollDecision';
+import { keepsSameKey } from '../../utils/authLifecycle';
 import ArchivedMediaPreview, { type ArchivedMediaKind } from './ArchivedMediaPreview';
 import MessageBody from './MessageBody';
 
@@ -107,8 +108,10 @@ function ChatThread({
       if (!sessionId || !messageId) return;
       setMediaFetch(prev => ({ ...prev, [messageId]: 'loading' }));
       let objectUrl: string | null = null;
+      const sameKey = keepsSameKey();
       try {
         const blob = await sessionApi.getMessageMediaBlob(sessionId, activeChat.id, messageId);
+        if (!sameKey()) return;
         objectUrl = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = objectUrl;

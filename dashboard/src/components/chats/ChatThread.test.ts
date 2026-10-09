@@ -218,6 +218,52 @@ test('archive-only media previews inline from the media route; a plain omitted m
   }
 });
 
+test('a media download answered after sign-out saves no file', async () => {
+  // Logout cancels nothing in flight: a download the operator started just before it would otherwise
+  // land in the downloads folder with the login form already showing.
+  const message: ChatMessageView = {
+    ...PROMPT,
+    id: 'big',
+    waMessageId: 'wamid.big',
+    body: '',
+    type: 'document',
+    metadata: { media: { mimetype: 'application/pdf', filename: 'report.pdf', omitted: true, sizeBytes: 10 } },
+  };
+  window.sessionStorage.setItem('openwa_api_key', 'key-a');
+  const fetchOriginal = globalThis.fetch;
+  const createOriginal = URL.createObjectURL;
+  const revokeOriginal = URL.revokeObjectURL;
+  const createElementOriginal = document.createElement;
+  const saved: string[] = [];
+  let answer!: (response: Response) => void;
+  globalThis.fetch = (() => new Promise<Response>(resolve => (answer = resolve))) as typeof fetch;
+  URL.createObjectURL = () => 'blob:report';
+  URL.revokeObjectURL = () => {};
+  document.createElement = ((tag: string, options?: ElementCreationOptions) => {
+    const element = createElementOriginal.call(document, tag, options);
+    if (tag === 'a')
+      (element as HTMLAnchorElement).click = () => void saved.push((element as HTMLAnchorElement).download);
+    return element;
+  }) as typeof document.createElement;
+  try {
+    const { container } = renderThread('viewer', [message]);
+    const button = container.querySelector('[data-wa-message-id="wamid.big"] button.message-media-omitted');
+    assert.ok(button, 'the over-budget document did not render its download button');
+    rtl.fireEvent.click(button);
+    await rtl.waitFor(() => assert.ok(answer, 'the download did not start'));
+    window.sessionStorage.removeItem('openwa_api_key');
+    answer(new Response(new Blob(['x']), { status: 200 }));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepEqual(saved, [], 'the media file was saved after the sign-out');
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    URL.createObjectURL = createOriginal;
+    URL.revokeObjectURL = revokeOriginal;
+    document.createElement = createElementOriginal;
+    window.sessionStorage.removeItem('openwa_api_key');
+  }
+});
+
 test('poll messages display exact choices, including outgoing and legacy polls', () => {
   const poll = { name: 'Where?', options: [' Park ', '<script>Beach</script>'], allowMultipleAnswers: false };
   const { container } = renderThread('viewer', [
