@@ -996,6 +996,12 @@
   text-decoration: none;
 }
 
+/* The archived audio placeholder holds the height of the native player that replaces it, so the bubble
+   does not grow when the bytes land and move a thread that was pinned to the bottom or being read. */
+.chats-page .message-media-archived-loading-audio {
+  min-height: 54px;
+}
+
 /* The map preview keeps its own modest cap, but bounded by the bubble the way every other media type
    here is. As a bare pixel width it stayed 220px wide in a narrower room and ran past the panel edge. */
 .chats-page .chat-location-media {

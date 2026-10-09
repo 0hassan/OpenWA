@@ -57,6 +57,10 @@ function ArchivedMediaPreview({
   useEffect(() => {
     loadRef.current = load;
   });
+  const onMediaLoadRef = useRef(onMediaLoad);
+  useEffect(() => {
+    onMediaLoadRef.current = onMediaLoad;
+  });
   // The object URL the ready render points at. Revoked on unmount only, the phase never leaves
   // `ready`, so the URL stays valid for as long as the element showing it exists.
   const urlRef = useRef<string | null>(null);
@@ -113,11 +117,22 @@ function ArchivedMediaPreview({
     };
   }, [state.phase]);
 
+  // An audio player has a fixed box that does not wait for decode, so the thread grows the moment the
+  // player replaces the placeholder, before any media event could say so. Report it, so a thread pinned
+  // to the bottom stays pinned (image and video report their own load).
+  useEffect(() => {
+    if (state.phase === 'ready' && kind === 'audio') onMediaLoadRef.current?.();
+  }, [state.phase, kind]);
+
   if (state.phase === 'failed') return <>{fallback}</>;
 
   if (state.phase !== 'ready') {
     return (
-      <div ref={anchorRef} className="message-media-omitted message-media-archived-loading" aria-busy="true">
+      <div
+        ref={anchorRef}
+        className={`message-media-omitted message-media-archived-loading${kind === 'audio' ? ' message-media-archived-loading-audio' : ''}`}
+        aria-busy="true"
+      >
         <Loader2 size={14} className="animate-spin" />
       </div>
     );

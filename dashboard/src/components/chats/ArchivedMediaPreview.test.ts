@@ -4,6 +4,7 @@
 import '../../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 
 type RTL = typeof import('@testing-library/react');
@@ -204,4 +205,35 @@ test('the viewer downloads under the media file name, or one unique to the messa
   } finally {
     delete anchorProto.dispatchEvent;
   }
+});
+
+test('an archived audio placeholder reserves the height of the player that replaces it', async () => {
+  const { container } = rtl.render(
+    createElement(ArchivedMediaPreview, {
+      kind: 'audio',
+      fallback,
+      load: () => new Promise<Blob>(() => undefined),
+    }),
+  );
+  const placeholder = container.querySelector('.message-media-archived-loading');
+  assert.ok(placeholder, 'the placeholder did not render');
+  assert.ok(placeholder.classList.contains('message-media-archived-loading-audio'));
+  // The player has a fixed height, so a placeholder of that height means the bubble never grows when
+  // the bytes land (a reader scrolled up, or pinned to the bottom, would otherwise be moved by it).
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  assert.match(css, /\.message-media-archived-loading-audio\s*\{[^}]*min-height:\s*54px/);
+});
+
+test('an archived audio player reports its arrival so a bottom-pinned thread stays pinned', async () => {
+  let reports = 0;
+  const { container } = rtl.render(
+    createElement(ArchivedMediaPreview, {
+      kind: 'audio',
+      fallback,
+      load: async () => new Blob(['x']),
+      onMediaLoad: () => void (reports += 1),
+    }),
+  );
+  await rtl.waitFor(() => assert.ok(container.querySelector('audio.chat-audio-media'), 'audio did not render'));
+  assert.equal(reports, 1, 'the thread is told once that the placeholder became a player');
 });
