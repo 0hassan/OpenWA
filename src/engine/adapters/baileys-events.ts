@@ -1421,9 +1421,6 @@ export class BaileysEvents {
     msg: WAMessage,
     maxBytes: number,
   ): Promise<Buffer | { overflowBytes: number } | null> {
-    // A proxied session must not fetch media around its proxy (#859). Baileys reads the dispatcher
-    // from the nested `options`; a top-level one is ignored.
-    const dispatcher = this.host.getFetchDispatcher();
     // Hold the stream handle in the outer scope so the timeout can destroy it. A genuine
     // download/read error still rejects (propagating to the caller's catch as before).
     let stream: (AsyncIterable<Buffer> & { destroy?: () => void }) | undefined;
@@ -1454,6 +1451,10 @@ export class BaileysEvents {
       };
       assertWhatsAppSource(msg);
       const sock = this.host.getSocket();
+      // A proxied session must not fetch media around its proxy (#859). Baileys reads the dispatcher
+      // from the nested `options`; a top-level one is ignored. Read after the socket: once the session
+      // is torn down getSocket() throws, and a dispatcher built then would never be closed.
+      const dispatcher = this.host.getFetchDispatcher();
       stream = (await b.downloadMediaMessage(
         msg,
         'stream',
