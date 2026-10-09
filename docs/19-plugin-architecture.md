@@ -527,7 +527,9 @@ The gateway still stores and emits each chat's messages in arrival order: the `m
 the start of webhook dispatch wait for every earlier message of the same chat. A slow handler therefore
 delays that chat's later messages, by at most its 5 s hook timeout (`SANDBOX_HOOK_TIMEOUT_MS`) for a
 sandboxed plugin. On PostgreSQL a chat's `message:received` and `message:sent` chains also start in
-arrival order. A handler registered in-process that never settles also holds the media slots of its
+arrival order, for the messages the engine admitted: inbound messages, sends composed on the phone and
+every whatsapp-web.js echo. The echo of a Baileys API send is not admitted, so its `message:sent` chain
+starts at once while its row and events still follow arrival order. A handler registered in-process that never settles also holds the media slots of its
 message, so once `INBOUND_MEDIA_CONCURRENCY` slots are stuck the session's media arrives with the omitted
 marker (see [12 - Troubleshooting & FAQ](./12-troubleshooting-faq.md)). Webhook dispatch itself is not
 ordered: its queue jobs and HTTP deliveries run concurrently, so a receiver that needs order should sort
