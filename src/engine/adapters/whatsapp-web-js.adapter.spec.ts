@@ -3655,6 +3655,46 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     expect(msg.media?.omitted).toBeUndefined();
   });
 
+  it('logs an own-send echo whose base cannot be built instead of dropping it silently', async () => {
+    // The echo runs in an async function whose rejection holdWhileProcessing consumes, so an unreadable
+    // `to` (a WhatsApp Web build renaming the field) vanished without a log line or the unhandled-rejection
+    // metric. The incoming handler logs the same defect; the echo must too, and still release its ticket.
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-echo-unreadable',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const logger = (adapter as unknown as { logger: { error: jest.Mock } }).logger;
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageCreate = jest.fn();
+    const admitInbound = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate, admitInbound };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    client.emit('message_create', {
+      id: { _serialized: 'OWN_UNREADABLE_1' },
+      from: '628123@c.us',
+      to: undefined,
+      body: '',
+      type: 'chat',
+      timestamp: 1700000074,
+      fromMe: true,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    });
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('Error processing outgoing message', expect.stringContaining('endsWith'));
+  });
+
   it('does not download the media of an own status post echo', async () => {
     // The echo consumer drops status posts, so the blob was fetched in full, held an inbound limiter
     // slot, and was thrown away.

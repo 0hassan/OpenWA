@@ -69,7 +69,15 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
 
     let ticket: InboundTicket | undefined;
     const done = (async () => {
-      const incomingMessage = buildIncomingMessageBase(msg);
+      let incomingMessage: IncomingMessage;
+      try {
+        incomingMessage = buildIncomingMessageBase(msg);
+      } catch (error) {
+        // Logged like the incoming handler does: holdWhileProcessing consumes a rejection, so one left to
+        // escape from here would vanish without a log line.
+        host.logger.error('Error processing outgoing message', String(error));
+        return;
+      }
       // Synchronous, as the first await comes after it.
       ticket = admit(msg, incomingMessage, !incomingMessage.isStatusBroadcast);
       // Enrich with the media payload through the same capped path the incoming handler uses —
