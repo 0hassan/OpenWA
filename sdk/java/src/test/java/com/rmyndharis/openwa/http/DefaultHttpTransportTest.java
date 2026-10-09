@@ -12,17 +12,32 @@ import com.rmyndharis.openwa.errors.OpenWAApiError;
 import com.rmyndharis.openwa.errors.OpenWATimeoutError;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
+import java.net.Authenticator;
+import java.net.CookieHandler;
 import java.net.InetSocketAddress;
+import java.net.ProxySelector;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.DateTimeException;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /** Runs the real transport against a local server: no client test covers it otherwise. */
 class DefaultHttpTransportTest {
@@ -89,12 +104,15 @@ class DefaultHttpTransportTest {
     }
 
     @Test
+    @Timeout(30)
     void mapsABodyStallToOpenWATimeoutErrorAndDropsTheConnection() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
         CountDownLatch clientClosed = new CountDownLatch(1);
         server.createContext("/stall", ex -> {
             try {
                 // A body that never ends: keeps writing until the client hangs up.
                 ex.sendResponseHeaders(200, 0);
+                started.countDown();
                 while (!release.await(20, TimeUnit.MILLISECONDS)) {
                     ex.getResponseBody().write(' ');
                     ex.getResponseBody().flush();
@@ -108,13 +126,19 @@ class DefaultHttpTransportTest {
             }
         });
 
+        // The budget covers connecting and a fresh client's first use as well, so a starved machine
+        // needs more than the 100 ms of the header-timeout test; the server stalls for as long as it takes.
         assertThrows(OpenWATimeoutError.class,
-            () -> client(Duration.ofMillis(100)).requestVoid(HttpMethod.GET, "/stall", null, null));
+            () -> client(Duration.ofMillis(1500)).requestVoid(HttpMethod.GET, "/stall", null, null));
+        assertTrue(started.await(5, TimeUnit.SECONDS), "the stalled exchange never reached the server");
         assertTrue(clientClosed.await(5, TimeUnit.SECONDS), "the timed-out exchange was not cancelled");
     }
 
     @Test
     void reportsAFailedExchangeAsAnIOException() {
+        // The failure is HttpClient's own: older JDKs overflow computing a FOREVER deadline, newer ones
+        // saturate and send the request. transportFailure is covered on its own below either way.
+        Assumptions.assumeTrue(overflowsOnThisJdk(), "this JDK schedules a FOREVER timeout without overflowing");
         AtomicInteger hits = new AtomicInteger();
         server.createContext("/ok", ex -> {
             hits.incrementAndGet();
@@ -129,6 +153,64 @@ class DefaultHttpTransportTest {
 
         assertInstanceOf(ArithmeticException.class, err.getCause());
         assertEquals(0, hits.get());
+    }
+
+    private static boolean overflowsOnThisJdk() {
+        try {
+            Instant.now().plus(ChronoUnit.FOREVER.getDuration());
+            return false;
+        } catch (ArithmeticException | DateTimeException e) {
+            return true;
+        }
+    }
+
+    /** A client that only records whether an exchange was started. */
+    private static final class RecordingClient extends HttpClient {
+        final AtomicInteger started = new AtomicInteger();
+
+        @Override public Optional<CookieHandler> cookieHandler() { return Optional.empty(); }
+        @Override public Optional<Duration> connectTimeout() { return Optional.empty(); }
+        @Override public Redirect followRedirects() { return Redirect.NEVER; }
+        @Override public Optional<ProxySelector> proxy() { return Optional.empty(); }
+        @Override public SSLContext sslContext() { throw new UnsupportedOperationException(); }
+        @Override public SSLParameters sslParameters() { throw new UnsupportedOperationException(); }
+        @Override public Optional<Authenticator> authenticator() { return Optional.empty(); }
+        @Override public Version version() { return Version.HTTP_1_1; }
+        @Override public Optional<Executor> executor() { return Optional.empty(); }
+
+        @Override
+        public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> handler) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+            HttpRequest request, HttpResponse.BodyHandler<T> handler) {
+            started.incrementAndGet();
+            return new CompletableFuture<>();
+        }
+
+        @Override
+        public <T> CompletableFuture<HttpResponse<T>> sendAsync(
+            HttpRequest request, HttpResponse.BodyHandler<T> handler, HttpResponse.PushPromiseHandler<T> push) {
+            return sendAsync(request, handler);
+        }
+    }
+
+    @Test
+    void aCallerThatIsAlreadyInterruptedStartsNoExchange() {
+        // HttpClient.send refuses before dispatching anything when the thread's interrupt flag is set;
+        // starting the exchange first could still deliver a request the caller is told was interrupted.
+        RecordingClient recording = new RecordingClient();
+        HttpRequestData req = new HttpRequestData(
+            HttpMethod.GET, baseUrl + "/ok", Map.of(), null, Duration.ofSeconds(5));
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(InterruptedException.class, () -> new DefaultHttpTransport(recording).send(req));
+        } finally {
+            Thread.interrupted();
+        }
+        assertEquals(0, recording.started.get());
     }
 
     @Test

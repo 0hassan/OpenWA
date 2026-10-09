@@ -14,12 +14,24 @@ import java.util.concurrent.TimeoutException;
 
 /** Default transport backed by {@link java.net.http.HttpClient}. Never follows redirects. */
 public final class DefaultHttpTransport implements HttpTransport {
-    private final HttpClient client = HttpClient.newBuilder()
-        .followRedirects(HttpClient.Redirect.NEVER)
-        .build();
+    private final HttpClient client;
+
+    public DefaultHttpTransport() {
+        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build());
+    }
+
+    /** Lets a test observe whether an exchange was started. */
+    DefaultHttpTransport(HttpClient client) {
+        this.client = client;
+    }
 
     @Override
     public HttpResponseData send(HttpRequestData req) throws IOException, InterruptedException {
+        // As HttpClient.send does: a thread whose interrupt flag is already set dispatches nothing, so
+        // the caller is never told the call was interrupted after its request went out.
+        if (Thread.interrupted()) {
+            throw new InterruptedException();
+        }
         HttpRequest.BodyPublisher pub = req.body() == null
             ? HttpRequest.BodyPublishers.noBody()
             : HttpRequest.BodyPublishers.ofString(req.body());
