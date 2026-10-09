@@ -546,6 +546,9 @@ CREATE TABLE messages (
 CREATE INDEX "IDX_399833392126349ef0b04b9bed" ON messages("sessionId", "createdAt");
 CREATE INDEX "IDX_36bc604c820bb9adc4c75cd411" ON messages("chatId");
 CREATE INDEX "IDX_messages_sessionId_chatId_createdAt" ON messages("sessionId", "chatId", "createdAt");
+CREATE INDEX "IDX_messages_session_timestamp_id" ON messages("sessionId", "timestamp", "id");   -- message-time reads: orderBy=timestamp, since / until windows
+CREATE INDEX "IDX_messages_session_chat_timestamp_id" ON messages("sessionId", "chatId", "timestamp", "id");   -- the same, within one chat
+CREATE INDEX "IDX_messages_session_direction_timestamp_id" ON messages("sessionId", "direction", "timestamp", "id");   -- the same, filtered by direction
 CREATE INDEX "IDX_befd307485dbf0559d17e4a4d2" ON messages(status);
 CREATE INDEX "IDX_messages_createdAt" ON messages("createdAt");   -- createdAt-only stats aggregates
 CREATE INDEX "IDX_messages_mediaPath" ON messages("mediaPath") WHERE "mediaPath" IS NOT NULL;   -- partial; chat-media orphan sweep
@@ -734,19 +737,20 @@ Additionally, the `AddMessagesFts` migration creates the full-text-search struct
 
 These indexes are the ones declared on the entities (see §5.3); the rows below map them to the hot query paths.
 
-| Query Pattern                    | Index Used                                                  | Frequency |
-| -------------------------------- | ----------------------------------------------------------- | --------- |
-| Get session by ID                | `sessions.id` (PK)                                          | Very High |
-| Get session by name              | `sessions.name` (UNIQUE)                                    | High      |
-| List messages by session (paged) | `("sessionId", "createdAt")` composite                      | Very High |
-| List a chat's messages (paged)   | `IDX_messages_sessionId_chatId_createdAt`                   | Very High |
-| Send-pacing chat history probes  | `IDX_messages_sessionId_chatId_createdAt`                   | Very High |
-| Search / stats by chat           | `"chatId"`                                                  | Medium    |
-| Ack/dedup a message              | `UQ_messages_sessionId_waMessageId` (UNIQUE)                | Very High |
-| Message stats over a date range  | `IDX_messages_createdAt`                                    | Medium    |
-| Find a session's webhooks        | `IDX_webhooks_sessionId`                                    | Very High |
-| Authenticate API key             | UNIQUE on `api_keys("keyHash")`, main DB                    | Very High |
-| Filter audit logs                | `audit_logs` indexes on `action` / `apiKeyId` / `sessionId` | Medium    |
+| Query Pattern                    | Index Used                                                            | Frequency |
+| -------------------------------- | --------------------------------------------------------------------- | --------- |
+| Get session by ID                | `sessions.id` (PK)                                                    | Very High |
+| Get session by name              | `sessions.name` (UNIQUE)                                              | High      |
+| List messages by session (paged) | `("sessionId", "createdAt")` composite                                | Very High |
+| List a chat's messages (paged)   | `IDX_messages_sessionId_chatId_createdAt`                             | Very High |
+| Send-pacing chat history probes  | `IDX_messages_sessionId_chatId_createdAt`                             | Very High |
+| List messages by message time    | `IDX_messages_session_timestamp_id` and its chat / direction variants | High      |
+| Search / stats by chat           | `"chatId"`                                                            | Medium    |
+| Ack/dedup a message              | `UQ_messages_sessionId_waMessageId` (UNIQUE)                          | Very High |
+| Message stats over a date range  | `IDX_messages_createdAt`                                              | Medium    |
+| Find a session's webhooks        | `IDX_webhooks_sessionId`                                              | Very High |
+| Authenticate API key             | UNIQUE on `api_keys("keyHash")`, main DB                              | Very High |
+| Filter audit logs                | `audit_logs` indexes on `action` / `apiKeyId` / `sessionId`           | Medium    |
 
 ### Composite & Unique Indexes (as implemented)
 
@@ -754,6 +758,9 @@ These indexes are the ones declared on the entities (see §5.3); the rows below 
 -- messages: paged listing per session + ack-driven status update / inbound dedup
 CREATE INDEX        "IDX_399833392126349ef0b04b9bed"      ON messages("sessionId", "createdAt");
 CREATE INDEX        "IDX_messages_sessionId_chatId_createdAt" ON messages("sessionId", "chatId", "createdAt");
+CREATE INDEX        "IDX_messages_session_timestamp_id"   ON messages("sessionId", "timestamp", "id");
+CREATE INDEX        "IDX_messages_session_chat_timestamp_id" ON messages("sessionId", "chatId", "timestamp", "id");
+CREATE INDEX        "IDX_messages_session_direction_timestamp_id" ON messages("sessionId", "direction", "timestamp", "id");
 CREATE UNIQUE INDEX "UQ_messages_sessionId_waMessageId"   ON messages("sessionId", "waMessageId");
 CREATE INDEX        "IDX_messages_createdAt"              ON messages("createdAt");
 
