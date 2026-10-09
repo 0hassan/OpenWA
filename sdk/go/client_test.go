@@ -1792,6 +1792,25 @@ func TestSendIdempotencyKey(t *testing.T) {
 	}
 }
 
+// A nil context is the caller's mistake, and net/http names it as an error. The idempotency lookup must
+// not turn it into a panic that takes the calling program down.
+func TestNilContextReturnsAnErrorInsteadOfPanicking(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{}`}
+	c := newTestClient(t, rt)
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("a nil context panicked: %v", r)
+		}
+	}()
+	//nolint:staticcheck // the nil context is the point of the test
+	if _, err := c.Messages.SendText(nil, "s", SendTextRequest{}); err == nil {
+		t.Fatal("a nil context was accepted")
+	}
+	if rt.lastReq != nil {
+		t.Fatal("a request was sent with a nil context")
+	}
+}
+
 func TestRedrivePreservesAnEmptyIDsFilter(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `{}`}
 	c := newTestClient(t, rt)

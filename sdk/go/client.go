@@ -277,17 +277,15 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		rawURL += sep + query.Encode()
 	}
 
-	key, hasKey := ctx.Value(idempotencyContextKey{}).(string)
-	if hasKey {
-		if len(key) < 1 || len(key) > 255 || strings.IndexFunc(key, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
-			return nil, "", errors.New("openwa: idempotency key must contain 1-255 visible ASCII characters")
-		}
-	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
 		return nil, "", fmt.Errorf("openwa: building request: %w", err)
 	}
-	if hasKey {
+	// Read through the request: NewRequestWithContext has just refused a nil ctx, which ctx.Value would panic on.
+	if key, hasKey := req.Context().Value(idempotencyContextKey{}).(string); hasKey {
+		if len(key) < 1 || len(key) > 255 || strings.IndexFunc(key, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
+			return nil, "", errors.New("openwa: idempotency key must contain 1-255 visible ASCII characters")
+		}
 		req.Header.Set("Idempotency-Key", key)
 	}
 	if body != nil {
