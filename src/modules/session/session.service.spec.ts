@@ -2382,6 +2382,66 @@ describe('SessionService', () => {
         expect(await nodeIdOf(row.id)).toBeNull();
       });
 
+      // The drain flag is set SHUTDOWN_DELAY_MS before onModuleDestroy closes the lifecycle, so for that
+      // window the lifecycle's own closed guards are inert and start()'s check is the only thing that
+      // stops a launch the exiting process would have to tear down again.
+      it('start() still waiting on its claim when the drain begins neither clears a stop nor runs the hook', async () => {
+        const row = await seed({ status: SessionStatus.DISCONNECTED, desiredState: 'stopped' });
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id, desiredState: 'stopped' }));
+        const claimNow = ownership.claim.bind(ownership);
+        let releaseClaim: () => void = () => undefined;
+        const claim = jest
+          .spyOn(ownership, 'claim')
+          .mockImplementationOnce(id => new Promise<boolean>(resolve => (releaseClaim = () => resolve(claimNow(id)))));
+
+        const outcome = service.start(row.id, { explicit: true }).catch((error: unknown) => error);
+        await until(() => claim.mock.calls.length === 1);
+        shutdown.markShuttingDown();
+        releaseClaim();
+
+        expect(await outcome).toBeInstanceOf(ServerShuttingDownException);
+        expect(hookManager.execute).not.toHaveBeenCalled();
+        expect((repository.update as jest.Mock).mock.calls).not.toContainEqual([
+          { id: row.id, desiredState: 'stopped' },
+          { desiredState: null },
+        ]);
+        expect(engineFactory.create).not.toHaveBeenCalled();
+        expect(mockEngine.initialize).not.toHaveBeenCalled();
+      });
+
+      it('a transient retry whose re-claim was pending when the drain begins launches nothing', async () => {
+        const row = await seed({ status: SessionStatus.DISCONNECTED, phone: '123' });
+        (repository.findOne as jest.Mock).mockResolvedValue(createMockSession({ id: row.id }));
+        (repository.update as jest.Mock).mockImplementation((...args: Parameters<Repository<Session>['update']>) =>
+          sessions.update(...args),
+        );
+        mockEngine.initialize.mockRejectedValueOnce(new EngineTransportError('Protocol error: Target closed'));
+        const claimNow = ownership.claim.bind(ownership);
+        let releaseClaim: () => void = () => undefined;
+        const reclaiming = new Promise<void>(reached => {
+          jest
+            .spyOn(ownership, 'claim')
+            .mockImplementationOnce(claimNow)
+            .mockImplementationOnce(id => {
+              reached();
+              return new Promise<boolean>(resolve => (releaseClaim = () => resolve(claimNow(id))));
+            });
+        });
+        const startingHooks = (): number =>
+          (hookManager.execute as jest.Mock).mock.calls.filter(([event]) => event === 'session:starting').length;
+
+        const outcome = service.start(row.id, { explicit: true }).catch((error: unknown) => error);
+        await reclaiming;
+        expect(startingHooks()).toBe(1);
+        shutdown.markShuttingDown();
+        releaseClaim();
+
+        expect(await outcome).toBeInstanceOf(ServerShuttingDownException);
+        expect(startingHooks()).toBe(1);
+        expect(mockEngine.initialize).toHaveBeenCalledTimes(1);
+        expect(lifecycle.isEngineActive(row.id)).toBe(false);
+      });
+
       // The earlier stop's mark is still set when the row read fails, before start() clears it.
       it('start() still retries a transient failure when only an earlier stop() left its mark', async () => {
         const row = await seed();
