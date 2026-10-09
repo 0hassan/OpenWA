@@ -365,6 +365,56 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(granted).toBe(true);
   });
 
+  // A retired engine keeps emitting while its destroy runs. Admitting it would queue its messages in the
+  // chat's order and take room slots for media that is dropped at emit.
+  it('admits nothing for an engine that is no longer the live one', () => {
+    engines.set('s1', { tag: 'two' } as unknown as IWhatsAppEngine);
+
+    expect(projector.admitInbound('s1', engine, arrival('A', 'chat1', true))).toBeUndefined();
+
+    const internals = projector as unknown as { tickets: Map<string, unknown>; inboundInFlight: Map<string, unknown> };
+    expect(internals.tickets.size).toBe(0);
+    expect(internals.inboundInFlight.size).toBe(0);
+    expect(room()).toBeUndefined();
+  });
+
+  // The turn is only reached once earlier messages of the chat were emitted or dropped, so the engine
+  // can retire while a message waits for it. Its plugins must not see a message of a stopped session.
+  it('skips the hook chain of a message whose engine retired while it waited for its chat turn', async () => {
+    admit(arrival('A', 'chat1'));
+    const b = admit(arrival('B', 'chat1'));
+    projector.handleInboundMessage('s1', engine, message('B', 'chat1'), b);
+    await flush();
+    expect(hookStarts).toEqual([]);
+
+    engines.delete('s1');
+    await flush();
+
+    expect(hookStarts).toEqual([]);
+    expect(rows).toEqual([]);
+  });
+
+  it('forgets the room of a session without an engine once its last slot came back', async () => {
+    const a = admit(arrival('A', 'chat1', true));
+    expect(await a.reserve()).toBe(true);
+
+    engines.delete('s1');
+    expect(room()).toBeDefined();
+    await flush();
+
+    expect(room()).toBeUndefined();
+  });
+
+  it('forgets an idle room when its engine is retired', async () => {
+    admit(arrival('A', 'chat1', true)).drop();
+    await flush();
+    expect(room()).toBeDefined();
+
+    engines.delete('s1');
+
+    expect(room()).toBeUndefined();
+  });
+
   it('holds nothing on SQLite: no admission, and the untouched path stores and announces as before', async () => {
     build('better-sqlite3');
     expect(projector.holdsInbound).toBe(false);
