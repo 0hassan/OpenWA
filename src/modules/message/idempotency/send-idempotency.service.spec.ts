@@ -63,6 +63,41 @@ describe('SendIdempotencyService (sqlite)', () => {
     expect(await service.claim({ ...input, requestHash: 'h2' })).toEqual({ kind: 'mismatch' });
   });
 
+  // A completed key must not answer a different message with the first message's stored response:
+  // the second message would never be sent and the client would be told it was.
+  it('refuses the key for a different body or route once the send completed', async () => {
+    const claim = await service.claim(input);
+    if (claim.kind !== 'claimed') throw new Error('expected a claim');
+    await service.complete(claim.id, { messageId: 'm1' });
+
+    expect(await service.claim({ ...input, requestHash: 'h2' })).toEqual({ kind: 'mismatch' });
+    expect(await service.claim(input)).toEqual({ kind: 'replay', body: { messageId: 'm1' } });
+  });
+
+  it('refuses the key for a different body or route after the send failed', async () => {
+    const claim = await service.claim(input);
+    if (claim.kind !== 'claimed') throw new Error('expected a claim');
+    await service.markFailed(claim.id);
+
+    expect(await service.claim({ ...input, requestHash: 'h2' })).toEqual({ kind: 'mismatch' });
+    expect(await service.claim(input)).toEqual({ kind: 'outcome_unknown' });
+  });
+
+  it('binds a key to its send for 24 hours', async () => {
+    const day = 24 * 60 * 60 * 1000;
+    // The literal, not the imported constant: every other test reads the constant, so a changed
+    // lifetime could not fail them.
+    expect(SEND_IDEMPOTENCY_TTL_MS).toBe(day);
+
+    const before = Date.now();
+    await service.claim(input);
+    const after = Date.now();
+
+    const [row] = await repo.find();
+    expect(row.expiresAt.getTime()).toBeGreaterThanOrEqual(before + day);
+    expect(row.expiresAt.getTime()).toBeLessThanOrEqual(after + day);
+  });
+
   it('frees a released key for a new claim', async () => {
     const claim = await service.claim(input);
     if (claim.kind !== 'claimed') throw new Error('expected a claim');
