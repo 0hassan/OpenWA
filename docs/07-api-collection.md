@@ -1385,7 +1385,7 @@ ADMIN-only operations (except the public health check and the MCP transport). As
 
 #### GET /api/infra/health
 
-Public liveness probe.
+Public liveness probe. It answers `503` from the moment shutdown teardown begins; `GET /api/health/live` keeps answering.
 
 ```bash
 curl "$BASE/api/infra/health"

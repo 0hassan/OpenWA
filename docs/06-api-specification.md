@@ -5461,7 +5461,7 @@ Admin-facing operations: infrastructure status & config, the data/storage migrat
 
 #### GET /api/infra/health
 
-Public liveness probe.
+Public liveness probe. It answers `200` through the shutdown drain and `503` from the moment teardown begins, like every route except `/api/health` and `/api/health/*`; probe `GET /api/health/live` for liveness that survives teardown.
 
 **Auth:** public
 
