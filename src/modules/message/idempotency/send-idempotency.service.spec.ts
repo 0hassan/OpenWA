@@ -148,6 +148,33 @@ describe('SendIdempotencyService (sqlite)', () => {
     await ds.query('DROP TABLE "send_idempotency_keys"');
     await expect(service.claim(input)).rejects.toThrow(/no such table/);
   });
+
+  // The sweep is the only cleanup for keys that are never claimed again: without it every distinct
+  // key a client ever used stays in the table, with its stored response, for good.
+  describe('hourly prune', () => {
+    const hour = 60 * 60 * 1000;
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('starts at module init, runs every hour, and stops at module destroy', () => {
+      jest.useFakeTimers();
+      const prune = jest.spyOn(service, 'pruneExpired').mockResolvedValue(0);
+
+      service.onModuleInit();
+      jest.advanceTimersByTime(hour - 1);
+      expect(prune).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1);
+      expect(prune).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(hour);
+      expect(prune).toHaveBeenCalledTimes(2);
+
+      service.onModuleDestroy();
+      jest.advanceTimersByTime(2 * hour);
+      expect(prune).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe('isValidIdempotencyKey', () => {
