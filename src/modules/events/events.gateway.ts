@@ -135,6 +135,7 @@ const MAX_SUBSCRIBE_SESSION_ID_LENGTH = 128;
 // A request id only correlates a reply with its request, so only a short string is ever echoed back.
 const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_ROOMS_PER_SOCKET = 4096;
+const TOO_MANY_SUBSCRIPTIONS_MESSAGE = `A connection may hold at most ${MAX_ROOMS_PER_SOCKET} subscriptions; unsubscribe first`;
 
 /** Why an API key's live WebSocket sockets are being torn down — drives the client-facing message. */
 export type ApiKeyEvictionReason = 'revoked' | 'deleted' | 'authorization_changed' | 'expired';
@@ -653,6 +654,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return this.createError('FORBIDDEN_EVENTS', 'API key may subscribe only to chat events', requestId);
     }
     const chats = chatRestricted ? [...this.chatScope.scopeFor(subscriberKey)!.allowed] : undefined;
+    // A socket holds every room it asks for, so events x chats rooms that exceed the cap can never fit.
+    // Refused here, before the names are built: a large allowlist made each refused frame cost real time.
+    if (chats && permittedEvents.length * chats.length > MAX_ROOMS_PER_SOCKET) {
+      return this.createError('TOO_MANY_SUBSCRIPTIONS', TOO_MANY_SUBSCRIPTIONS_MESSAGE, requestId);
+    }
     const rooms = permittedEvents.flatMap(event =>
       chats ? chats.map(chatId => chatRoom(sessionId, event, chatId)) : [buildRoomName(sessionId, event)],
     );
@@ -663,11 +669,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     const held = [...client.rooms].filter(room => room.startsWith('session:')).length;
     const newRooms = rooms.filter(room => !client.rooms.has(room)).length;
     if (held + newRooms > MAX_ROOMS_PER_SOCKET) {
-      return this.createError(
-        'TOO_MANY_SUBSCRIPTIONS',
-        `A connection may hold at most ${MAX_ROOMS_PER_SOCKET} subscriptions; unsubscribe first`,
-        requestId,
-      );
+      return this.createError('TOO_MANY_SUBSCRIPTIONS', TOO_MANY_SUBSCRIPTIONS_MESSAGE, requestId);
     }
 
     // Join rooms for each session/event combination

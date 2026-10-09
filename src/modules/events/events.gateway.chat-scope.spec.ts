@@ -140,6 +140,35 @@ describe('chat-scoped WebSocket rooms', () => {
     });
   });
 
+  it('refuses a subscribe that can never fit before it builds a single room name', async () => {
+    const chats = Array.from({ length: 450 }, (_, index) => `62811${String(index).padStart(7, '0')}@c.us`);
+    const restricted = await connect('restricted', chats);
+    // The room set is only consulted once the names exist, so a read after the refusal means the
+    // refused frame was still paid for in full (tens of milliseconds at a few thousand allowlist entries).
+    let reads = 0;
+    const joined = restricted.rooms;
+    Object.defineProperty(restricted, 'rooms', {
+      get: () => {
+        reads += 1;
+        return joined;
+      },
+    });
+    const chatEvents = [
+      'message.received',
+      'message.sent',
+      'message.ack',
+      'message.revoked',
+      'message.reaction',
+      'message.edited',
+      'group.join',
+      'group.leave',
+      'group.update',
+      'presence.update',
+    ];
+    expect(await subscribe(restricted, chatEvents)).toMatchObject({ type: 'error', code: 'TOO_MANY_SUBSCRIPTIONS' });
+    expect(reads).toBe(0);
+  });
+
   it('performs no chat lookups for a local stream without restricted subscribers', async () => {
     const previous = process.env.REDIS_ENABLED;
     process.env.REDIS_ENABLED = 'false';
