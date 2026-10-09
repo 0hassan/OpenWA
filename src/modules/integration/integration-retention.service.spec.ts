@@ -603,6 +603,55 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     expect(await events.count()).toBe(0);
   });
 
+  // A dead letter older than the 90-day window, so the first step of a run has something to remove.
+  const insertAgedFailure = () =>
+    failures
+      .createQueryBuilder()
+      .insert()
+      .values({
+        direction: 'inbound',
+        pluginId: 'plug',
+        instanceId: 'inst',
+        attempts: 1,
+        lastError: 'old',
+        redriven: false,
+        createdAt: daysAgo(100),
+      })
+      .execute();
+
+  it('still hands off an aged pending event when the dedup delete fails', async () => {
+    await insertEvent('stranded', {});
+    await insertAgedFailure();
+    jest.spyOn(events, 'delete').mockRejectedValueOnce(new Error('locked'));
+
+    const result = await service.pruneOlderThan(7, 90);
+
+    // The failed delete counts as nothing removed, the dead-letter prune before it still counts, and the
+    // hand-off after it still ran: a locked table must not hold the day's hand-off back another 24 hours.
+    expect(result).toEqual({ events: 0, failures: 1 });
+    expect(await events.findOneByOrFail({ id: 'stranded' })).toMatchObject({ dispatchState: 'failed', payload: null });
+    expect(await failures.count()).toBe(1);
+    expect(logError).toHaveBeenCalledWith(
+      'Integration ingress retention: dedup prune failed',
+      expect.stringContaining('locked'),
+    );
+  });
+
+  it('reports what the prunes removed when the hand-off fails', async () => {
+    await insertEvent('dispatched', { dispatchState: 'dispatched', payload: null });
+    await insertAgedFailure();
+    jest.spyOn(reconciler, 'deadLetterAgedPending').mockRejectedValueOnce(new Error('queue unreachable'));
+
+    const result = await service.pruneOlderThan(7, 90);
+
+    expect(result).toEqual({ events: 1, failures: 1 });
+    expect(await events.count()).toBe(0);
+    expect(logError).toHaveBeenCalledWith(
+      'Integration ingress retention: undispatched event hand-off failed',
+      expect.stringContaining('queue unreachable'),
+    );
+  });
+
   it('hands off a backlog larger than one batch', async () => {
     for (let i = 0; i < 250; i++) await insertEvent(`b${i}`, {});
 
