@@ -48,7 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop a request left over from before logout from reloading the dashboard login form.
 - Stop a dashboard Logs export from downloading rows after sign-out when its last page was throttled.
 - Stop reopening a just-saved dashboard template from loading its old values, which a second save wrote back.
-- Stop an operator webhook redrive at its next row on shutdown.
 - Stop an operator ingress dead-letter redrive at its next row on shutdown, leaving the rows it did not reach unchanged.
 - Run a plugin's `onDisable` once when shutdown, uninstall or an update overlaps a disable already in progress.
 - Answer `503` and keep the previous version when shutdown begins before an update of a plugin the operator switched on has applied.
@@ -57,8 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Leave a session start that shutdown interrupts for the next boot instead of marking it failed.
 - Destroy session engines at shutdown before waiting on a boot auto-start launch, and bound that wait, so a stalled launch no longer holds teardown past the kill deadline.
 - Stop taking ingress queue jobs once shutdown begins after SIGTERM, SIGINT or an admin restart, instead of running them against stopped sessions.
-- Run the daily ingress retention hand-off after a reconcile sweep in progress instead of skipping it.
-- Try each failing ingress retention hand-off row once per run instead of stopping at the first batch of them.
 - Retire the ingress replay sweep's duplicate dead letter when it races another dead-letter write, and stop logging an event a redrive delivered meanwhile as dead-lettered.
 - Fall back instead of hanging when an ingress, webhook or infra status queue call runs before Redis has ever connected.
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
@@ -78,7 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Close queue workers, waiting up to 10 s for running jobs, before plugins shut down, so no new job is taken against stopped plugins.
 - Answer new HTTP requests other than health probes with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`; a Socket.IO handshake is still admitted until the server closes.
 - Disable plugins in parallel at shutdown, capping the whole plugin phase, including waits for enables in progress, at 10 s.
-- Bound the webhook redrive wait at shutdown by `WEBHOOK_SHUTDOWN_DRAIN_MS`, like the delivery drain and reconciler.
 - Exit with status 1 when teardown runs 67 s past the shutdown delay, so a stalled close no longer runs into the kill deadline or hangs `POST /api/infra/restart`.
 - Destroy open HTTP connections and WebSocket clients when the server closes at shutdown, so an open request cannot hold up the database close.
 - Stop waiting for a queue worker whose close outlasts its 10 s cap, so it cannot hold up the database close.
@@ -96,15 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
-- Preserve chat-scoped WebSocket event order while resolving chat identities.
 - Emit Baileys API reaction updates, including reaction removal.
-- Restore legacy webhook failures and normalize terminal duplicates before SQLite schema synchronization.
-- Exclude retained webhook replay payloads from database backup reads.
-- Advance webhook recovery scans past live queued deliveries.
 - Apply current receiver configuration and session ownership to every webhook delivery attempt.
 - Clear revoked Baileys history messages from storage, previews, quoted replies, and plugin indexes.
 - Preserve pending message mutations when REST storage wins an own-send echo.
-- Cancel archived media preview downloads when their components unmount.
 - Refresh Baileys pairing secrets and prevent stale QR renders during linking.
 - Upgrade proxy-addr to 2.0.8 (GHSA-jqcg-44mw-7w3h, critical) to correct IPv4-mapped IPv6 proxy trust matching.
 - Upgrade source-map-js to 1.2.2 to validate indexed source-map offsets.
@@ -113,10 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep sent media when merging onto an echo row fails.
 - Enforce chat media size limits using decoded payload bytes.
 - Keep narrow chat panes scrollable and prevent message actions from shrinking previews.
-- Open archived images in the dashboard media viewer without fetching them again.
 - Forward container shutdown signals after dropping process privileges in Compose and Helm.
 - Preserve webhook outbox payloads until delivery or durable failure storage succeeds.
-- Enforce webhook replay retention and keep later eligible failures moving through batches.
 - Keep one terminal webhook failure per receiver idempotency key.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 
@@ -159,6 +148,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New Baileys pairings show `Ubuntu` instead of `OpenWA` as the device name in Linked Devices; set `BAILEYS_BROWSER_NAME=OpenWA` to keep the old name. Linked sessions are unaffected.
 - `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.
 - With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`, and give `DATABASE_URL` the host name the certificate carries or set `PGSSLMODE`.
+- Baileys answers `400` for a phone number WhatsApp reports as unregistered, where it answered `201`, and `503` when the recipient lookup gets no answer; every send to a phone number without a known LID now makes one lookup first.
+- `vote-poll` on whatsapp-web.js answers `400` `POLL_OPTION_NOT_FOUND` when none of the option texts match, where it answered `200` and cleared the vote; an empty `options` list still clears it.
+- Once teardown begins, every request except `/api/health` and `/api/health/*` answers `503` with `Connection: close`, `GET /api/infra/health` included; probe `/api/health/live` for a check that survives teardown.
+- A compose file or pod spec of your own that drops all capabilities must add `KILL` to the shipped five, or a stop never reaches the app: it runs out the grace period and exits `137`.
+- Rolling back to 0.24.0 while webhook outbox rows are in state `queued` strands them: 0.24.0 never replays that state and prunes it after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). The upgrade also deletes duplicate terminal `webhook_delivery_failures` rows, which a rollback does not restore.
 
 ## [0.24.0] - 2026-10-03
 
