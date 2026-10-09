@@ -129,6 +129,23 @@ describe('WebhookRedriveService', () => {
     expect(await service.redrive({})).toMatchObject({ delivered: 0, remaining: 0 });
   });
 
+  it('reads each retained payload only as its replay starts, never the whole batch at once', async () => {
+    for (let i = 0; i < 6; i++) await addFailure({ payload: { id: `m${i}`, body: 'x'.repeat(200) } });
+    const statements: string[] = [];
+    jest.spyOn(ds.logger, 'logQuery').mockImplementation(query => void statements.push(query));
+
+    await service.redrive({});
+
+    // A batch holds up to 500 rows but runs four replays at a time; loading the bodies with the batch
+    // held every one of them in memory for the whole call.
+    const selectList = (statement: string) => /^SELECT\s+(.*?)\s+FROM\s/is.exec(statement)?.[1] ?? '';
+    const payloadReads = statements.filter(
+      statement => /webhook_delivery_failures/i.test(statement) && /payload/i.test(selectList(statement)),
+    );
+    expect(payloadReads).toHaveLength(6);
+    expect(delivery.redeliver).toHaveBeenCalledTimes(6);
+  });
+
   it('selects eligible subscriptions before the batch limit, past more than 100 old unavailable rows', async () => {
     const disabled = await webhooks.save(webhooks.create({ ...primary, id: randomUUID(), active: false }));
     const unsubscribed = await webhooks.save(
