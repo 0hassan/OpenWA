@@ -64,6 +64,8 @@
 #       is named in a warning
 #   (aj) a ./.env this user cannot read stops backup and restore, where it used to read as a file that
 #       sets nothing and send both to the default paths (skipped as root)
+#   (ak) the archive and a BACKUP_DIR backup.sh creates stay private under a permissive umask, and the
+#       staging copy is removed after a backup that succeeds and one that fails
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2197,6 +2199,45 @@ if [ "$(id -u)" -ne 0 ]; then
 else
   echo "SKIP: (aj) running as root, which ignores the permission bits this case relies on"
 fi
+
+echo ""
+echo "==> (ak) the archive and its staging copy stay private"
+# The archive holds the admin key, .env.generated and database secrets in plaintext. backup.sh sets
+# umask 077 so an operator's 022 leaves neither the archive nor a BACKUP_DIR it creates readable by
+# others, and removes its staging copy, which holds the same files, however it exits.
+AK="$WORK/ak"
+mkdir -p "$AK/ok/data" "$AK/bad/data" "$AK/tmp-ok" "$AK/tmp-bad"
+make_fixture "$AK/ok/data/main.sqlite" "ak-main"
+make_fixture "$AK/ok/data/openwa.sqlite" "ak-data"
+printf 'ak-admin-key\n' >"$AK/ok/data/.api-key"
+(umask 022 && cd "$AK/ok" && TMPDIR="$AK/tmp-ok" BACKUP_DIR="$AK/new/out" "$BACKUP" >/dev/null 2>&1) ||
+  fail "(ak) backup under umask 022 failed"
+ARCHIVE_AK="$(ls "$AK"/new/out/openwa-backup-*.tar.gz)"
+if [ -z "$(find "$ARCHIVE_AK" -maxdepth 0 -perm 600)" ]; then
+  fail "(ak) under umask 022 the archive is not mode 600"
+fi
+if [ -z "$(find "$AK/new/out" -maxdepth 0 -perm 700)" ]; then
+  fail "(ak) under umask 022 the BACKUP_DIR backup.sh created is not mode 700"
+fi
+# No database to back up: the run fails after it has staged what it could.
+set +e
+(umask 022 && cd "$AK/bad" && TMPDIR="$AK/tmp-bad" BACKUP_DIR="$AK/bad-out" "$BACKUP" >/dev/null 2>&1)
+RC_AK_BAD=$?
+set -e
+[ "$RC_AK_BAD" -ne 0 ] || fail "(ak) backup with no database exited 0"
+# A mktemp that ignores TMPDIR (BSD and macOS, with no template) puts the staging copy elsewhere, so
+# there is nothing to look for in it.
+AK_PROBE="$(TMPDIR="$AK/tmp-ok" mktemp -d)"
+rmdir "$AK_PROBE"
+case "$AK_PROBE" in
+  "$AK/tmp-ok"/*)
+    if [ -n "$(ls -A "$AK/tmp-ok")" ] || [ -n "$(ls -A "$AK/tmp-bad")" ]; then
+      fail "(ak) a staging copy was left behind: $(ls -A "$AK/tmp-ok" "$AK/tmp-bad")"
+    fi
+    pass "(ak) the archive is 600, a created BACKUP_DIR is 700 and no staging copy outlives a run"
+    ;;
+  *) pass "(ak) the archive is 600 and a created BACKUP_DIR is 700 (staging cleanup not checked: this mktemp ignores TMPDIR)" ;;
+esac
 
 echo ""
 echo "All smoke tests passed!"
