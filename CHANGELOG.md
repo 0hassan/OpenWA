@@ -147,6 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docker-compose.dev.yml` now waits up to 75 s on a stuck stop instead of Docker's 10 s default.
 - Queue workers now stop taking jobs when shutdown begins and wait at most 10 s for running ones, so a queued webhook or plugin ingress job still running then is re-run after the next start; receivers must deduplicate on `X-OpenWA-Idempotency-Key`.
 - Boot fails on a `PORT` with surrounding whitespace or a whitespace-only `PORT`; remove the padding.
+- Boot fails on a `WEBHOOK_SHUTDOWN_DRAIN_MS` that is not a non-negative integer (for example `30s`) instead of silently using 5000.
 - Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
 - Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
 - With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.

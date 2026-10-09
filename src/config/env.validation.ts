@@ -246,6 +246,7 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     'REDIS_CACHE_DB',
     'INBOUND_MEDIA_GLOBAL_CONCURRENCY', // 0 = no process-wide ceiling, only the per-session one
     'SHUTDOWN_DELAY_MS', // 0 = no drain; parseInt read `3s` as a 3 ms drain
+    'WEBHOOK_SHUTDOWN_DRAIN_MS', // 0 = no wait; a malformed value fell back to 5000 and also moved the force-exit
     // 0 = disabled. A negative value failed the digits-only read and silently kept the default sweep.
     'MESSAGE_REAPER_INTERVAL_MS',
     'WEBHOOK_RECONCILE_INTERVAL_MS',

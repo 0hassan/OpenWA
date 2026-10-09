@@ -687,6 +687,18 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ SHUTDOWN_DELAY_MS: '0' })).not.toThrow();
   });
 
+  it('rejects a malformed WEBHOOK_SHUTDOWN_DRAIN_MS but keeps 0 (no wait), like the other shutdown knobs', () => {
+    // A malformed value was silently replaced by 5000, which also sets the force-exit budget, so a typo
+    // such as `30s` quietly cut the drain the operator asked for.
+    for (const bad of ['30s', '-5', 'abc', '1.5']) {
+      expect(() => validateEnv({ WEBHOOK_SHUTDOWN_DRAIN_MS: bad })).toThrow(
+        /WEBHOOK_SHUTDOWN_DRAIN_MS must be a non-negative integer/,
+      );
+    }
+    expect(() => validateEnv({ WEBHOOK_SHUTDOWN_DRAIN_MS: '0' })).not.toThrow();
+    expect(() => validateEnv({ WEBHOOK_SHUTDOWN_DRAIN_MS: '12000' })).not.toThrow();
+  });
+
   it.each([
     'WEBHOOK_FAILURE_RETENTION_DAYS',
     'WEBHOOK_OUTBOX_RETENTION_DAYS',
