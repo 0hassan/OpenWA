@@ -1596,8 +1596,11 @@ consequences to weigh before enabling it: with a non-zero `CHAT_MEDIA_ARCHIVE_TT
 now removes the only copy, after which this route answers `404`; and a database export no longer
 carries those bytes, so back up the media store alongside the database. Webhook payloads carry the
 in-memory engine message rather than the row, so they are unaffected. The dashboard previews
-archived images, video and audio inline by fetching them from this route. The latest 100 inline or
-archived previews share a memory cap; older media keeps its download button.
+archived images, video and audio inline by fetching them from this route. Each preview is one request
+for the whole file, up to `CHAT_MEDIA_ARCHIVE_MAX_BYTES`, started as its bubble nears the viewport and
+paced under the per-IP rate limit; once the default 100 requests a minute are spent, a refused preview
+stays a download button. The latest 100 inline or archived previews share a memory cap; older media
+keeps its download button.
 
 A revoked message (deleted for everyone, or through `POST /messages/delete`) has no media: its row is
 cleared on revoke, and this route answers `404` for it.

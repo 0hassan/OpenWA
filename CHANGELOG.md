@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` or `kind` filter scopes delivery events per chat.
 - Filter stored messages by time, direction, type or message reference, with stable message-time pagination; the SDKs take these filters from the next SDK release after 0.5.1.
 - Scope built-in message search and group detail/settings to a chat-restricted key's allowed chats; reject plugin search for these keys.
-- Expose poll choices and selection mode in message events, stored messages, history, and dashboard chats; the SDKs type them from the next SDK release after 0.5.1.
+- Expose poll choices and selection mode in message events, stored messages and history, and poll choices in dashboard chats; the SDKs type them from the next SDK release after 0.5.1.
 - Expose optional last-message types in chat lists and, from the next SDK release after 0.5.1, in the SDKs.
 - Add bounded webhook failure redrive with optional payload retention; the SDKs expose it from the next SDK release after 0.5.1.
 - Expose caller-supplied send idempotency keys in all five SDKs from the next SDK release after 0.5.1; the 0.5.1 JavaScript and PHP packages ignore the extra argument.
