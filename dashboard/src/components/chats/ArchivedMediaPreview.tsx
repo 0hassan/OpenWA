@@ -9,6 +9,10 @@ interface ArchivedMediaPreviewProps {
   /** Fetches the archived bytes (the per-message media route). Called at most once per mount. */
   load: (signal: AbortSignal) => Promise<Blob>;
   alt?: string;
+  /** The media's own file name. `alt` is only a caption, never a download name. */
+  filename?: string;
+  /** Names the viewer's download (image-<id>.jpg) when the media has no file name; unique per message. */
+  id?: string;
   /**
    * The thread's scroll container. The lazy-load observer measures against it: with the implicit viewport
    * root the margin below is clipped to the container's own box and the lead never happens.
@@ -37,6 +41,8 @@ function ArchivedMediaPreview({
   kind,
   load,
   alt,
+  filename,
+  id,
   scrollRootRef,
   fallback,
   measureMedia,
@@ -140,7 +146,7 @@ function ArchivedMediaPreview({
             />
           </div>
           <MediaLightbox
-            items={[{ id: 'archived-image', url: state.url, alt, filename: alt }]}
+            items={[{ id: id ?? 'archived-image', url: state.url, alt, filename }]}
             index={imageOpen ? 0 : null}
             onClose={() => setImageOpen(false)}
             onNavigate={() => {}}

@@ -165,3 +165,43 @@ test('the lazy-load observer measures against the thread scroll container, so it
     delete target.IntersectionObserver;
   }
 });
+
+test('the viewer downloads under the media file name, or one unique to the message when it has none', async () => {
+  const downloads: string[] = [];
+  // The library saves through a detached <a download> it clicks with dispatchEvent, never in the DOM.
+  // jsdom elements inherit from jsdom's own EventTarget, so the spy goes on the element prototype.
+  const anchorProto = HTMLAnchorElement.prototype as { dispatchEvent?: unknown };
+  anchorProto.dispatchEvent = function (this: HTMLAnchorElement, event: Event): boolean {
+    if (event.type === 'click') downloads.push(this.download);
+    return true;
+  };
+  try {
+    for (const props of [
+      { id: 'msg-1', filename: 'holiday.jpg', alt: 'The sea at dusk' },
+      { id: 'msg-2', alt: 'Image' },
+    ]) {
+      const { container } = rtl.render(
+        createElement(ArchivedMediaPreview, {
+          kind: 'image',
+          fallback,
+          load: async () => new Blob(['x'], { type: 'image/jpeg' }),
+          ...props,
+        }),
+      );
+      const img = await rtl.waitFor(() => {
+        const found = container.querySelector('img.chat-image-media');
+        assert.ok(found, 'the archived image did not render');
+        return found as HTMLImageElement;
+      });
+      rtl.fireEvent.click(img);
+      rtl.fireEvent.click(await rtl.screen.findByRole('button', { name: 'Download' }));
+      // The library clicks its link from a timer once the blob is fetched.
+      await rtl.act(() => new Promise(resolve => setTimeout(resolve, 50)));
+      rtl.cleanup();
+    }
+    // A caption in the alt text must never become the saved name: every photo would save as the same word.
+    assert.deepEqual(downloads, ['holiday.jpg', 'image-msg-2.jpg']);
+  } finally {
+    delete anchorProto.dispatchEvent;
+  }
+});
