@@ -71,8 +71,10 @@ describe('loadEnvironment', () => {
     expect(workerConnectionOptions().host).toBe('host-from-process-env');
   });
 
-  // dotenv 17 prints an "injected env ... // tip: ..." line to stdout on every load unless told to be
-  // quiet. It bypasses the logger, so in production it lands as plain text in the JSON log stream.
+  // dotenv prints an "injected env" line on every load unless told to be quiet: to stdout up to dotenv 17,
+  // to stderr (console.error) from 18. It bypasses the logger, so in production it lands as plain text in
+  // the JSON log stream. Every console channel is watched, so the guard does not depend on which one the
+  // installed version writes to.
   it.each<[string, Record<string, string>]>([
     [
       'a saved configuration',
@@ -80,13 +82,17 @@ describe('loadEnvironment', () => {
     ],
     ['a first run', { '.env': 'REDIS_HOST=redis.internal\n' }],
   ])('keeps dotenv from printing its own load banner on %s', (_case, files) => {
+    delete process.env.DOTENV_QUIET;
     delete process.env.DOTENV_CONFIG_QUIET;
     makeTempCwd(files);
-    const log = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+    const lines: string[] = [];
+    for (const channel of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+      jest.spyOn(console, channel).mockImplementation((...args: unknown[]) => void lines.push(args.join(' ')));
+    }
 
     runLoader();
 
-    expect(log.mock.calls.map(args => args.join(' '))).not.toContainEqual(expect.stringContaining('injected env'));
+    expect(lines).not.toContainEqual(expect.stringContaining('injected env'));
   });
 
   // The image runs with NODE_ENV=production, where the logger emits JSON. A raw console line from the
