@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
 - The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, so phone-number pairing works without setting `BAILEYS_BROWSER_NAME`.
 - The `/events` WebSocket echoes a `requestId` only when it is a string of at most 128 characters; any other value is dropped from the reply.
+- The Baileys engine refuses SVG input to its image decoder, so a sticker sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
 
 ### Fixed
 

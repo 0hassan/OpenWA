@@ -139,6 +139,22 @@ export async function loadSharp() {
 }
 
 /**
+ * Refuse SVG input process-wide. OpenWA never needs it, yet a sticker and the thumbnail of every outbound
+ * image hand caller-supplied bytes to sharp, which autodetects SVG and parses it with librsvg: a native
+ * decoder with a memory-safety record that is the largest attack surface on those two routes. The block is
+ * libvips state shared by every importer of sharp, Baileys included, so it has to be set before the first
+ * decode and not by the first sticker. Best effort: a sharp that cannot load has nothing to block, and the
+ * routes that need it report that themselves (see loadSharp).
+ */
+export async function blockSvgDecoding(): Promise<void> {
+  try {
+    (await import('sharp')).default.block({ operation: ['VipsForeignLoadSvg'] });
+  } catch {
+    // sharp could not load, so there is no decoder to block.
+  }
+}
+
+/**
  * Animation frames a sticker conversion accepts: a 10-second animation at 50 fps. Each frame is
  * resized and encoded at 512x512 (a few ms apiece), so cost is linear in the frame count, and a
  * GIF of 1x1 frames packs tens of thousands of them into well under a megabyte.

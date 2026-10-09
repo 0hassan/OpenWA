@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as qrcode from 'qrcode';
+import * as messagingModule from './baileys-messaging';
 
 jest.mock('../../common/media/load-remote-media', () => ({
   loadRemoteMediaBuffer: jest.fn(),
@@ -280,6 +281,14 @@ describe('BaileysAdapter lifecycle & status', () => {
     expect(rendered).toMatch(/^data:image\/png;base64,/);
     expect(adapter.getStatus()).toBe(EngineStatus.QR_READY);
     expect(adapter.getQRCode()).toBe(rendered);
+  });
+
+  it('blocks SVG decoding before the engine starts, whichever route reaches sharp first', async () => {
+    // Sticker conversion and the thumbnail of every outbound image share one process-wide decoder, so the
+    // block cannot wait for the first sticker.
+    const block = jest.spyOn(messagingModule, 'blockSvgDecoding').mockResolvedValue(undefined);
+    await newAdapter().initialize(noopCallbacks({}));
+    expect(block).toHaveBeenCalledTimes(1);
   });
 
   it('captures phone/pushName and fires onReady on connection open', async () => {

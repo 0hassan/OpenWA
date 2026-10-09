@@ -12,7 +12,7 @@ import { BaileysHistory, toUnixSeconds } from './baileys-history';
 import { type BaileysEngineHost } from './baileys-host';
 import { OwnSendRegistry } from './baileys-own-sends';
 import { BaileysLifecycle } from './baileys-lifecycle';
-import { BaileysMessaging } from './baileys-messaging';
+import { BaileysMessaging, blockSvgDecoding } from './baileys-messaging';
 import { BaileysStatus } from './baileys-status';
 import {
   CallLinkType,
@@ -236,6 +236,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
+    await blockSvgDecoding();
     return this.lifecycle.initialize();
   }
 
