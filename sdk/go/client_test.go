@@ -1792,6 +1792,44 @@ func TestSendIdempotencyKey(t *testing.T) {
 	}
 }
 
+// The key is checked against the gateway's own rule: 1 to 255 characters, each a visible ASCII one
+// from '!' to '~'. A boundary moved by one refuses keys the gateway takes, or sends one it refuses.
+func TestIdempotencyKeyBoundaries(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"messageId":"m","timestamp":1}`}
+	c := newTestClient(t, rt)
+	for _, tc := range []struct {
+		name   string
+		key    string
+		accept bool
+	}{
+		{"first visible character", "!", true},
+		{"last visible character", "~", true},
+		{"one character", "x", true},
+		{"longest key", strings.Repeat("x", 255), true},
+		{"one too long", strings.Repeat("x", 256), false},
+		{"empty", "", false},
+		{"space", " ", false},
+		{"delete", "a\x7fb", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.lastReq = nil
+			_, err := c.Messages.SendText(WithIdempotencyKey(context.Background(), tc.key), "s", SendTextRequest{})
+			if tc.accept {
+				if err != nil {
+					t.Fatalf("refused %q: %v", tc.key, err)
+				}
+				if got := rt.lastReq.Header.Get("Idempotency-Key"); got != tc.key {
+					t.Fatalf("header = %q, want %q", got, tc.key)
+				}
+				return
+			}
+			if err == nil || rt.lastReq != nil {
+				t.Fatalf("accepted %q (err %v, sent %v)", tc.key, err, rt.lastReq != nil)
+			}
+		})
+	}
+}
+
 // A nil context is the caller's mistake, and net/http names it as an error. The idempotency lookup must
 // not turn it into a panic that takes the calling program down.
 func TestNilContextReturnsAnErrorInsteadOfPanicking(t *testing.T) {
