@@ -141,6 +141,21 @@ describe('producerReady', () => {
     await expect(settledAfter(never, 1)).resolves.toBe('rejected: Redis has not connected within 5000ms');
   });
 
+  it('keeps the connect window from holding the process, so a wait open at shutdown cannot delay the exit', async () => {
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '1000' };
+    const startTimer = jest.spyOn(global, 'setTimeout');
+
+    const ready = producerReady(queueReadyAfter());
+    const timers = startTimer.mock.results.map(result => result.value as NodeJS.Timeout);
+    startTimer.mockRestore();
+
+    expect(timers).toHaveLength(1);
+    expect(timers[0].hasRef()).toBe(false);
+    const expired = expect(ready).rejects.toThrow('Redis has not connected within 1000ms');
+    await jest.advanceTimersByTimeAsync(1000);
+    await expired;
+  });
+
   it('caps the wait at the Node timer ceiling instead of overflowing to 1 ms', async () => {
     // Above the ceiling a Node timer fires after 1 ms and would skip a healthy queue that is connecting.
     process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '3000000000' };
