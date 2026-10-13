@@ -1025,6 +1025,86 @@ describe('WebhookDeliveryService', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
+    describe('opt-in event gate (message.receipt)', () => {
+      const receipt = { id: 'OUT1', participant: '628222@c.us', status: 'read' };
+      // The gate's lookup selects the events column only; dispatch's own lookup reads whole rows.
+      const fullRowLookups = (): unknown[][] =>
+        ((repository.find as jest.Mock).mock.calls as unknown[][]).filter(
+          ([opts]) => !(opts as { select?: unknown } | undefined)?.select,
+        );
+
+      it('never reaches the dispatch lookup when no active webhook names it, and reads once per burst', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received', '*'] })]);
+
+        await Promise.all(Array.from({ length: 2000 }, () => service.dispatch('sess-1', 'message.receipt', receipt)));
+
+        expect(repository.find).toHaveBeenCalledTimes(1);
+        expect(fullRowLookups()).toHaveLength(0);
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      it('delivers when an active webhook names it', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.receipt'] })]);
+
+        await service.dispatch('sess-1', 'message.receipt', receipt);
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not gate events a wildcard covers', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+
+        await service.dispatch('sess-1', 'message.received', {});
+
+        expect(repository.find).toHaveBeenCalledTimes(1);
+        expect(fullRowLookups()).toHaveLength(1);
+      });
+
+      it('reads again after an invalidation', async () => {
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+        await service.dispatch('sess-1', 'message.receipt', receipt);
+        expect(mockFetch).not.toHaveBeenCalled();
+
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.receipt'] })]);
+        service.invalidateOptInSubscriptions('sess-1');
+        await service.dispatch('sess-1', 'message.receipt', receipt);
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('reads again once the cached answer expires (a change made on another instance)', async () => {
+        const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+        try {
+          (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.received'] })]);
+          await service.dispatch('sess-1', 'message.receipt', receipt);
+
+          (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.receipt'] })]);
+          now.mockReturnValue(1_000_000 + 4_999);
+          await service.dispatch('sess-1', 'message.receipt', receipt);
+          expect(mockFetch).not.toHaveBeenCalled();
+
+          now.mockReturnValue(1_000_000 + 5_000);
+          await service.dispatch('sess-1', 'message.receipt', receipt);
+          expect(mockFetch).toHaveBeenCalledTimes(1);
+        } finally {
+          now.mockRestore();
+        }
+      });
+
+      it('lets the event through on a failed lookup, without caching the failure', async () => {
+        (repository.find as jest.Mock).mockRejectedValueOnce(new Error('db down'));
+        (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: ['message.receipt'] })]);
+
+        await service.dispatch('sess-1', 'message.receipt', receipt);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        await service.dispatch('sess-1', 'message.receipt', receipt);
+
+        const gateLookups = (repository.find as jest.Mock).mock.calls.length - fullRowLookups().length;
+        expect(gateLookups).toBe(2);
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      });
+    });
+
     it('should skip dispatch when plugin cancels via hook', async () => {
       const webhook = createMockWebhook({ events: ['message.received'] });
       (repository.find as jest.Mock).mockResolvedValue([webhook]);

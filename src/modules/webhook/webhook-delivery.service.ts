@@ -26,7 +26,7 @@ import { redactSsrfError } from '../../common/security/ssrf-guard';
 import { HookManager } from '../../core/hooks';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
 import { isWebhookBeforeResult } from '../../core/hooks/hook-results';
-import { subscriptionCoversEvent } from '../../common/utils/wildcard-events';
+import { WILDCARD_EXCLUDED_EVENTS, subscriptionCoversEvent } from '../../common/utils/wildcard-events';
 
 export interface WebhookPayload {
   event: string;
@@ -70,6 +70,13 @@ const DEFAULT_WEBHOOK_MAX_PAYLOAD_BYTES = 1024 * 1024;
  * finish before abandoning them. Default 5s; override with WEBHOOK_SHUTDOWN_DRAIN_MS.
  */
 const DEFAULT_WEBHOOK_SHUTDOWN_DRAIN_MS = 5000;
+
+/**
+ * How long a session's answer to "which opt-in events does an active webhook name" is reused. Writes
+ * through WebhookService drop the answer at once on this node; a write on another instance (Redis
+ * deployment), or one that bypasses WebhookService, is picked up when it expires.
+ */
+const OPT_IN_SUBSCRIPTIONS_TTL_MS = 5000;
 
 /**
  * The result of one delivery attempt. Reported, not thrown: every delivery failure below is already
@@ -155,6 +162,11 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * not replayed alongside itself.
    */
   private readonly locallyPending = new Map<string, number>();
+  /**
+   * Per session, the opt-in events (WILDCARD_EXCLUDED_EVENTS) that at least one active webhook names.
+   * The promise is cached, not its result, so a burst of receipts on a cold entry shares one lookup.
+   */
+  private readonly optInSubscriptions = new Map<string, { events: Promise<ReadonlySet<string>>; expiresAt: number }>();
 
   constructor(
     @InjectRepository(Webhook, 'data')
@@ -246,6 +258,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
   }
 
   async dispatch(sessionId: string, event: string, data: Record<string, unknown>): Promise<void> {
+    // An opt-in event fires per recipient (about 2,000 per message to a 1,000-member group): skip it
+    // before the per-dispatch webhook read when no active webhook of the session names it.
+    if (WILDCARD_EXCLUDED_EVENTS.includes(event) && !(await this.sessionNamesOptInEvent(sessionId, event))) return;
     const webhooks = await this.loadActiveWebhooks(sessionId, event);
     const matchingWebhooks = this.filterMatchingWebhooks(webhooks, event, data);
 
@@ -270,6 +285,50 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     const ctx: DispatchEventContext = { sessionId, event, baseData };
     // allSettled preserves the per-webhook isolation: one failing delivery never rejects the others.
     await Promise.allSettled(matchingWebhooks.map(webhook => this.dispatchWithLimit(webhook, baseIdempotencyKey, ctx)));
+  }
+
+  /**
+   * Drop the session's cached opt-in subscriptions. WebhookService calls this after every webhook
+   * create, update and delete, so a change made on this node applies to the next event.
+   */
+  invalidateOptInSubscriptions(sessionId: string): void {
+    this.optInSubscriptions.delete(sessionId);
+  }
+
+  /**
+   * Whether an active webhook of the session names `event`, read at most once per
+   * OPT_IN_SUBSCRIPTIONS_TTL_MS. A failed lookup is not cached and lets the event through, so
+   * dispatch's own lookup reports the failure as before.
+   */
+  private async sessionNamesOptInEvent(sessionId: string, event: string): Promise<boolean> {
+    const now = Date.now();
+    let entry = this.optInSubscriptions.get(sessionId);
+    if (!entry || entry.expiresAt <= now) {
+      const created = {
+        events: this.webhookRepository
+          .find({ select: { id: true, events: true }, where: { sessionId, active: true } })
+          .then(rows => {
+            const named = new Set<string>();
+            for (const row of rows) {
+              if (!Array.isArray(row.events)) continue;
+              for (const e of row.events) if (WILDCARD_EXCLUDED_EVENTS.includes(e)) named.add(e);
+            }
+            return named;
+          }),
+        expiresAt: now + OPT_IN_SUBSCRIPTIONS_TTL_MS,
+      };
+      // Identity check: an invalidation (or a newer entry) since this lookup started must not be undone.
+      created.events.catch(() => {
+        if (this.optInSubscriptions.get(sessionId) === created) this.optInSubscriptions.delete(sessionId);
+      });
+      this.optInSubscriptions.set(sessionId, created);
+      entry = created;
+    }
+    try {
+      return (await entry.events).has(event);
+    } catch {
+      return true;
+    }
   }
 
   /**
