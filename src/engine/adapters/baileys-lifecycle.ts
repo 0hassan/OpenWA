@@ -30,8 +30,8 @@ import type { BaileysSessionStore } from './baileys-session-store';
 import { userPart } from '../identity/wa-id';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). The OS platform is
- * operator-configurable via BAILEYS_BROWSER_NAME; defaults to canonical 'Ubuntu' so pairing-code
- * (link-code) companion registration passes WhatsApp server-side validation. */
+ * operator-configurable via BAILEYS_BROWSER_NAME; defaults to 'Ubuntu' because some accounts reject a
+ * non-standard name on phone-number (pairing-code) linking. Only new pairings carry the name. */
 const BAILEYS_BROWSER: [string, string, string] = [
   process.env.BAILEYS_BROWSER_NAME?.trim() || 'Ubuntu',
   'Chrome',
