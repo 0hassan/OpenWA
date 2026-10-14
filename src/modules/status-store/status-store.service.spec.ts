@@ -45,6 +45,44 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     fs.rmSync(baseDir, { recursive: true, force: true });
   });
 
+  // SQLite serves every repository from one connection, so a transaction a save opens is shared with the
+  // writes made while it is open, and the rollback of a duplicate's unique violation would undo them too,
+  // after ingest had reported them created and the status.received webhook had gone out.
+  it('keeps a row written while a duplicate that lost the unique-key race is refused', async () => {
+    const status = (waStatusId: string) => ({
+      waStatusId,
+      contactJid: '628111@c.us',
+      type: 'text' as const,
+      caption: waStatusId,
+      postedAt: Date.now(),
+    });
+    await service.ingest('sess-race', status('dup'));
+    // The racing ingest read before the winner wrote, so it goes on to the insert that must be refused.
+    jest.spyOn(repository, 'findOne').mockResolvedValueOnce(null);
+    let concurrent: Promise<unknown> | undefined;
+    ds.subscribers.push({
+      listenTo: () => StatusUpdate,
+      beforeInsert: event => {
+        if ((event.entity as StatusUpdate).waStatusId === 'dup' && !concurrent) {
+          const other = status('other');
+          concurrent = repository.insert({
+            ...other,
+            sessionId: 'sess-race',
+            expiresAt: other.postedAt + 24 * 60 * 60 * 1000,
+            mediaOmitted: false,
+          });
+        }
+      },
+    });
+
+    const { created } = await service.ingest('sess-race', status('dup'));
+    await concurrent;
+
+    expect(created).toBe(false);
+    const stored = (await repository.find({ where: { sessionId: 'sess-race' } })).map(row => row.waStatusId).sort();
+    expect(stored).toEqual(['dup', 'other']);
+  });
+
   it('ingest writes a text row with expiresAt = postedAt + 24h, flagged as created', async () => {
     const postedAt = Date.now();
     const { row, created } = await service.ingest('sess', {

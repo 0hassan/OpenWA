@@ -375,7 +375,9 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // them, so a burst cannot all observe the same stale count and overshoot the ceiling.
     this.inFlightBatches++;
     try {
-      await this.batchRepository.save(batch);
+      // No transaction of its own: on SQLite's single shared connection the rollback of the unique
+      // violation handled below would also discard what other callers wrote while it was open.
+      await this.batchRepository.save(batch, { transaction: false });
     } catch (error) {
       this.inFlightBatches--;
       this.processingBatches.delete(batch.id);

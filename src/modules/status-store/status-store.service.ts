@@ -139,7 +139,10 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
 
     let saved: StatusUpdate;
     try {
-      saved = await this.repository.save(row);
+      // Without a transaction: a single-row save() wraps itself in one, and on SQLite's single shared
+      // connection the rollback of the unique violation expected below also discards the rows other callers
+      // wrote while it was open, after they were reported stored.
+      saved = await this.repository.save(row, { transaction: false });
     } catch (error) {
       // The unique (sessionId, waStatusId) index is the idempotency backstop for a concurrent ingest
       // of the same status racing past the findOne check above; on a unique-constraint violation the

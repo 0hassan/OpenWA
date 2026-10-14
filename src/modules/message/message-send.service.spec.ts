@@ -1327,6 +1327,7 @@ describe('MessageSendService', () => {
             button: { id: 'yes', text: 'Sim' },
           },
         }),
+        { transaction: false },
       );
     });
 
