@@ -136,7 +136,7 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
   });
 
   // `patch` writes in diff order and Message.js is the 10th of 11 files, so a run that was killed usually
-  // stopped before it. Applying the diff again would reject the hunks of the nine files that landed (24 of
+  // stopped before it. Applying the diff again would reject the hunks of the nine files that landed (25 of
   // them), leave their .rej files in the tree and call an interrupted install version skew.
   it('refuses a tree whose run stopped before Message.js, without touching it', () => {
     const dir = copyWwjs();
