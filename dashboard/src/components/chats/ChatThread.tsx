@@ -121,13 +121,23 @@ function ChatThread({
     target.focus();
   };
 
-  // Whether focus was last inside the thread. When the focused message turns revoked its bubble loses its
-  // tab stop and its action buttons unmount, which drops focus to the page; no blur event is fired for a
-  // removed element, so this stays true and tells that case from a click elsewhere.
-  const focusInThreadRef = useRef(false);
+  // The message control that holds keyboard focus, with the place of its bubble among the stops. When that
+  // control is the one that goes away (a deleted message's actions unmount, or its bubble loses its tab
+  // stop) focus falls to the page, and the next Tab would land in the composer: it moves to the stop that
+  // took the place of the bubble instead. React delivers no blur for an element it removes, so the element
+  // is checked after the commit, and only once: a later change of the list never moves focus, and the
+  // position of a reader who scrolled away is never touched (preventScroll). Focus a pointer brought in
+  // is not recorded, so a mouse click on Delete moves nothing.
+  const keyboardFocusRef = useRef<{ element: HTMLElement; at: number } | null>(null);
   useEffect(() => {
-    if (!focusInThreadRef.current || document.activeElement !== document.body) return;
-    messagesContainerRef.current?.querySelector<HTMLElement>('[data-roving-message][tabindex="0"]')?.focus();
+    const held = keyboardFocusRef.current;
+    if (!held || document.activeElement !== document.body) return;
+    keyboardFocusRef.current = null;
+    if (held.element.isConnected && held.element.tabIndex >= 0) return;
+    const stops = Array.from(
+      messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-roving-message]') ?? [],
+    );
+    stops[Math.min(held.at, stops.length - 1)]?.focus({ preventScroll: true });
   }, [messages, hasActions, messagesContainerRef]);
 
   // "@<digits>" in a message body only ever means something once resolved against a participant
@@ -249,7 +259,10 @@ function ChatThread({
   const handleJumpToBottom = useCallback(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    // Instant, not smooth: an older page that lands during the animation writes the scroll position and
+    // cancels it, which left the reader thousands of pixels above the bottom. The landing keeps an instant
+    // jump in place (useChatScrollPosition).
+    el.scrollTo({ top: el.scrollHeight });
   }, [messagesContainerRef]);
 
   // Reset the jump button whenever the active chat changes: the new chat's content is restored by
@@ -273,17 +286,23 @@ function ChatThread({
       ref={messagesContainerRef}
       // The actions show while focus is inside a bubble, but only for keyboard focus: a click also focuses
       // the bubble, and its menu would stay drawn over the message after the pointer left. The marker is
-      // read by Chats.css. Focus that a key press brings in from outside the thread clears it as well: the
-      // key was pressed elsewhere, so no keydown reached this element, and the marker a click left would
-      // keep the menu of the focused bubble hidden until the next key.
+      // read by Chats.css. It follows the focus itself as well as the pointer and the keys: a key pressed
+      // outside the thread is never seen here, and a click on a native audio or video control sends the
+      // page no pointer event at all, though it focuses the element.
       onPointerDown={event => event.currentTarget.setAttribute('data-pointer', '')}
       onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
       onFocus={event => {
-        focusInThreadRef.current = true;
-        if (event.target.matches(':focus-visible')) event.currentTarget.removeAttribute('data-pointer');
+        const target = event.target;
+        const bubble = target.closest<HTMLElement>('.message-bubble-container');
+        const keyboard = target.matches(':focus-visible');
+        if (keyboard) event.currentTarget.removeAttribute('data-pointer');
+        else event.currentTarget.setAttribute('data-pointer', '');
+        const stops = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-roving-message]'));
+        const at = bubble ? stops.indexOf(bubble) : -1;
+        keyboardFocusRef.current = keyboard && at >= 0 ? { element: target, at } : null;
       }}
       onBlur={event => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusInThreadRef.current = false;
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) keyboardFocusRef.current = null;
       }}
     >
       {/* Older-page spinner, or the failure in its place. An in-flow sibling before the thread, not

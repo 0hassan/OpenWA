@@ -2,7 +2,7 @@
 // prompt-button tap only for an operator key, so a read-only key must not be offered them. It also
 // checks the thread, not just the helpers, resolves an @mention in a body and in a quote.
 import '../../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createElement, createRef } from 'react';
@@ -12,6 +12,7 @@ import type { ChatMessageView } from '../../utils/chatMessages.ts';
 type RTL = typeof import('@testing-library/react');
 
 let rtl: RTL;
+let matchesOriginal: typeof Element.prototype.matches;
 let ChatThread: typeof import('./ChatThread.tsx').default;
 let RoleProvider: typeof import('../RoleProvider.tsx').RoleProvider;
 
@@ -23,6 +24,18 @@ before(async () => {
   rtl = await import('@testing-library/react');
   ({ RoleProvider } = await import('../RoleProvider.tsx'));
   ({ default: ChatThread } = await import('./ChatThread.tsx'));
+  // jsdom answers :focus-visible from the last key or pointer event that any test fired before, so the same
+  // call matched in one run and not in the next. Here it holds for the element that has focus, as for the
+  // focus a key press brings, and not for a focus event on an element that is not the focused one, as for
+  // the focus of a click.
+  matchesOriginal = window.Element.prototype.matches;
+  window.Element.prototype.matches = function (this: Element, selector: string): boolean {
+    return selector === ':focus-visible' ? this === document.activeElement : matchesOriginal.call(this, selector);
+  } as typeof Element.prototype.matches;
+});
+
+after(() => {
+  window.Element.prototype.matches = matchesOriginal;
 });
 
 afterEach(() => {
@@ -455,6 +468,16 @@ const bubblesOf = (container: HTMLElement): HTMLElement[] => [
   ...container.querySelectorAll<HTMLElement>('[data-roving-message]'),
 ];
 
+/**
+ * Where focus is, as text: the id of the message whose bubble or control holds it, 'body' when it fell to
+ * the page, 'elsewhere' for any other element. A failed assert.equal on two DOM nodes spends minutes
+ * printing them, so focus is compared by name.
+ */
+const focusedMessage = (): string =>
+  document.activeElement === document.body
+    ? 'body'
+    : (document.activeElement?.closest('[data-wa-message-id]')?.getAttribute('data-wa-message-id') ?? 'elsewhere');
+
 // A bubble is the one tab stop of the thread; what is inside it (a link, a preview, a button) is a stop
 // of its own, and landing on it must not make its bubble the stop as well, or Shift+Tab visits both.
 test('focus on a link inside a message does not move the thread tab stop', () => {
@@ -523,7 +546,94 @@ test('keyboard focus stays in the thread when the focused message is deleted', (
   assert.ok(container.contains(active), 'focus left the thread');
 });
 
-test('focus does not return to the thread when it was moved elsewhere before a message was deleted', () => {
+test('keyboard focus returns without scrolling, and to the stop that took the place of the deleted message', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+  const original = HTMLElement.prototype.focus;
+  const calls: Array<{ id: string | null; options?: FocusOptions }> = [];
+  HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions) {
+    calls.push({ id: this.closest('[data-wa-message-id]')?.getAttribute('data-wa-message-id') ?? null, options });
+    original.call(this, options);
+  };
+  try {
+    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+  } finally {
+    HTMLElement.prototype.focus = original;
+  }
+
+  // The message after the deleted one now holds its place among the stops, and nothing scrolls.
+  assert.deepEqual(calls, [{ id: 'wamid.3', options: { preventScroll: true } }]);
+  assert.equal(focusedMessage(), 'wamid.3');
+});
+
+// What was remembered is used once. Here the stop is gone and nothing in the thread can take the focus, so
+// it stays on the page; a message that arrives later does not draw it in.
+test('focus is given back once, not at every later change of the list', () => {
+  const [a, b]: ChatMessageView[] = ['1', '2'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a]);
+  const del = bubblesOf(container)[0].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+
+  rerenderWith([]);
+  assert.equal(focusedMessage(), 'body');
+  rerenderWith([b]);
+
+  assert.equal(focusedMessage(), 'body');
+});
+
+// A control that is not a message holds no memory: when it goes away (the jump button once the reader is at
+// the bottom) React delivers no blur, and a later change of the list used to take focus to the newest
+// bubble, which scrolled a reader who had gone back up to read history down to it.
+test('a thread control that is removed does not make a later change of the list take focus', () => {
+  const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
+  const second: ChatMessageView = { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', metadata: undefined };
+  const { container, rerenderWith } = renderThread('operator', [first]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const control = document.createElement('button');
+  thread.appendChild(control);
+  control.focus();
+  control.remove();
+  assert.equal(document.activeElement, document.body);
+
+  rerenderWith([first, second]);
+  rerenderWith([first, { ...second, status: 'read' }]);
+
+  assert.equal(focusedMessage(), 'body');
+});
+
+test('a focus a pointer brought to an action is not given back, and marks pointer use', () => {
+  const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
+  const second: ChatMessageView = { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', metadata: undefined };
+  const { container, rerenderWith } = renderThread('operator', [first, second]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  // The focusin of a mouse click: the element is not the focused one, so it is not :focus-visible.
+  rtl.fireEvent.focusIn(del);
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+
+  rerenderWith([first, { ...second, type: 'revoked', body: '' }]);
+
+  assert.equal(focusedMessage(), 'body');
+});
+
+test('focus that is moved elsewhere before a message was deleted stays there', () => {
   const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
   const second: ChatMessageView = { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', metadata: undefined };
   const { container, rerenderWith } = renderThread('operator', [first, second]);
@@ -533,7 +643,31 @@ test('focus does not return to the thread when it was moved elsewhere before a m
     bubblesOf(container)[1].focus();
     outside.focus();
     rerenderWith([first, { ...second, type: 'revoked', body: '' }]);
-    assert.equal(document.activeElement, outside);
+    assert.ok(document.activeElement === outside, 'focus was taken from the element it was moved to');
+  } finally {
+    outside.remove();
+  }
+});
+
+// Focus that went to another control and was lost from there (the control closed, as a dialog does) is not
+// the thread's to take back: what the thread remembered ended when focus left it.
+test('focus that left the thread and was then lost is not taken back into it', () => {
+  const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
+  const second: ChatMessageView = { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', metadata: undefined };
+  const { container, rerenderWith } = renderThread('operator', [first, second]);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  const outside = document.createElement('input');
+  document.body.appendChild(outside);
+  try {
+    del.focus();
+    outside.focus();
+    outside.remove();
+    assert.equal(focusedMessage(), 'body');
+
+    rerenderWith([first, { ...second, type: 'revoked', body: '' }]);
+
+    assert.equal(focusedMessage(), 'body');
   } finally {
     outside.remove();
   }
@@ -565,13 +699,47 @@ test('a click marks pointer use, a key press clears it, and the stylesheet revea
 
 // The button is a child of the scroller. Absolutely positioned there it moves with the content, which put it
 // at the bottom of the first screen of the thread and off screen whenever it was shown. Sticky, as the last
-// child, it holds to the bottom of the visible pane. jsdom has no layout, so the declaration is pinned.
-test('the scroll-to-bottom button is sticky inside the scroller, not absolute', () => {
+// child, it holds to the bottom of the visible pane. jsdom has no layout, so the declarations are pinned:
+// the negative margin takes back the room an in-flow button would add to the scroll height, align-self puts
+// it at the logical end, and it sits below the actions menu (z-index 5) it would otherwise cover.
+test('the scroll-to-bottom button is sticky inside the scroller, not absolute, and below the actions menu', () => {
   const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
   const rule = /\.chats-page \.scroll-to-bottom-btn \{([^}]*)\}/.exec(css)?.[1] ?? '';
   assert.match(rule, /position:\s*sticky;/);
   assert.match(rule, /bottom:\s*1rem;/);
+  assert.match(rule, /align-self:\s*flex-end;/);
+  assert.match(rule, /margin-top:\s*calc\(-40px - 0\.75rem\);/);
   assert.doesNotMatch(rule, /position:\s*absolute/);
+  const menu = /\.chats-page \.message-actions-menu \{([^}]*)\}/.exec(css)?.[1] ?? '';
+  const level = (text: string): number => Number(/z-index:\s*(\d+);/.exec(text)?.[1]);
+  assert.ok(level(rule) < level(menu), 'the jump button paints over the actions menu');
+});
+
+test('the scroll-to-bottom button is the last child of the scroller and jumps without animating', async () => {
+  const messages: ChatMessageView[] = ['1', '2'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container } = renderThread('operator', messages);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  Object.defineProperty(thread, 'scrollHeight', { value: 2000, configurable: true });
+  Object.defineProperty(thread, 'clientHeight', { value: 400, configurable: true });
+  const jumps: ScrollToOptions[] = [];
+  thread.scrollTo = ((options: ScrollToOptions) => void jumps.push(options)) as typeof thread.scrollTo;
+  rtl.fireEvent.scroll(thread);
+
+  const button = await rtl.waitFor(() => {
+    const found = thread.querySelector<HTMLElement>('.scroll-to-bottom-btn');
+    assert.ok(found, 'the jump button did not show');
+    return found;
+  });
+  assert.equal(thread.lastElementChild, button);
+  rtl.fireEvent.click(button);
+  // A smooth jump is cancelled by an older page that lands during the animation.
+  assert.deepEqual(jumps, [{ top: 2000 }]);
 });
 
 // A Tab from the sidebar into the thread is a key press the thread never sees, so a click made in the thread
