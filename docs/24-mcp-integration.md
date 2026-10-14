@@ -105,17 +105,22 @@ otherwise refuses, gets an HTTP error with a JSON-RPC body (`401` carries
 `WWW-Authenticate: Bearer`) and an `API_KEY_AUTH_FAILED` audit row (a missing or unknown
 key's row is capped at 10 per client IP a minute, a budget shared with REST and the queue
 dashboard), and no MCP method runs.
-Past the gate, a tool call flows through four steps, in this order:
+Past the gate, a tool call flows through five steps, in this order:
 
 1. **Key extraction.** The adapter reads the API key from the `X-API-Key` header or
    `Authorization: Bearer …`.
 2. **Authentication.** `invokeTool` calls `AuthService.validateApiKey()` — the _same_
    method the REST `ApiKeyGuard` uses — which enforces validity, expiry, the per-session
    `allowedSessions` scope, and the IP allow-list (fail-closed). Then `hasPermission()`
-   enforces the tool's required role. Auth runs **before** the handler.
+   enforces the tool's required role. A key restricted to selected chats may then run only
+   a tool that carries a chat scope (`403` otherwise). Auth runs **before** the handler.
 3. **Validation.** The tool's Zod input schema validates the arguments (a failure maps to
-   a `400`-style error), exactly bounding what reaches the service.
-4. **Execution.** The handler calls the existing service method and shapes the result
+   a `400`-style error), exactly bounding what reaches the service. A NUL character in the
+   input is refused the same way.
+4. **Chat arguments.** For a chat-restricted key, each chat argument of the tool, read from
+   the parsed values, must name a chat inside the key's allowlist, and a `quotedMessageId`
+   is refused unless the tool allows one (`403`).
+5. **Execution.** The handler calls the existing service method and shapes the result
    through the same response DTO the REST controller uses (so no field is exposed over MCP
    that REST hides).
 
