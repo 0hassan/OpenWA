@@ -40,7 +40,7 @@ function entityOf(jid: string): { kind: string; id: string } | null {
   const parsed = parseWaId(jid);
   if (parsed.kind === 'user') return { kind: 'user', id: phoneKey(parsed.userPart) };
   if (parsed.kind !== 'unknown') return { kind: parsed.kind, id: parsed.userPart };
-  return !jid.includes('@') && /^\+?\d[\d \-]*$/.test(jid.trim()) ? { kind: 'user', id: phoneKey(jid) } : null;
+  return !jid.includes('@') && /^\+?\d[\d -]*$/.test(jid.trim()) ? { kind: 'user', id: phoneKey(jid) } : null;
 }
 
 const isPerson = (kind: string): boolean => kind === 'user' || kind === 'lid';

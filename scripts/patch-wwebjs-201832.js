@@ -234,7 +234,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   if (/_normalizeId\(|\.\$1/.test(msgSrc)) {
     // Message.js normalizing is necessary but NOT sufficient to stand down. `patch` writes as it goes and
     // Message.js is the second to last file it writes, so a run that died after it lands here too (and one
-    // that died before it is caught below) — and skipping would
+    // that died before it is caught below), and skipping would
     // latch that half-patched tree in permanently, because every later run takes this same branch and never
     // reaches the assertions below. An upstream release that fixes this lands every site at once; a crashed
     // run does not. Proving the tree is whole is what tells the two apart.
@@ -262,7 +262,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
   if (landedBefore.length) {
     throw partialTree(
       new Error(
-        'whatsapp-web.js is PARTIALLY patched — an earlier run was interrupted and ' +
+        'whatsapp-web.js is PARTIALLY patched: an earlier run was interrupted and ' +
           `${landedBefore.join(', ')} did not land. The tree cannot repair itself. Reinstall the dependency ` +
           '(`rm -rf node_modules/whatsapp-web.js && npm ci`) and re-run.',
       ),
