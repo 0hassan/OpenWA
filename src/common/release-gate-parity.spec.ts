@@ -276,6 +276,23 @@ describe('every npm tree is audited and kept current', () => {
     expect(audit.index).toBeLessThan(install);
   });
 
+  // The clients that are not npm packages publish runtime dependencies of their own, and the audit steps
+  // above cannot see those manifests, so an advisory in one is raised only by Dependabot.
+  it.each([
+    ['pip', 'sdk/python/pyproject.toml'],
+    ['maven', 'sdk/java/pom.xml'],
+    ['composer', 'sdk/php/composer.json'],
+    ['gomod', 'sdk/go/go.mod'],
+  ])('Dependabot updates the %s manifest %s', (ecosystem, manifest) => {
+    const tracked = spawnSync('git', ['ls-files', '--', manifest], { cwd: root, encoding: 'utf8' }).stdout.trim();
+    expect(tracked).toBe(manifest);
+    const dependabot = yaml.load(fs.readFileSync(path.join(root, '.github', 'dependabot.yml'), 'utf8')) as {
+      updates: Array<{ 'package-ecosystem': string; directory: string }>;
+    };
+    const watched = dependabot.updates.filter(u => u['package-ecosystem'] === ecosystem).map(u => u.directory);
+    expect(watched).toContain(`/${path.posix.dirname(manifest)}`);
+  });
+
   it('Dependabot updates every tree', () => {
     const dependabot = yaml.load(fs.readFileSync(path.join(root, '.github', 'dependabot.yml'), 'utf8')) as {
       updates: Array<{ 'package-ecosystem': string; directory: string }>;
