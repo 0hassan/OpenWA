@@ -408,6 +408,47 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(sock.leave).not.toHaveBeenCalledWith(buildRoomName('sess-1', 'message.received'));
   });
 
+  // An unsubscribe is answered with the session id it names, so it is bound like the one a subscribe
+  // accepts: a reply holds only "*" or a short session id, never whatever string the client sent.
+  it.each([
+    ['oversized', 'a'.repeat(129)],
+    ['malformed', 'sess:1'],
+  ])('refuses an unsubscribe with a %s sessionId instead of echoing it', async (_label, sessionId) => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+    sock.rooms.add(buildRoomName('sess-1', 'message.received'));
+
+    const res = (await gateway.handleMessage(asSocket(sock), {
+      type: 'unsubscribe',
+      sessionId,
+      requestId: 'r1',
+    } as unknown as WSClientMessage)) as WSErrorResponse;
+
+    expect(res.code).toBe('INVALID_SESSION');
+    expect(res.requestId).toBe('r1');
+    expect(JSON.stringify(sock.emit.mock.calls)).not.toContain(sessionId);
+    expect(sock.leave).not.toHaveBeenCalled();
+  });
+
+  it('still answers an unsubscribe from "*" and from a session id at the length limit', async () => {
+    authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: null });
+    const sock = makeSocket({ apiKey: 'good' });
+    await gateway.handleConnection(asSocket(sock));
+    const longest = 'a'.repeat(128);
+    sock.rooms.add(buildRoomName(longest, 'message.received'));
+    sock.rooms.add(buildRoomName('sess-2', 'message.received'));
+
+    const one = await gateway.handleMessage(asSocket(sock), { type: 'unsubscribe', sessionId: longest } as never);
+    expect(one).toMatchObject({ type: 'unsubscribed', sessionId: longest });
+    expect(sock.leave).toHaveBeenCalledTimes(1);
+    expect(sock.leave).toHaveBeenCalledWith(buildRoomName(longest, 'message.received'));
+
+    const all = await gateway.handleMessage(asSocket(sock), { type: 'unsubscribe', sessionId: '*' } as never);
+    expect(all).toMatchObject({ type: 'unsubscribed', sessionId: '*' });
+    expect(sock.leave).toHaveBeenCalledWith(buildRoomName('sess-2', 'message.received'));
+  });
+
   it('forbids a session-scoped key from subscribing to the * wildcard', async () => {
     authService.validateApiKey.mockResolvedValue({ name: 'k', allowedSessions: ['sess-1'] });
     const sock = makeSocket({ apiKey: 'good' });

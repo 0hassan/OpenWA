@@ -137,6 +137,11 @@ const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_ROOMS_PER_SOCKET = 4096;
 const TOO_MANY_SUBSCRIPTIONS_MESSAGE = `A connection may hold at most ${MAX_ROOMS_PER_SOCKET} subscriptions; unsubscribe first`;
 
+/** `*` or a session id: all a subscription room, and a reply that names one, may carry. */
+function isSessionSelector(sessionId: string): boolean {
+  return sessionId === '*' || (sessionId.length <= MAX_SUBSCRIBE_SESSION_ID_LENGTH && isSafeSessionName(sessionId));
+}
+
 /** Why an API key's live WebSocket sockets are being torn down — drives the client-facing message. */
 export type ApiKeyEvictionReason = 'revoked' | 'deleted' | 'authorization_changed' | 'expired';
 
@@ -562,7 +567,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     if (!sessionId || typeof sessionId !== 'string') {
       return this.createError('INVALID_SESSION', 'sessionId is required', requestId);
     }
-    if (sessionId !== '*' && !(sessionId.length <= MAX_SUBSCRIBE_SESSION_ID_LENGTH && isSafeSessionName(sessionId))) {
+    if (!isSessionSelector(sessionId)) {
       return this.createError('INVALID_SESSION', 'sessionId must be "*" or a session id', requestId);
     }
 
@@ -699,10 +704,14 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
 
   private handleUnsubscribe(client: Socket, message: WSUnsubscribeRequest): WSUnsubscribedResponse | WSErrorResponse {
     const { sessionId, requestId } = message;
-    // Same check as subscribe: a missing sessionId matched no room, left every subscription in place,
-    // and was still answered 'unsubscribed'.
+    // Same checks as subscribe: a missing sessionId matched no room, left every subscription in place,
+    // and was still answered 'unsubscribed'. The reply carries the id back, so one no subscribe could
+    // have accepted is refused rather than echoed.
     if (!sessionId || typeof sessionId !== 'string') {
       return this.createError('INVALID_SESSION', 'sessionId is required', requestId);
+    }
+    if (!isSessionSelector(sessionId)) {
+      return this.createError('INVALID_SESSION', 'sessionId must be "*" or a session id', requestId);
     }
 
     // Leave all rooms for this session
