@@ -583,9 +583,12 @@ curl -X POST http://localhost:2785/api/sessions/{sessionId}/messages/send-text \
 
 > On Kubernetes with the chart in `charts/openwa`, take the step 2 backup with the Helm lines in
 > Runbook: Database Backup and the step 3 export first, then replace steps 4-8 with checking out the
-> new release and running `helm upgrade openwa ./charts/openwa --reuse-values`. The image tag defaults
-> to the chart's `appVersion`, so the checkout moves it, unless `image.tag` was set at install:
-> `--reuse-values` keeps that value, so pass `--set image.tag=<new-version>` in that case.
+> new release and running `helm upgrade openwa ./charts/openwa --reset-then-reuse-values` (Helm 3.14
+> or later). It takes the new chart's defaults and re-applies the values you set. Plain
+> `--reuse-values` renders the new templates with the old release's defaults instead, which keeps a
+> 45 s `terminationGracePeriodSeconds` and a capability list without `KILL`, so a stop never reaches
+> the app. The image tag defaults to the chart's `appVersion`, so the checkout moves it, unless
+> `image.tag` was set at install: that value is kept, so pass `--set image.tag=<new-version>` then.
 > Run steps 9-12 through `kubectl port-forward` to the release's Service. `helm rollback` keeps the
 > volume, so read the notes on restoring `sessions/` below before relying on it.
 

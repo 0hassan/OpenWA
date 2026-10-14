@@ -87,9 +87,9 @@ spec:
             httpGet:
               path: /api/health/live
               port: http
-            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            periodSeconds: {{ (.Values.startupProbe | default dict).periodSeconds | default 5 }}
             timeoutSeconds: 5
-            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+            failureThreshold: {{ (.Values.startupProbe | default dict).failureThreshold | default 60 }}
           livenessProbe:
             httpGet:
               path: /api/health/live
