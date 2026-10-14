@@ -185,7 +185,7 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/force-kill
 
 #### POST /api/sessions/:sessionId/pairing-code
 
-Request an 8-char pairing code via phone number (OPERATOR).
+Request an 8-char pairing code via phone number (OPERATOR). On whatsapp-web.js, request a code only for a number you are prepared to re-link: a request for a number that already has a linked session has been observed to end with WhatsApp revoking that device. Baileys was not affected in the same tests; link by QR when a session of that number must stay up.
 
 ```bash
 curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/pairing-code" \
