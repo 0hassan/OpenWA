@@ -358,3 +358,41 @@ test('poll messages display exact choices, including outgoing and legacy polls',
   assert.equal(container.querySelector('script'), null);
   assert.ok(container.textContent?.includes('Legacy question'));
 });
+
+test('a poll whose body is empty shows the question from its metadata', () => {
+  // whatsapp-web.js hands a poll over with an empty body and its name only in metadata.poll.
+  const poll = { name: 'Where shall we meet?', options: ['Park', 'Beach'], allowMultipleAnswers: false };
+  const { container } = renderThread('viewer', [{ ...PROMPT, type: 'poll', body: '', metadata: { poll } }]);
+  assert.ok(container.textContent?.includes('Where shall we meet?'));
+});
+
+test('an archived sticker previews as an image and an archived voice note as audio', async () => {
+  const media = (id: string, type: ChatMessageView['type'], mimetype: string): ChatMessageView => ({
+    ...PROMPT,
+    id,
+    waMessageId: `wamid.${id}`,
+    body: '',
+    type,
+    metadata: { media: { mimetype, filename: `${id}.bin`, omitted: true, sizeBytes: 10, archived: true } },
+  });
+  const fetchOriginal = globalThis.fetch;
+  const createOriginal = URL.createObjectURL;
+  const revokeOriginal = URL.revokeObjectURL;
+  globalThis.fetch = (async () => new Response(new Blob(['x']), { status: 200 })) as typeof fetch;
+  URL.createObjectURL = () => 'blob:archived';
+  URL.revokeObjectURL = () => {};
+  try {
+    const { container } = renderThread('viewer', [
+      media('stk', 'sticker', 'image/webp'),
+      media('vn', 'voice', 'audio/ogg; codecs=opus'),
+    ]);
+    await rtl.waitFor(() => {
+      assert.ok(container.querySelector('[data-wa-message-id="wamid.stk"] img.chat-image-media'));
+      assert.ok(container.querySelector('[data-wa-message-id="wamid.vn"] audio'));
+    });
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    URL.createObjectURL = createOriginal;
+    URL.revokeObjectURL = revokeOriginal;
+  }
+});
