@@ -160,10 +160,22 @@ export async function downloadMediaInPage(args: {
   } catch (e) {
     if ((e as { status?: number } | null)?.status === 404) return undefined;
     // WhatsApp Web's rejection classes are minified, and puppeteer rebuilds a page exception from the class
-    // name alone (`t: t`). Name the rejection here, with the build it came from.
-    const thrown = e as { name?: unknown; message?: unknown } | null;
+    // name alone (`t: t`). Name the rejection here, with the build it came from, from whatever it carries:
+    // a name and message, the class and a status, or a bare string.
+    const thrown = e as
+      { name?: string; message?: string; status?: number; constructor?: { name?: string } } | string | null | undefined;
+    const part = (value: string | number | null | undefined): string =>
+      value === undefined || value === null ? '' : String(value);
+    let summary: string;
+    if (thrown instanceof Object) {
+      const name = part(thrown.name) || (thrown.constructor === Object ? '' : part(thrown.constructor?.name));
+      const reason = part(thrown.message) || (thrown.status === undefined ? '' : `status ${part(thrown.status)}`);
+      summary = name && reason ? `${name}: ${reason}` : name || reason;
+    } else {
+      summary = part(thrown);
+    }
     const build = (window as unknown as { Debug?: { VERSION?: unknown } }).Debug?.VERSION;
-    throw new Error(`${String(thrown?.name)}: ${String(thrown?.message)} (WhatsApp Web ${String(build)})`, {
+    throw new Error(`${summary || 'unknown rejection'} (WhatsApp Web ${String(build)})`, {
       cause: e,
     });
   }

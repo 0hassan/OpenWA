@@ -5936,6 +5936,25 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
       compilerOptions: options,
     }).outputText;
     // Declared alongside whatever helpers the compiler hoisted, then sent as its own text, as puppeteer does.
+  // WhatsApp Web rejects with more than errors: a bare string, or an object that carries only a status
+  // (upstream reads e.status === 404), and the operator reads the warning that names it.
+  it.each([
+    ['a bare string', 'download refused', 'download refused (WhatsApp Web 2.3000.1)'],
+    ['an object with only a status', { status: 500 }, 'status 500 (WhatsApp Web 2.3000.1)'],
+    [
+      'an object with a name and a status',
+      { name: 'MediaError', status: 410 },
+      'MediaError: status 410 (WhatsApp Web 2.3000.1)',
+    ],
+    ['nothing at all', undefined, 'unknown rejection (WhatsApp Web 2.3000.1)'],
+  ])('names a rejection that is %s', async (_label, rejection, expected) => {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+    pageServing(5, { decrypt: () => Promise.reject(rejection) });
+    (g.window as { Debug?: unknown }).Debug = { VERSION: '2.3000.1' };
+
+    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(expected);
+  });
+
     const declared = vm.runInNewContext(`${compiled}\n;downloadMediaInPage`) as { toString(): string };
     return vm.runInNewContext(`(${declared.toString()})`, {
       window: (globalThis as unknown as { window: unknown }).window,
@@ -6001,7 +6020,7 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     );
     expect(literals(own)).toEqual(literals(upstream));
     // The copy measures the decrypted length instead of reporting the declared `size`, and names a
-    // rejection from its `name`, `message` and the page's `Debug.VERSION`.
+    // rejection from its `name`, class, `message`, `status` and the page's `Debug.VERSION`.
     expect(members(own)).toEqual(
       [
         ...members(upstream).filter(m => m !== 'size'),
@@ -6029,6 +6048,7 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
  * into one value (`Client.js:1558`), and its typings claim `Promise<Message>` — so nothing upstream of
  * these tests catches a regression here.
  */
+        'constructor',
 describe('WhatsAppWebJsAdapter send-result contract', () => {
   const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });
