@@ -1020,6 +1020,15 @@ export function storedKeyInChat(
 }
 
 /**
+ * The participant a live key names, or undefined when it names none. Baileys passes every live key
+ * through cleanMessage, which writes jidNormalizedUser(participant) back, and that is '' for the absent
+ * participant of a 1:1 chat. `??` keeps the empty string, which then reads as a sender that is nobody.
+ */
+export function keyParticipant(key: { participant?: string | null }): string | undefined {
+  return key.participant ? key.participant : undefined;
+}
+
+/**
  * Build a neutral {@link IncomingMessage} from extracted Baileys fields. The chat is `remoteJid`
  * (Baileys reports the conversation directly), except that a received broadcast-list message is filed
  * under its sender's chat (see {@link baileysChatJid}); `fromMe` only flips from/to. The group sender,

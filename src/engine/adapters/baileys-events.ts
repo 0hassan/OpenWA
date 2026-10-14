@@ -28,6 +28,7 @@ import {
   extractBaileysContext,
   extractBaileysLocation,
   isBaileysCatalogShare,
+  keyParticipant,
   mapBaileysEventResponseType,
   mapBaileysStatus,
   setBaileysText,
@@ -102,15 +103,6 @@ const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
   'messageHistoryNotice',
   'messageHistoryBundle',
 ]);
-
-/**
- * The participant a live key names, or undefined when it names none. Baileys passes every live key
- * through cleanMessage, which writes jidNormalizedUser(participant) back, and that is '' for the absent
- * participant of a 1:1 chat. `??` keeps the empty string, which then reads as a sender that is nobody.
- */
-export function keyParticipant(key: { participant?: string | null }): string | undefined {
-  return key.participant ? key.participant : undefined;
-}
 
 /**
  * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect
