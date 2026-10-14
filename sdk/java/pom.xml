@@ -52,6 +52,16 @@
   </dependencies>
 
   <build>
+    <resources>
+      <!-- The license text travels inside the jar and the sources jar. -->
+      <resource>
+        <directory>${project.basedir}</directory>
+        <includes>
+          <include>LICENSE</include>
+        </includes>
+        <targetPath>META-INF</targetPath>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
