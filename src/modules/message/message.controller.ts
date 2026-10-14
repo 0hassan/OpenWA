@@ -59,6 +59,7 @@ import {
   BULK_MEDIA_TOO_LARGE_413,
   MEDIA_URL_PROXY_503,
   MESSAGE_NOT_FOUND_404,
+  QUOTED_MESSAGE_NOT_FOUND_404,
   RECIPIENT_UNREACHABLE_400,
   RECIPIENT_LOOKUP_503,
 } from '../../common/openapi/engine-status-responses';
@@ -216,7 +217,7 @@ export class MessageController {
     description: 'Session not active or invalid request',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CUSTOM_LINK_PREVIEW_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
   async sendText(@Param('sessionId') sessionId: string, @Body() dto: SendTextMessageDto): Promise<MessageResponseDto> {
@@ -267,7 +268,7 @@ export class MessageController {
     description: 'Session not active, invalid request, or a url that answers non-2xx, times out or cannot be reached',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
   @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
@@ -295,7 +296,7 @@ export class MessageController {
     description: 'Session not active, invalid request, or a url that answers non-2xx, times out or cannot be reached',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
   @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
@@ -323,7 +324,7 @@ export class MessageController {
     description: 'Session not active, invalid request, or a url that answers non-2xx, times out or cannot be reached',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
   @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
@@ -351,7 +352,7 @@ export class MessageController {
     description: 'Session not active, invalid request, or a url that answers non-2xx, times out or cannot be reached',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 501, description: `${CHANNEL_MEDIA_501} ${QUOTED_SEND_501}` })
   @ApiResponse({ status: 413, description: MEDIA_TOO_LARGE_413 })
   @ApiResponse({ status: 503, description: `${MEDIA_URL_PROXY_503} ${RECIPIENT_LOOKUP_503}` })
@@ -377,7 +378,7 @@ export class MessageController {
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({ status: 501, description: wwebjsRefuses501(`a location to ${CHANNEL_OR_BROADCAST}`) })
   @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
@@ -398,7 +399,7 @@ export class MessageController {
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({ status: 501, description: wwebjsRefuses501(`a contact card to ${CHANNEL_OR_BROADCAST}`) })
   @ApiResponse({ status: 503, description: RECIPIENT_LOOKUP_503 })
@@ -419,7 +420,7 @@ export class MessageController {
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({
     status: 501,
@@ -447,7 +448,7 @@ export class MessageController {
     type: MessageResponseDto,
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiResponse({ status: 404, description: MESSAGE_NOT_FOUND_404 })
+  @ApiResponse({ status: 404, description: QUOTED_MESSAGE_NOT_FOUND_404 })
   @ApiResponse({ status: 400, description: RECIPIENT_UNREACHABLE_400 })
   @ApiResponse({
     status: 501,

@@ -4484,7 +4484,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4746,7 +4746,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4896,7 +4896,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5047,7 +5047,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5198,7 +5198,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5350,7 +5350,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5491,7 +5491,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5631,7 +5631,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5785,7 +5785,7 @@
             }
           },
           "404": {
-            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "description": "The `quotedMessageId` could not be resolved: the whatsapp-web.js page does not hold it, or the Baileys store does not (it was never received or sent by this session, or it was evicted or deleted). On whatsapp-web.js a message that resolves but cannot be replied to is sent without the quote.",
             "content": {
               "application/json": {
                 "schema": {
