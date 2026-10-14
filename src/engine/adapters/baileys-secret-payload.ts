@@ -7,11 +7,10 @@ import { createDecipheriv, hkdfSync } from 'node:crypto';
  * and nothing else, so these two reach the adapter as an opaque `secretEncryptedMessage` and
  * `encReactionMessage`.
  *
- * The key is HKDF-SHA256 over the secret with an all-zero salt and
- * `<target id><target author><modifier><label>` as the info, and the payload is AES-256-GCM with no
- * additional data: the construction the library applies to a poll vote or an RSVP, under another label.
- * Edit and reaction payloads decrypt to a `Message` holding the protocol message and a
- * `ReactionMessage` respectively.
+ * The key is derived as the library derives a poll vote's or an RSVP's: HKDF-SHA256 over the secret
+ * with an all-zero salt and `<target id><target author><modifier><label>` as the info. The payload is
+ * AES-256-GCM, and unlike those two it carries no additional data. Edit and reaction payloads decrypt
+ * to a `Message` holding the protocol message and a `ReactionMessage` respectively.
  */
 export type SecretPayloadKind = 'edit' | 'reaction';
 

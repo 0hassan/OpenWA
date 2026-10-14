@@ -122,15 +122,39 @@ describe('decryptSecretPayload', () => {
       expect(decryptSecretPayload({ ...base, payload: altered })).toBeUndefined();
     });
 
-    it.each([
-      ['a secret that is not 32 bytes', { secret: Buffer.alloc(16, 0x42) }],
-      ['an iv that is not 12 bytes', { iv: Buffer.alloc(16, 9) }],
-      ['a payload of only a tag', { payload: Buffer.alloc(16) }],
-      ['a payload past the ceiling', { payload: Buffer.alloc(256 * 1024 + 1) }],
-      ['no target id', { targetId: '' }],
-      ['no candidate ids', { targetAuthors: [], modifiers: [] }],
-    ])('%s', (_name, override) => {
-      expect(decryptSecretPayload({ ...base, ...override })).toBeUndefined();
+    // Each case below decrypts when its guard is removed: the payload is sealed with that very parameter, so
+    // the answer comes from the guard and not from the authentication tag.
+    it('a secret that is not 32 bytes', () => {
+      const short = Buffer.alloc(16, 0x42);
+      const sealed = seal('Message Edit', short, ids, Buffer.from('x'));
+      expect(decryptSecretPayload({ ...base, secret: short, iv: sealed.iv, payload: sealed.payload })).toBeUndefined();
+    });
+
+    it('an iv that is not 12 bytes', () => {
+      const sealed = seal('Message Edit', secret, ids, Buffer.from('x'), Buffer.alloc(16, 9));
+      expect(decryptSecretPayload({ ...base, iv: sealed.iv, payload: sealed.payload })).toBeUndefined();
+    });
+
+    it('a payload of only a tag', () => {
+      const sealed = seal('Message Edit', secret, ids, Buffer.alloc(0));
+      expect(sealed.payload).toHaveLength(16);
+      expect(decryptSecretPayload({ ...base, iv: sealed.iv, payload: sealed.payload })).toBeUndefined();
+    });
+
+    it('a payload past the ceiling', () => {
+      const sealed = seal('Message Edit', secret, ids, Buffer.alloc(256 * 1024 + 1, 0x61));
+      expect(decryptSecretPayload({ ...base, iv: sealed.iv, payload: sealed.payload })).toBeUndefined();
+      const within = seal('Message Edit', secret, ids, Buffer.alloc(64 * 1024, 0x61));
+      expect(decryptSecretPayload({ ...base, iv: within.iv, payload: within.payload })).toHaveLength(64 * 1024);
+    });
+
+    it('no target id', () => {
+      const sealed = seal('Message Edit', secret, { ...ids, target: '' }, Buffer.from('x'));
+      expect(decryptSecretPayload({ ...base, iv: sealed.iv, payload: sealed.payload, targetId: '' })).toBeUndefined();
+    });
+
+    it('no candidate ids', () => {
+      expect(decryptSecretPayload({ ...base, targetAuthors: [], modifiers: [] })).toBeUndefined();
     });
   });
 
