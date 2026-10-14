@@ -1,6 +1,8 @@
 package com.rmyndharis.openwa;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,6 +11,7 @@ import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.http.HttpTransport;
 import com.rmyndharis.openwa.model.SuccessResult;
 import com.rmyndharis.openwa.support.MockTransport;
+import java.net.ConnectException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -74,5 +77,28 @@ class ConfigTest {
         OpenWAError e = assertThrows(OpenWAError.class,
             () -> c.request(HttpMethod.GET, "/x", null, null, SuccessResult.class));
         assertTrue(e.getMessage().contains("Invalid request"));
+    }
+
+    @Test
+    void rejectsApiKeyWithNonAsciiCharacterWithoutEchoingIt() {
+        // A zero-width space is a common copy artifact; the JDK would quote the whole key when it
+        // refused the header, so the key is refused here and never repeated.
+        String key = "owa_k1_0123456789abcdef\u200b";
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> ClientConfig.builder().baseUrl("http://h").apiKey(key).build());
+        assertFalse(e.getMessage().contains("owa_k1_0123456789abcdef"));
+    }
+
+    @Test
+    void transportFailureWithoutDetailTextNamesTheExceptionAndKeepsTheCause() {
+        ConnectException refused = new ConnectException();
+        HttpTransport down = req -> {
+            throw refused;
+        };
+        OpenWAClient c = new OpenWAClient(base().transport(down).build());
+        OpenWAError e = assertThrows(OpenWAError.class,
+            () -> c.request(HttpMethod.GET, "/x", null, null, SuccessResult.class));
+        assertTrue(e.getMessage().endsWith(": ConnectException"), e.getMessage());
+        assertSame(refused, e.getCause());
     }
 }

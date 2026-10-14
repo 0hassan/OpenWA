@@ -214,6 +214,12 @@ public final class OpenWAClient {
                 : gson;
     }
 
+    /** A refused connection carries no detail text; name the exception class instead of printing "null". */
+    private static String reason(Exception e) {
+        String message = e.getMessage();
+        return message != null ? message : e.getClass().getSimpleName();
+    }
+
     private HttpResponseData execute(HttpMethod method, String path, Object query, Object body) {
         return execute(method, path, query, body, null);
     }
@@ -242,14 +248,14 @@ public final class OpenWAClient {
             // A timeout surfaces as OpenWATimeoutError (unchecked) and propagates.
             res = transport.send(reqData);
         } catch (IOException e) {
-            throw new OpenWAError("Transport error — " + method + " " + path + ": " + e.getMessage());
+            throw new OpenWAError("Transport error — " + method + " " + path + ": " + reason(e), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new OpenWAError("Transport interrupted — " + method + " " + path);
+            throw new OpenWAError("Transport interrupted — " + method + " " + path, e);
         } catch (IllegalArgumentException e) {
             // e.g. a JDK-restricted header name in defaultHeaders, or a URI-illegal char — keep it
             // inside the OpenWAError contract instead of leaking a raw JDK exception to the caller.
-            throw new OpenWAError("Invalid request — " + method + " " + path + ": " + e.getMessage());
+            throw new OpenWAError("Invalid request — " + method + " " + path + ": " + reason(e));
         }
         if (res.status() < 200 || res.status() >= 300) {
             throw OpenWAApiError.fromResponse(res.status(), "", utf8(res.body()), method + " " + path, res.headers());

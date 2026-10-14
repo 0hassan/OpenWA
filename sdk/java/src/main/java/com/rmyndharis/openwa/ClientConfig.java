@@ -28,9 +28,9 @@ public final class ClientConfig {
         if (key == null || key.isEmpty()) {
             throw new IllegalArgumentException("OpenWAClient: apiKey is required");
         }
-        if (hasControlChar(key)) {
+        if (hasIllegalChar(key)) {
             throw new IllegalArgumentException(
-                "OpenWAClient: apiKey contains illegal characters (whitespace or control) — check for a stray newline");
+                "OpenWAClient: apiKey contains illegal characters (whitespace, control or non-ASCII) — check for a stray newline");
         }
         if (b.timeout != null && (b.timeout.isZero() || b.timeout.isNegative())) {
             throw new IllegalArgumentException("OpenWAClient: timeout must be positive");
@@ -50,10 +50,10 @@ public final class ClientConfig {
         this.transport = b.transport;
     }
 
-    private static boolean hasControlChar(String s) {
+    private static boolean hasIllegalChar(String s) {
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
-            if (c < 0x20 || c == 0x7f) {
+            if (c < 0x20 || c > 0x7e) {
                 return true;
             }
         }
