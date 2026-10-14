@@ -132,6 +132,23 @@ describe('IngressReconcilerService.sweep', () => {
     expect((await stored(id)).payload).toBeNull();
   });
 
+  it('replays the healthy rows behind one whose stored payload is not JSON', async () => {
+    // Only an imported or hand-edited row can hold such text. Read with the batch it failed the whole
+    // read, so no row behind it was ever replayed and every sweep failed the same way.
+    const unreadable = await insertEvent({ createdAt: minutesAgo(10) });
+    const healthy = await insertEvent();
+    await ds.query(`UPDATE ingress_events SET payload = '{oops' WHERE id = ?`, [unreadable]);
+
+    const stats = await service.sweep(OPTS);
+
+    expect(stats).toMatchObject({ replayed: 1, failed: 0 });
+    expect(enqueuedJobs().map(([, jobId]) => jobId)).toEqual(['d-2']);
+    expect((await stored(healthy)).dispatchState).toBe('dispatched');
+    expect(await ds.query(`SELECT "dispatchState", payload FROM ingress_events WHERE id = ?`, [unreadable])).toEqual([
+      { dispatchState: 'pending', payload: '{oops' },
+    ]);
+  });
+
   it('skips a pending row whose payload is gone (nothing to replay from) without burning its budget', async () => {
     const id = await insertEvent({ payload: null });
 

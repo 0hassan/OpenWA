@@ -149,8 +149,11 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // or one without a payload, is skipped without being written, so selecting it would hand the same
       // oldest rows back every sweep and starve every other instance's stranded deliveries. The join is
       // 1:1 (plugin_instances is unique on pluginId+instanceId), so limit() bounds rows, not join fan-out.
-      const rows = await this.events
+      // Ids only: a stored payload that does not parse (an imported or hand-edited row) fails the read of the
+      // whole batch, so no row behind it would ever be replayed. Each row is read on its own below.
+      const batch = await this.events
         .createQueryBuilder('e')
+        .select('e.id')
         .innerJoin(
           PluginInstance,
           'pi',
@@ -163,8 +166,20 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         .orderBy('e.createdAt', 'ASC')
         .limit(opts.batchSize)
         .getMany();
-      for (const row of rows) {
+      for (const { id } of batch) {
         if (this.stop.signal.aborted) break;
+        let row: IngressEvent | null;
+        try {
+          row = await this.events.findOneBy({ id });
+        } catch (err) {
+          this.logger.error('Ingress reconcile row failed', err instanceof Error ? err.message : String(err), {
+            id,
+            action: 'ingress_reconcile_row_unreadable',
+          });
+          stats.skipped++;
+          continue;
+        }
+        if (!row || row.dispatchState !== 'pending') continue; // settled or removed since the batch was read
         // A row whose latest attempt is still inside the grace window cools down between replays;
         // it keeps its batch slot (bounded by maxAttempts, so the leak is capped) but is not hit again.
         if (row.lastDispatchAt && row.lastDispatchAt > cutoff) {
@@ -231,12 +246,12 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
    * delivery that was never dispatched: one stranded across downtime longer than the window, one of an
    * instance disabled for that long, or any stranded row while the sweep is disabled. Same
    * DLQ-before-retire order as the replay budget path. A row the run could not settle, because its
-   * hand-off threw or its stored payload reads back as null, is not fetched again in this run, so every
-   * row is fetched at most once per run; one still 'pending' keeps its payload, which the prune keeps,
-   * and the next run retries it. Once 10 batches' worth of rows could not be settled, the run stops with
-   * one warning, which bounds a run against a store that rejects every write. A row whose payload reads
-   * back as null never settles on its own: ten batches of them ahead of healthy rows hold those rows
-   * back on every run until an operator removes them. Waits for a running sweep rather than skipping
+   * hand-off threw or its stored payload cannot be read or reads back as null, is not fetched again in
+   * this run, so every row is fetched at most once per run; one still 'pending' keeps its payload, which
+   * the prune keeps, and the next run retries it. Once 10 batches' worth of rows could not be settled,
+   * the run stops with one warning, which bounds a run against a store that rejects every write. A row
+   * whose payload is unreadable or reads back as null never settles on its own: ten batches of them
+   * ahead of healthy rows hold those rows back on every run until an operator removes them. Waits for a running sweep rather than skipping
    * the day's run; once shutdown begins, the wait ends with the sweep and the hand-off does nothing,
    * and a running hand-off stops at the next row, like a sweep.
    * A row whose instance or session was deleted, or whose queue job still owns the delivery, gets no
@@ -251,7 +266,11 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     const kept: string[] = [];
     try {
       for (;;) {
+        // Ids only. A stored payload that does not parse (an imported or hand-edited row) fails the read of
+        // every batch it sits in, so reading the payloads here would hold all rows behind it back on every
+        // run. Each payload is read on its own below, where such a row is kept like any other failure.
         const rows = await this.events.find({
+          select: { id: true },
           where: {
             dispatchState: 'pending',
             createdAt: LessThan(cutoff),
@@ -261,11 +280,24 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           order: { createdAt: 'ASC' },
           take: batchSize,
         });
-        for (const row of rows) {
+        for (const { id } of rows) {
           // A synchronous database driver (the SQLite default) answers every statement at once, so without
           // this the pass over a large backlog never lets a timer, request or keep-alive run.
           await yieldToEventLoop();
           if (this.stop.signal.aborted) return retired;
+          let row: IngressEvent | null;
+          try {
+            row = await this.events.findOneBy({ id });
+          } catch (err) {
+            kept.push(id);
+            this.logger.error(
+              'Failed to read an undispatched ingress event; kept for the next run',
+              err instanceof Error ? err.message : String(err),
+              { id, action: 'ingress_event_retention_unreadable' },
+            );
+            continue;
+          }
+          if (!row || row.dispatchState !== 'pending') continue; // settled or removed since the batch was read
           if (!hasPayload(row)) {
             kept.push(row.id);
             continue;

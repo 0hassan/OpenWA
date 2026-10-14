@@ -355,6 +355,27 @@ describe('IntegrationRetentionService.pruneOlderThan with undispatched events', 
     });
   });
 
+  it('hands off the healthy rows behind one whose stored payload is not JSON', async () => {
+    // Only an imported or hand-edited row can hold such text. Read with the batch it failed the whole
+    // read, so nothing behind it was ever dead-lettered and every run failed the same way.
+    await insertEvent('unreadable', { createdAt: daysAgo(10) });
+    await insertEvent('healthy-1', {});
+    await insertEvent('healthy-2', {});
+    await ds.query(`UPDATE ingress_events SET payload = '{oops' WHERE id = 'unreadable'`);
+
+    expect(await service.pruneOlderThan(7, 90)).toEqual({ events: 0, failures: 0 });
+
+    expect(await events.findOneByOrFail({ id: 'healthy-1' })).toMatchObject({ dispatchState: 'failed', payload: null });
+    expect(await events.findOneByOrFail({ id: 'healthy-2' })).toMatchObject({ dispatchState: 'failed', payload: null });
+    expect((await failures.find()).map(row => row.deliveryId).sort()).toEqual(['d-healthy-1', 'd-healthy-2']);
+    // Kept for an operator to remove: neither settled nor deleted, and the next run still moves on.
+    expect(await ds.query(`SELECT "dispatchState", payload FROM ingress_events WHERE id = 'unreadable'`)).toEqual([
+      { dispatchState: 'pending', payload: '{oops' },
+    ]);
+    expect(await service.pruneOlderThan(7, 90)).toEqual({ events: 2, failures: 0 });
+    expect(await events.count()).toBe(1);
+  });
+
   it('retires the payload without a second dead letter when the live path already wrote one', async () => {
     await insertEvent('inline-failed', { dispatchAttempts: 1 });
     await failures.save({
