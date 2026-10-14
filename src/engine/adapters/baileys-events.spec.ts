@@ -1,3 +1,4 @@
+import { createCipheriv, createHmac } from 'node:crypto';
 import { BaileysEvents, type BaileysEventsHost } from './baileys-events';
 import { createLogger } from '../../common/services/logger.service';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
@@ -987,5 +988,311 @@ describe('BaileysEvents event RSVPs (event.response)', () => {
     await flush();
 
     expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ responderId: phone }));
+  });
+});
+
+/**
+ * WhatsApp sends a contact's edit, and a reaction in some chats, encrypted under the secret of the message
+ * it changes. These tests seal their payloads with the library's own key construction (see
+ * baileys-secret-payload.spec.ts) and let the stub's protobuf decode read JSON, which is the only part
+ * the real library supplies.
+ */
+describe('BaileysEvents encrypted edits and reactions', () => {
+  const group = '120363000000000001@g.us';
+  const author = '39900313301142@lid';
+  const reactor = '195700218425410@lid';
+  const secret = Buffer.alloc(32, 0x42);
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+
+  const protoStub = {
+    Message: {
+      SecretEncryptedMessage: { SecretEncType: { UNKNOWN: 0, EVENT_EDIT: 1, MESSAGE_EDIT: 2 } },
+      ProtocolMessage: { Type: { REVOKE: 0, MESSAGE_EDIT: 14 } },
+      decode: (bytes: Uint8Array): unknown => JSON.parse(Buffer.from(bytes).toString()),
+      ReactionMessage: { decode: (bytes: Uint8Array): unknown => JSON.parse(Buffer.from(bytes).toString()) },
+    },
+  };
+  const lib = { ...libStub, proto: protoStub } as unknown as Awaited<ReturnType<BaileysEventsHost['loadLib']>>;
+
+  function seal(
+    label: 'Message Edit' | 'Enc Reaction',
+    ids: { target: string; author: string; modifier: string },
+    plain: object,
+    withSecret: Buffer = secret,
+  ): { encPayload: Buffer; encIv: Buffer } {
+    const prk = createHmac('sha256', Buffer.alloc(32)).update(withSecret).digest();
+    const info = Buffer.from(`${ids.target}${ids.author}${ids.modifier}${label}`);
+    const key = createHmac('sha256', prk)
+      .update(Buffer.concat([info, Buffer.from([1])]))
+      .digest();
+    const iv = Buffer.alloc(12, 5);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const body = Buffer.concat([
+      cipher.update(Buffer.from(JSON.stringify(plain))),
+      cipher.final(),
+      cipher.getAuthTag(),
+    ]);
+    return { encPayload: body, encIv: iv };
+  }
+
+  const original = (overrides: Record<string, unknown> = {}): WAMessage =>
+    ({
+      key: { id: 'ORIG1', remoteJid: group, participant: author, fromMe: false },
+      messageTimestamp: 1_786_000_000,
+      message: { conversation: 'old text', messageContextInfo: { messageSecret: secret.toString('base64') } },
+      ...overrides,
+    }) as unknown as WAMessage;
+
+  const editPlain = {
+    protocolMessage: {
+      type: 14,
+      key: { id: 'ORIG1' },
+      editedMessage: { conversation: 'new text' },
+      timestampMs: 1786000000123,
+    },
+  };
+
+  function editEnvelope(
+    overrides: {
+      participant?: string;
+      fromMe?: boolean;
+      sealed?: object;
+      type?: unknown;
+      target?: string;
+      remoteJid?: string;
+    } = {},
+  ): WAMessage {
+    const participant = overrides.participant ?? author;
+    const sealed =
+      overrides.sealed ?? seal('Message Edit', { target: 'ORIG1', author, modifier: participant }, editPlain);
+    return {
+      key: { id: 'ENV1', remoteJid: overrides.remoteJid ?? group, participant, fromMe: overrides.fromMe ?? false },
+      messageTimestamp: 1_786_000_100,
+      message: {
+        secretEncryptedMessage: {
+          targetMessageKey: { id: overrides.target ?? 'ORIG1', remoteJid: group, fromMe: true },
+          ...sealed,
+          secretEncType: overrides.type ?? 2,
+        },
+      },
+    } as unknown as WAMessage;
+  }
+
+  function reactionEnvelope(text: string, overrides: { remoteJid?: string; sealed?: object } = {}): WAMessage {
+    const sealed =
+      overrides.sealed ??
+      seal('Enc Reaction', { target: 'ORIG1', author, modifier: reactor }, { text, senderTimestampMs: 1786000000999 });
+    return {
+      key: { id: 'REACT1', remoteJid: overrides.remoteJid ?? group, participant: reactor, fromMe: false },
+      messageTimestamp: 1_786_000_200,
+      message: {
+        encReactionMessage: { targetMessageKey: { id: 'ORIG1', remoteJid: group, fromMe: false }, ...sealed },
+      },
+    };
+  }
+
+  function setup(extra: Partial<BaileysEventsHost> = {}, stored: WAMessage | null = original()) {
+    const onMessageEdited = jest.fn();
+    const onMessageReaction = jest.fn();
+    const onMessage = jest.fn();
+    const recordMessageEdit = jest.fn();
+    const events = new BaileysEvents(
+      makeHost({
+        loadLib: () => Promise.resolve(lib),
+        getStoredMessage: (id: string) => Promise.resolve(id === 'ORIG1' ? stored : null),
+        getOnMessageEdited: () => onMessageEdited,
+        getOnMessageReaction: () => onMessageReaction,
+        getOnMessage: () => onMessage,
+        recordMessageEdit,
+        ...extra,
+      }),
+    );
+    return { events, onMessageEdited, onMessageReaction, onMessage, recordMessageEdit };
+  }
+
+  it("applies a contact's encrypted edit of a stored message, as the plain protocol message would be", async () => {
+    const { events, onMessageEdited, onMessage, recordMessageEdit } = setup();
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledTimes(1);
+    expect(onMessageEdited).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'ORIG1', body: 'new text', chatId: group, senderId: author }),
+    );
+    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text');
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it('reads the edit of a 1:1 message, whose key names the partner by chat and leaves the participant empty', async () => {
+    const chat = '262813461250071@lid';
+    const stored = original({ key: { id: 'ORIG1', remoteJid: chat, participant: '', fromMe: false } });
+    const { events, onMessageEdited } = setup({}, stored);
+    const sealed = seal('Message Edit', { target: 'ORIG1', author: chat, modifier: chat }, editPlain);
+    const envelope = editEnvelope({ sealed, remoteJid: chat, participant: '' });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [envelope] });
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
+  });
+
+  it("reads an edit the account made from its phone, under the account's own id", async () => {
+    const self = '6280000000000@s.whatsapp.net';
+    const stored = original({ key: { id: 'ORIG1', remoteJid: group, fromMe: true } });
+    const { events, onMessageEdited } = setup(
+      {
+        getSocketOrNull: () => ({ user: { id: '6280000000000:12@s.whatsapp.net', lid: '5550001:12@lid' } }) as WASocket,
+      },
+      stored,
+    );
+    const sealed = seal('Message Edit', { target: 'ORIG1', author: self, modifier: self }, editPlain);
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope({ sealed, fromMe: true })] });
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', fromMe: true }));
+  });
+
+  it('reads an edit of a message that is still being processed, with the secret that copy carries', async () => {
+    // The original's repeat-delivery check never settles until released, which keeps it in flight; the
+    // edit's own read of the store answers nothing.
+    let release: (stored: WAMessage | null) => void = () => undefined;
+    let reads = 0;
+    const getStoredMessage = (id: string): Promise<WAMessage | null> => {
+      if (id !== 'ORIG1') return Promise.resolve(null);
+      reads += 1;
+      return reads === 1 ? new Promise(resolve => (release = resolve)) : Promise.resolve(null);
+    };
+    const { events, onMessageEdited } = setup({ getStoredMessage });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
+    release(null);
+    await flush();
+  });
+
+  describe('leaves an encrypted edit unapplied when', () => {
+    it.each([
+      ['another member sealed it for the message', () => editEnvelope({ participant: reactor })],
+      [
+        'its payload was sealed under another secret',
+        () =>
+          editEnvelope({
+            sealed: seal('Message Edit', { target: 'ORIG1', author, modifier: author }, editPlain, Buffer.alloc(32, 1)),
+          }),
+      ],
+      ['it is an edit of an event', () => editEnvelope({ type: 1 })],
+      [
+        'it names a message that is not stored',
+        () =>
+          editEnvelope({
+            target: 'GONE',
+            sealed: seal('Message Edit', { target: 'GONE', author, modifier: author }, editPlain),
+          }),
+      ],
+      [
+        'what it decrypts to names another message than the one it targets',
+        () =>
+          editEnvelope({
+            sealed: seal(
+              'Message Edit',
+              { target: 'ORIG1', author, modifier: author },
+              {
+                protocolMessage: { ...editPlain.protocolMessage, key: { id: 'SOMETHING_ELSE' } },
+              },
+            ),
+          }),
+      ],
+      [
+        'what it decrypts to is not an edit',
+        () =>
+          editEnvelope({
+            sealed: seal(
+              'Message Edit',
+              { target: 'ORIG1', author, modifier: author },
+              {
+                protocolMessage: { ...editPlain.protocolMessage, type: 0 },
+              },
+            ),
+          }),
+      ],
+      ['it targets a message of another chat', () => editEnvelope({ remoteJid: '120363000000000002@g.us' })],
+    ])('%s', async (_name, build) => {
+      const { events, onMessageEdited, onMessage, recordMessageEdit } = setup();
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [build()] });
+      await flush();
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(recordMessageEdit).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+    });
+
+    it('the message store cannot be read', async () => {
+      const { events, onMessageEdited } = setup({ getStoredMessage: () => Promise.reject(new Error('store down')) });
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+      await flush();
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+    });
+
+    it('the target carries no secret', async () => {
+      const { events, onMessageEdited } = setup({}, original({ message: { conversation: 'old text' } }));
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+      await flush();
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+    });
+  });
+
+  it('reports a reaction a member sent encrypted, and its removal', async () => {
+    const { events, onMessageReaction } = setup();
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [reactionEnvelope('👍')] });
+    events.handleMessagesUpsert({ type: 'notify', messages: [reactionEnvelope('')] });
+    await flush();
+
+    expect(onMessageReaction).toHaveBeenCalledTimes(2);
+    expect(onMessageReaction).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ messageId: 'ORIG1', chatId: group, reaction: '👍', senderId: reactor }),
+    );
+    expect(onMessageReaction).toHaveBeenNthCalledWith(2, expect.objectContaining({ reaction: '', senderId: reactor }));
+  });
+
+  it('drops an encrypted reaction that names a message of another chat, as a plain one is', async () => {
+    const { events, onMessageReaction } = setup();
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [reactionEnvelope('👍', { remoteJid: '120363000000000002@g.us' })],
+    });
+    await flush();
+
+    expect(onMessageReaction).not.toHaveBeenCalled();
+  });
+
+  it('drops an encrypted reaction sealed under another secret', async () => {
+    const { events, onMessageReaction } = setup();
+    const sealed = seal(
+      'Enc Reaction',
+      { target: 'ORIG1', author, modifier: reactor },
+      { text: '👍' },
+      Buffer.alloc(32, 9),
+    );
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [reactionEnvelope('👍', { sealed })] });
+    await flush();
+
+    expect(onMessageReaction).not.toHaveBeenCalled();
   });
 });

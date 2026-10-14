@@ -35,6 +35,7 @@ import {
 } from './baileys-message-mapper';
 import { buildEditedMessage } from './message-mapper';
 import { toUnixSeconds } from './baileys-history';
+import { bytesOf, decryptSecretPayload, messageSecretOf, senderForms, withoutDevice } from './baileys-secret-payload';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { CallNotFoundError } from '../../common/errors/call-not-found.error';
 import {
@@ -300,10 +301,14 @@ export class BaileysEvents {
   static readonly DELETED_FOR_EVERYONE_LIMIT = 5_000;
 
   /**
-   * Inbound messages still being processed, by id, with the key of the latest delivery, so an edit or
-   * delete of one waits for its store write and a delete can be checked against its target meanwhile.
+   * Inbound messages still being processed, by id, with the key and content of the latest delivery, so
+   * an edit or delete of one waits for its store write, a delete can be checked against its target
+   * meanwhile, and an encrypted edit finds the secret of an original that is not stored yet.
    */
-  private readonly inboundInFlight = new Map<string, { key: WAMessageKey; done: Promise<void> }>();
+  private readonly inboundInFlight = new Map<
+    string,
+    { key: WAMessageKey; message: WAMessage['message']; done: Promise<void> }
+  >();
 
   /**
    * Ids of messages deleted for everyone, oldest first. The stored copy is emptied too, but that can
@@ -447,6 +452,7 @@ export class BaileysEvents {
         // a change waits for every delivery in flight, not only the latest.
         const tracked = {
           key: msg.key,
+          message: msg.message,
           done: Promise.all([this.inboundInFlight.get(id)?.done, processed]).then(() => undefined),
         };
         this.inboundInFlight.set(id, tracked);
@@ -549,8 +555,18 @@ export class BaileysEvents {
       // type drives routing here AND mapMessage. The protocol and reaction branches below read the
       // normalized content too: a client wraps an edit in `editedMessage`, and `ephemeralMessage` can hold
       // a revoke or a reaction just as well, so the raw root does not always carry them.
-      const normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
-      const contentType = b.getContentType(normalizedRoot);
+      let normalizedRoot = b.normalizeMessageContent(msg.message ?? undefined) ?? msg.message ?? undefined;
+      let contentType = b.getContentType(normalizedRoot);
+      // A contact's edit, and a reaction in some chats, arrive encrypted under the secret of the message
+      // they change. Read with the stored original's secret, they are handled below as the plain
+      // protocol or reaction message they stand for; one that cannot be read stays dropped as non-content.
+      if (contentType === 'secretEncryptedMessage' || contentType === 'encReactionMessage') {
+        const revealed = await this.revealEncryptedModification(b, msg, normalizedRoot, contentType);
+        if (revealed) {
+          normalizedRoot = revealed.content;
+          contentType = revealed.contentType;
+        }
+      }
 
       // --- protocolMessage REVOKE: don't emit onMessage ---
       if (contentType === 'protocolMessage') {
@@ -800,6 +816,106 @@ export class BaileysEvents {
         error: err instanceof Error ? err.message : String(err),
       });
       return null;
+    }
+  }
+
+  /**
+   * Read an edit or a reaction WhatsApp sent encrypted under the secret of the message it changes (see
+   * baileys-secret-payload.ts). The secret comes from the target's stored copy, or from the copy still
+   * being processed, and the pair of ids it is keyed by from that target's author and this message's
+   * sender, so a payload only authenticates when the sender really is who the key says. The result is
+   * the plain message to route as if it had arrived that way, and every guard of that path applies to
+   * it: its author and chat are checked against the stored target afterwards. Anything that cannot be
+   * read (an event edit, no stored target, a payload that does not authenticate) answers undefined and
+   * stays dropped. Never throws.
+   */
+  private async revealEncryptedModification(
+    b: typeof BaileysLib,
+    msg: WAMessage,
+    content: WAMessage['message'],
+    contentType: string,
+  ): Promise<
+    { content: NonNullable<WAMessage['message']>; contentType: 'protocolMessage' | 'reactionMessage' } | undefined
+  > {
+    try {
+      const isEdit = contentType === 'secretEncryptedMessage';
+      const encrypted = isEdit ? content?.secretEncryptedMessage : content?.encReactionMessage;
+      const targetKey = encrypted?.targetMessageKey;
+      const targetId = targetKey?.id;
+      const payload = bytesOf(encrypted?.encPayload);
+      const iv = bytesOf(encrypted?.encIv);
+      if (!encrypted || !targetKey || !targetId || !payload || !iv) return undefined;
+      if (isEdit) {
+        // An edit of an event arrives the same way and is not read here. The enum is a number on a live
+        // message and its name on one read back from the store.
+        const type = (encrypted as { secretEncType?: unknown }).secretEncType;
+        const editType = b.proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT;
+        if (type !== editType && type !== 'MESSAGE_EDIT') return undefined;
+      }
+      const stored = await this.readStoredMessage(
+        targetId,
+        'reading the message an encrypted edit or reaction targets',
+      );
+      const inFlight = this.inboundInFlight.get(targetId);
+      const original = stored ?? (inFlight ? { key: inFlight.key, message: inFlight.message } : undefined);
+      const secret = messageSecretOf(original?.message);
+      if (!original || !secret) {
+        this.host.logger.debug('Cannot read an encrypted edit or reaction: the message it targets is not stored', {
+          action: 'baileys_encrypted_unreadable',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return undefined;
+      }
+      const user = this.host.getSocketOrNull()?.user;
+      const own = [user?.id, user?.lid].filter((jid): jid is string => !!jid).map(withoutDevice);
+      // A lid is also tried as the phone number it maps to: a message written under phone addressing can
+      // be edited under lid addressing, and the key names each party the way its own client did.
+      const withPhone = (forms: string[]): string[] =>
+        forms.flatMap(jid => {
+          const neutral = jid.endsWith('@lid') ? this.host.toNeutralJid(jid) : '';
+          return neutral.endsWith('@c.us') ? [jid, `${userPart(neutral)}@s.whatsapp.net`] : [jid];
+        });
+      const plaintext = decryptSecretPayload({
+        kind: isEdit ? 'edit' : 'reaction',
+        secret,
+        iv,
+        payload,
+        targetId,
+        targetAuthors: withPhone(senderForms(original.key, own)),
+        modifiers: withPhone(senderForms(msg.key, own)),
+      });
+      if (!plaintext) {
+        this.host.logger.debug('An encrypted edit or reaction did not authenticate against its target', {
+          action: 'baileys_encrypted_unauthentic',
+          msgId: msg.key.id ?? 'unknown',
+          targetId,
+        });
+        return undefined;
+      }
+      if (isEdit) {
+        const protocolMessage = b.proto.Message.decode(plaintext).protocolMessage;
+        // The decrypted message must name the target the secret was taken from, and be an edit.
+        if (
+          protocolMessage?.type !== b.proto.Message.ProtocolMessage.Type.MESSAGE_EDIT ||
+          protocolMessage.key?.id !== targetId
+        ) {
+          return undefined;
+        }
+        return { content: { protocolMessage }, contentType: 'protocolMessage' };
+      }
+      const reaction = b.proto.Message.ReactionMessage.decode(plaintext);
+      return {
+        content: { reactionMessage: { key: targetKey, text: reaction.text ?? '' } },
+        contentType: 'reactionMessage',
+      };
+    } catch (error) {
+      this.host.logger.debug('Could not read an encrypted edit or reaction', {
+        action: 'baileys_encrypted_failed',
+        msgId: msg.key.id ?? 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
     }
   }
 

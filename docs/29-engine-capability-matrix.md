@@ -978,6 +978,11 @@ adapter boundary — none silently stubs.
   and is never told the outcome. So a pin refused because the account is not a group admin, or an
   edit refused because the target is not a text message, answers `403` on whatsapp-web.js and `200`
   on Baileys.
+- **Inbound edits and reactions (baileys).** WhatsApp sends a contact's edit, and a reaction in some
+  chats, encrypted under the secret of the message it changes, which the library does not decrypt. The
+  adapter reads them with the stored copy of that message (the session's message store, bounded by
+  `BAILEYS_MESSAGE_STORE_LIMIT`), so an edit or reaction of a message the store no longer holds is not
+  delivered. whatsapp-web.js receives both already decrypted from WhatsApp Web.
 - **`muteChat` addressing.** whatsapp-web.js resolves the chat before writing and answers `400` for a
   chatId it cannot resolve; Baileys writes the app-state patch without a lookup and answers `200` for
   a chat that does not exist. `pinChat` splits the same way.

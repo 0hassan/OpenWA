@@ -115,6 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Leave no truncated archive in `BACKUP_DIR` when the final tar step of `backup.sh` fails, for example on a full volume.
 - Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
+- Apply a contact's message edit and a member's reaction that WhatsApp sends encrypted on Baileys, which were dropped, so `message.edited` and `message.reaction` fire for them and the stored message takes the edited text.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Emit Baileys API reaction updates, including reaction removal.
 - Apply current receiver configuration and session ownership to every webhook delivery attempt.
