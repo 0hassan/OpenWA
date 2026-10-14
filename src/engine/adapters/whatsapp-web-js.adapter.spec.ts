@@ -5872,6 +5872,24 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     });
   });
 
+  // The comparison in the page and the one that plans the download are each one character from the wrong one.
+  it('inlines a payload of exactly the cap and drops one a byte over it', async () => {
+    pageServing(1000);
+    await expect(cap(understated(runInPage))).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      data: Buffer.alloc(1000).toString('base64'),
+    });
+
+    pageServing(1001);
+    await expect(cap(understated(runInPage))).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      omitted: true,
+      sizeBytes: 1001,
+    });
+  });
+
   it('drops a payload over the cap by its received length even when the page reports it small', async () => {
     const data = Buffer.alloc(2000).toString('base64');
     const page = jest.fn().mockResolvedValue({ mimetype: 'video/mp4', data, sizeBytes: 10 });
@@ -5918,24 +5936,6 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     );
   });
 
-  // puppeteer ships downloadMediaInPage into the page as Function#toString(), so it can reach nothing of this
-  // module: a constant or helper it closes over resolves in Node, where every test above runs it, and throws
-  // ReferenceError in the page, where every download then fails. The source is compiled from the file with the
-  // project's compiler options and run in a context holding only the page's window and AbortController. The
-  // loaded copy is not used: coverage instruments it with counters the page does not have.
-  function shippedToPage(): typeof downloadMediaInPage {
-    const root = path.join(__dirname, '..', '..', '..');
-    const { config } = ts.readConfigFile(path.join(root, 'tsconfig.json'), name => fs.readFileSync(name, 'utf8')) as {
-      config: { compilerOptions: Record<string, unknown> };
-    };
-    const { options } = ts.convertCompilerOptionsFromJson({ ...config.compilerOptions, module: 'CommonJS' }, root);
-    const file = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
-    const start = file.indexOf('async function downloadMediaInPage');
-    expect(start).toBeGreaterThan(-1);
-    const compiled = ts.transpileModule(file.slice(start, file.indexOf('\n}\n', start) + 2), {
-      compilerOptions: options,
-    }).outputText;
-    // Declared alongside whatever helpers the compiler hoisted, then sent as its own text, as puppeteer does.
   // WhatsApp Web rejects with more than errors: a bare string, or an object that carries only a status
   // (upstream reads e.status === 404), and the operator reads the warning that names it.
   it.each([
@@ -5955,6 +5955,24 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(expected);
   });
 
+  // puppeteer ships downloadMediaInPage into the page as Function#toString(), so it can reach nothing of this
+  // module: a constant or helper it closes over resolves in Node, where every test above runs it, and throws
+  // ReferenceError in the page, where every download then fails. The source is compiled from the file with the
+  // project's compiler options and run in a context holding only the page's window and AbortController. The
+  // loaded copy is not used: coverage instruments it with counters the page does not have.
+  function shippedToPage(): typeof downloadMediaInPage {
+    const root = path.join(__dirname, '..', '..', '..');
+    const { config } = ts.readConfigFile(path.join(root, 'tsconfig.json'), name => fs.readFileSync(name, 'utf8')) as {
+      config: { compilerOptions: Record<string, unknown> };
+    };
+    const { options } = ts.convertCompilerOptionsFromJson({ ...config.compilerOptions, module: 'CommonJS' }, root);
+    const file = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
+    const start = file.indexOf('async function downloadMediaInPage');
+    expect(start).toBeGreaterThan(-1);
+    const compiled = ts.transpileModule(file.slice(start, file.indexOf('\n}\n', start) + 2), {
+      compilerOptions: options,
+    }).outputText;
+    // Declared alongside whatever helpers the compiler hoisted, then sent as its own text, as puppeteer does.
     const declared = vm.runInNewContext(`${compiled}\n;downloadMediaInPage`) as { toString(): string };
     return vm.runInNewContext(`(${declared.toString()})`, {
       window: (globalThis as unknown as { window: unknown }).window,
@@ -6030,6 +6048,7 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
         'sizeBytes',
         'name',
         'message',
+        'constructor',
         'Debug',
         'VERSION',
       ].sort(),
@@ -6048,7 +6067,6 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
  * into one value (`Client.js:1558`), and its typings claim `Promise<Message>` — so nothing upstream of
  * these tests catches a regression here.
  */
-        'constructor',
 describe('WhatsAppWebJsAdapter send-result contract', () => {
   const readyAdapter = (client: unknown): WhatsAppWebJsAdapter => {
     const adapter = new WhatsAppWebJsAdapter({ sessionId: 's', sessionDataPath: './data/sessions', puppeteer: {} });

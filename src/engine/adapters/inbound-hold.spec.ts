@@ -680,6 +680,63 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
     },
   );
 
+  it('keeps its slot while the processing of a downloaded message is parked, across a reconnect', async () => {
+    process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '5000';
+    const h = heldProjector();
+    const { client } = build(h.callbacks);
+    const quoted = deferred<{ id: { _serialized: string }; body: string }>();
+    const first = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    client.emit('message', {
+      ...incoming('m1', '628111@c.us', first),
+      hasQuotedMsg: true,
+      getQuotedMessage: jest.fn(() => quoted.promise),
+    });
+    await flush();
+    // The payload is downloaded; the processing waits for the quoted message, which a held message bounds
+    // only by MEDIA_DOWNLOAD_TIMEOUT_MS.
+    expect(first).toHaveBeenCalledTimes(1);
+
+    // The engine is retired and its pending turn dropped, so only the hold on the processing keeps the slot.
+    const fresh = {} as IWhatsAppEngine;
+    h.engines.set('s1', fresh);
+    const next = build(h.callbacksFor(fresh));
+    const second = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+    next.client.emit('message', incoming('m2', '628222@c.us', second));
+    await flush();
+    expect(second).not.toHaveBeenCalled();
+
+    quoted.resolve({ id: { _serialized: 'q' }, body: 'quoted' });
+    await flush();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('plans the download of a declared size at the cap, and of none above it', () => {
+    process.env.MEDIA_DOWNLOAD_MAX_BYTES = '1000';
+    process.env.MEDIA_DOWNLOAD_ENABLED = 'true';
+    const declared = (size: number): WwebjsMessage => ({ hasMedia: true, _data: { size } }) as unknown as WwebjsMessage;
+
+    expect(plannedInboundDownload(declared(1000))).toBe(true);
+    expect(plannedInboundDownload(declared(1001))).toBe(false);
+  });
+
+  it('ignores message_create for a message the account did not send, which has its own message event', async () => {
+    const h = heldProjector();
+    const callbacks = {
+      ...h.callbacks,
+      admitInbound: jest.fn(h.callbacks.admitInbound),
+      onMessageCreate: jest.fn(),
+    };
+    const { client } = build(callbacks);
+    const page = jest.fn().mockResolvedValue({ mimetype: 'image/png', data: 'QUJD' });
+
+    client.emit('message_create', incoming('m1', '628111@c.us', page));
+    await flush();
+
+    expect(callbacks.admitInbound).not.toHaveBeenCalled();
+    expect(callbacks.onMessageCreate).not.toHaveBeenCalled();
+    expect(page).not.toHaveBeenCalled();
+  });
+
   it('keeps the slot of a timed-out page download until the page settles', async () => {
     process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '100';
     // The adapter's limiter gets a spare slot, so only the room (one slot) can hold the second download.
