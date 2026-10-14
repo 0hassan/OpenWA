@@ -3660,7 +3660,8 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
   it('logs an own-send echo whose base cannot be built instead of dropping it silently', async () => {
     // The echo runs in an async function whose rejection holdWhileProcessing consumes, so an unreadable
     // `to` (a WhatsApp Web build renaming the field) vanished without a log line or the unhandled-rejection
-    // metric. The incoming handler logs the same defect; the echo must too, and still release its ticket.
+    // metric. The incoming handler logs the same defect; the echo must too. It is not admitted either, since
+    // its chat is unknown, so there is no ticket to settle.
     const adapter = new WhatsAppWebJsAdapter({
       sessionId: 'sess-echo-unreadable',
       sessionDataPath: './data/sessions',
@@ -3694,6 +3695,7 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     await new Promise(r => setImmediate(r));
 
     expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(admitInbound).not.toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalledWith('Error processing outgoing message', expect.stringContaining('endsWith'));
   });
 

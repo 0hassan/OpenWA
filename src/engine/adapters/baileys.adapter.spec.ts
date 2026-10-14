@@ -291,10 +291,18 @@ describe('BaileysAdapter lifecycle & status', () => {
 
   it('blocks SVG decoding before the engine starts, whichever route reaches sharp first', async () => {
     // Sticker conversion and the thumbnail of every outbound image share one process-wide decoder, so the
-    // block cannot wait for the first sticker.
+    // block cannot wait for the first sticker, and it has to be in place before the socket exists.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+    const makeWASocket = jest.requireMock('@whiskeysockets/baileys').default as jest.Mock;
     const block = jest.spyOn(messagingModule, 'blockSvgDecoding').mockResolvedValue(undefined);
-    await newAdapter().initialize(noopCallbacks({}));
-    expect(block).toHaveBeenCalledTimes(1);
+    try {
+      await newAdapter().initialize(noopCallbacks({}));
+      expect(block).toHaveBeenCalledTimes(1);
+      expect(makeWASocket).toHaveBeenCalled();
+      expect(block.mock.invocationCallOrder[0]).toBeLessThan(makeWASocket.mock.invocationCallOrder[0]);
+    } finally {
+      block.mockRestore();
+    }
   });
 
   it('captures phone/pushName and fires onReady on connection open', async () => {
