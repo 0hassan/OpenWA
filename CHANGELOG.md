@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bound each webhook and ingress queue command at 2 s once Redis has connected, so a Redis that stops answering falls back to direct delivery and inline dispatch instead of holding every dispatch and ingress request.
 - Answer `400` for a send route's `chatId` or a bulk `batchId` over 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
+- MCP tools refuse a `chatId`, `fromChatId` or `toChatId` over 255 characters, as the send routes do, where PostgreSQL answered an internal tool error.
 - Index ingress dead letters by delivery id, so the reconciler's per-delivery checks stop scanning every dead letter of an instance; the first boot builds the index.
 - Replay stranded ingress events past one whose stored payload is not valid JSON, instead of failing every sweep on it.
 - Hand a chat back to the bot when the plugin instance that took it over is deleted, instead of silencing every other plugin on it.
