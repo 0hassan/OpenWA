@@ -114,7 +114,7 @@ export class OpenWAClient {
 
   /** Issue a raw request against the API. (Public for advanced use.) */
   request<T>(options: RequestOptions, idempotencyKey?: string): Promise<T> {
-    if (idempotencyKey !== undefined) {
+    if (idempotencyKey !== undefined && idempotencyKey !== null) {
       if (
         typeof idempotencyKey !== 'string' ||
         idempotencyKey.length < 1 ||

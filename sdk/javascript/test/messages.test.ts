@@ -58,6 +58,13 @@ describe('MessagesResource idempotency keys', () => {
     expect(t.lastCall!.body).toEqual(originalBody);
   });
 
+  it('treats a null key from an untyped caller as no key, as the Python and PHP SDKs do', async () => {
+    const t = new MockTransport().on('POST', /\/messages\/send-text$/, { body: { messageId: 'm', timestamp: 1 } });
+    const c = new OpenWAClient({ baseUrl: 'http://localhost', apiKey: 'k', fetch: t.asFetch() });
+    await c.messages.sendText('s', { chatId: 'c@c.us', text: 'hi' }, null as unknown as string);
+    expect(t.lastCall!.headers['idempotency-key']).toBeUndefined();
+  });
+
   it('overrides a mixed-case default without changing later calls', async () => {
     const t = new MockTransport().on('POST', /send-text$/, { body: { messageId: 'm', timestamp: 1 } });
     const headers = { 'iDeMpOtEnCy-KeY': 'default-key', 'X-Trace': 'trace' };
