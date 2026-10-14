@@ -1,3 +1,4 @@
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { Injectable, OnApplicationBootstrap, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
@@ -153,6 +154,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // that construct this service with the 4 prior args still compile; when absent, canonicalChatId
     // degrades to identity (no @lid resolution).
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
+    // The gateway-wide drain flag. The loader's own `shuttingDown` flips only when PluginsModule is
+    // destroyed, last of the global modules, so the boot restore would otherwise keep enabling plugins
+    // through the grace and every earlier destroy stage.
+    @Optional() private readonly shutdownService?: ShutdownService,
   ) {
     // Same default the `plugins.dir` key is built from, so this fallback cannot drift away from the
     // tree PluginStorageService keeps the registry and each plugin's ctx.storage in.
@@ -260,7 +265,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
     );
     for (let i = 0; i < restorable.length; i++) {
-      if (this.shuttingDown) {
+      if (this.shuttingDown || this.shutdownService?.isShuttingDown()) {
         this.logger.log(`Plugin restore stopped at ${i} of ${restorable.length} plugin(s): shutting down`, {
           action: 'plugin_restore_aborted',
         });

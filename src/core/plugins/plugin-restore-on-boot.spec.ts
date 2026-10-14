@@ -4,6 +4,7 @@ import * as path from 'path';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { PluginLoaderService } from './plugin-loader.service';
+import type { ShutdownService } from '../../common/services/shutdown.service';
 import { PluginStorageService } from './plugin-storage.service';
 import { HookManager } from '../hooks';
 import { PluginStatus, PluginType, type PluginManifest } from './plugin.interfaces';
@@ -176,6 +177,39 @@ describe('PluginLoaderService — restoring the operator enable decision across 
       expect.stringContaining('stopped at 1 of 2'),
       expect.objectContaining({ action: 'plugin_restore_aborted' }),
     );
+  });
+
+  it('stops restoring plugins once the gateway starts draining, before its own module is destroyed', async () => {
+    const second: PluginManifest = { ...manifest, id: 'ext-two', name: 'Ext Two' };
+    const secondDir = path.join(tmpDir, 'plugins', second.id);
+    fs.mkdirSync(secondDir, { recursive: true });
+    fs.writeFileSync(path.join(secondDir, 'manifest.json'), JSON.stringify(second));
+    fs.writeFileSync(path.join(secondDir, 'index.js'), 'module.exports = class {};');
+
+    const storage2 = new PluginStorageService(config);
+    // The drain flag flips at the signal; PluginsModule is destroyed last, long after.
+    let draining = false;
+    const shutdown = { isShuttingDown: () => draining };
+    const loader2 = new PluginLoaderService(
+      config,
+      new HookManager(),
+      storage2,
+      {} as unknown as ModuleRef,
+      undefined,
+      shutdown as unknown as ShutdownService,
+    );
+    loader2.loadPlugin(pluginDir);
+    loader2.loadPlugin(secondDir);
+    storage2.setPluginEnabledByOperator(manifest.id, true);
+    storage2.setPluginEnabledByOperator(second.id, true);
+    const enable = jest.spyOn(loader2, 'enablePlugin').mockImplementation(() => {
+      draining = true;
+      return Promise.resolve();
+    });
+
+    await loader2.onApplicationBootstrap();
+
+    expect(enable).toHaveBeenCalledTimes(1);
   });
 
   it('does not treat the shutdown teardown as the operator disabling the plugin', async () => {

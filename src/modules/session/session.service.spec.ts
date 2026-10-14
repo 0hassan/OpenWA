@@ -10001,6 +10001,22 @@ describe('SessionService', () => {
       return ownership;
     };
 
+    // A rejection here would make Nest skip every destroy hook after SessionModule's (webhook drain,
+    // queue worker close, usage flush, plugin onDisable), and the claims lapse with their lease anyway.
+    it('shuts down even when releasing the session claims fails', async () => {
+      const ownership = withAutoStartOwnership();
+      ownership.releaseAll.mockRejectedValueOnce(new Error('database is locked'));
+      const warn = jest.spyOn((service as unknown as { logger: { warn: jest.Mock } }).logger, 'warn');
+
+      await expect(service.onModuleDestroy()).resolves.toBeUndefined();
+
+      expect(ownership.releaseAll).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('Could not release the session claims'),
+        expect.objectContaining({ action: 'session_claim_release_failed', error: 'database is locked' }),
+      );
+    });
+
     // An init stalled on an unreachable WhatsApp Web settles only at its deadline (>= 60s), past
     // the kill deadline; the destroy is what ends it, so it cannot wait behind the run.
     it('destroys the engine of a launch in flight instead of waiting for its init to settle', async () => {

@@ -386,7 +386,17 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Released only after the engines are actually down, so a peer never claims a session this
     // process is still holding open. A start still in flight may own a browser the teardown could
     // not reach (one the bound above gave up on), so its claim is kept and lapses as after a hard kill.
-    await this.ownership?.releaseAll(this.startReservations.keys());
+    // A failed release is logged and not thrown: a rejection here makes Nest skip every destroy hook
+    // after this one (webhook drain, queue worker close, usage flush, plugin onDisable), and the claims
+    // lapse with their lease anyway.
+    try {
+      await this.ownership?.releaseAll(this.startReservations.keys());
+    } catch (error) {
+      this.logger.warn('Could not release the session claims at shutdown; they lapse with their lease', {
+        action: 'session_claim_release_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async create(dto: CreateSessionDto): Promise<Session> {
