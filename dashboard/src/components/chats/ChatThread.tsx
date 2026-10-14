@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
 import { useRole } from '../../hooks/useRole';
@@ -74,6 +74,42 @@ function ChatThread({
   // Reply, react, delete and prompt taps all need an operator key, like the composer; a viewer
   // would only reach a 403.
   const { canWrite } = useRole();
+
+  // The message actions sit behind hover, so a keyboard user reaches them through the bubble that carries
+  // them: the thread is one tab stop (the focused message, else the newest), the arrow keys move between
+  // messages, and the actions show while focus is inside the bubble (Chats.css).
+  const hasActions = useCallback(
+    (message: ChatMessageView) => canWrite && message.type !== 'revoked' && Boolean(message.waMessageId),
+    [canWrite],
+  );
+  const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
+  const tabStopId = useMemo(() => {
+    if (focusedMessageId && messages.some(m => m.id === focusedMessageId && hasActions(m))) return focusedMessageId;
+    for (let i = messages.length - 1; i >= 0; i--) if (hasActions(messages[i])) return messages[i].id;
+    return null;
+  }, [messages, focusedMessageId, hasActions]);
+  const onBubbleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Only the bubble itself: a key pressed on an action button, the reaction popover or a link keeps
+    // its own meaning.
+    if (event.target !== event.currentTarget) return;
+    const stops = Array.from(
+      messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-roving-message]') ?? [],
+    );
+    const at = stops.indexOf(event.currentTarget);
+    const target =
+      event.key === 'ArrowUp'
+        ? stops[at - 1]
+        : event.key === 'ArrowDown'
+          ? stops[at + 1]
+          : event.key === 'Home'
+            ? stops[0]
+            : event.key === 'End'
+              ? stops[stops.length - 1]
+              : undefined;
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+  };
 
   // "@<digits>" in a message body only ever means something once resolved against a participant
   // this thread has already seen post (see buildMentionNameMap) — recomputed only when the message
@@ -436,7 +472,17 @@ function ChatThread({
               data-wa-message-id={msg.waMessageId}
               data-scroll-anchor=""
             >
-              <div className="message-bubble-container">
+              <div
+                className="message-bubble-container"
+                {...(hasActions(msg)
+                  ? {
+                      'data-roving-message': '',
+                      tabIndex: tabStopId === msg.id ? 0 : -1,
+                      onFocus: () => setFocusedMessageId(msg.id),
+                      onKeyDown: onBubbleKeyDown,
+                    }
+                  : {})}
+              >
                 <div
                   className={`message-bubble ${isMe ? 'outgoing' : 'incoming'} ${msg.status} ${
                     isMediaMessage ? 'media-type' : ''
@@ -548,7 +594,7 @@ function ChatThread({
                   )}
                 </div>
 
-                {/* Message actions menu (hover). Every action addresses the message by its WhatsApp
+                {/* Message actions menu (hover, or focus inside the bubble). Every action addresses the message by its WhatsApp
                     id, so an optimistic bubble still on its local temp_ id (pending, or failed for
                     good) offers none: the gateway could never resolve it. */}
                 {canWrite && !isRevoked && Boolean(msg.waMessageId) && (

@@ -396,3 +396,55 @@ test('an archived sticker previews as an image and an archived voice note as aud
     URL.revokeObjectURL = revokeOriginal;
   }
 });
+
+// The message actions appear on hover, so a keyboard user reaches them through the bubble: one tab stop
+// for the thread (the focused message, else the newest) and the arrow keys between messages.
+test('the thread is one tab stop and the arrow keys move between messages that carry actions', () => {
+  const second: ChatMessageView = {
+    ...PROMPT,
+    id: 'db-2',
+    waMessageId: 'wamid.2',
+    body: 'Second',
+    metadata: undefined,
+  };
+  const noActions: ChatMessageView = {
+    ...PROMPT,
+    id: 'db-3',
+    waMessageId: undefined,
+    body: 'Third',
+    direction: 'outgoing',
+    status: 'pending',
+    metadata: undefined,
+  };
+  const { container } = renderThread('operator', [PROMPT, second, noActions]);
+  const stops = (): Array<string | null> =>
+    [...container.querySelectorAll<HTMLElement>('[data-roving-message]')].map(el => el.getAttribute('tabindex'));
+
+  // The bubble without a WhatsApp id offers no action, so it is no stop at all.
+  assert.equal(container.querySelectorAll('[data-roving-message]').length, 2);
+  // Nothing focused yet: the newest message that carries actions holds the tab stop.
+  assert.deepEqual(stops(), ['-1', '0']);
+
+  const bubbles = container.querySelectorAll<HTMLElement>('[data-roving-message]');
+  bubbles[1].focus();
+  rtl.fireEvent.keyDown(bubbles[1], { key: 'ArrowUp' });
+  assert.equal(document.activeElement, bubbles[0]);
+  assert.deepEqual(stops(), ['0', '-1']);
+
+  rtl.fireEvent.keyDown(bubbles[0], { key: 'ArrowDown' });
+  assert.equal(document.activeElement, bubbles[1]);
+  rtl.fireEvent.keyDown(bubbles[1], { key: 'Home' });
+  assert.equal(document.activeElement, bubbles[0]);
+  rtl.fireEvent.keyDown(bubbles[0], { key: 'End' });
+  assert.equal(document.activeElement, bubbles[1]);
+});
+
+test('a key pressed inside a message action keeps its own meaning', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const bubbles = container.querySelectorAll<HTMLElement>('[data-roving-message]');
+  const reply = bubbles[1].querySelector<HTMLElement>('.action-btn');
+  assert.ok(reply);
+  reply.focus();
+  rtl.fireEvent.keyDown(reply, { key: 'ArrowUp' });
+  assert.equal(document.activeElement, reply);
+});
