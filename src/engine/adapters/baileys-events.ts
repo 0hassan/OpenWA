@@ -104,6 +104,15 @@ const PROTOCOL_NOISE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The participant a live key names, or undefined when it names none. Baileys passes every live key
+ * through cleanMessage, which writes jidNormalizedUser(participant) back, and that is '' for the absent
+ * participant of a 1:1 chat. `??` keeps the empty string, which then reads as a sender that is nobody.
+ */
+export function keyParticipant(key: { participant?: string | null }): string | undefined {
+  return key.participant ? key.participant : undefined;
+}
+
+/**
  * Whether two ids provably name different chats or people. Each side is a jid plus the other-dialect
  * twin WhatsApp may send beside it (`remoteJidAlt`, `participantAlt`), compared neutralised, so a lid
  * the session can resolve matches its phone number. A lid it cannot resolve may still be the phone
@@ -609,7 +618,7 @@ export class BaileysEvents {
               id: pm.key?.id ?? '',
               remoteJid,
               fromMe: msg.key.fromMe === true,
-              participant: msg.key.participant ?? undefined,
+              participant: keyParticipant(msg.key),
               body: extractBaileysBody(normalizedEdited),
               contentType: editedContentType,
               isPtt: normalizedEdited.audioMessage?.ptt === true,
@@ -662,7 +671,7 @@ export class BaileysEvents {
           // its phone (fromMe) the reactor is the account itself. Group and status keys carry the
           // author as `participant`, own reactions included, which the edit branch reads the same way.
           senderId: this.host.toNeutralJid(
-            msg.key.participant ?? (msg.key.fromMe === true ? this.host.normalizedSelfJid() : remoteJid),
+            keyParticipant(msg.key) ?? (msg.key.fromMe === true ? this.host.normalizedSelfJid() : remoteJid),
           ),
         };
         this.host.getOnMessageReaction()?.(event);
@@ -963,7 +972,7 @@ export class BaileysEvents {
     const chatJid = envelope.remoteJid ?? eventKey.remoteJid;
     // Same rule as a reaction: a 1:1 key names the chat partner, so the account's own answer is
     // attributed to the account; group keys carry the responder as `participant`.
-    const responder = envelope.participant ?? (fromMe ? this.host.normalizedSelfJid() : chatJid);
+    const responder = keyParticipant(envelope) ?? (fromMe ? this.host.normalizedSelfJid() : chatJid);
     if (!responder) return;
     const event: EventResponseEvent = {
       eventMessageId: eventKey.id,
@@ -1678,7 +1687,7 @@ export class BaileysEvents {
         id: msg.key.id ?? '',
         remoteJid: msg.key.remoteJid!,
         fromMe: msg.key.fromMe === true,
-        participant: msg.key.participant ?? undefined,
+        participant: keyParticipant(msg.key),
         body,
         contentType,
         isPtt: normalized.audioMessage?.ptt === true,

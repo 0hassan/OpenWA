@@ -634,6 +634,76 @@ describe('BaileysEvents record of messages deleted for everyone', () => {
   });
 });
 
+describe('BaileysEvents live keys of a 1:1 chat', () => {
+  // Baileys runs every live key through cleanMessage, which leaves '' where a 1:1 key has no participant.
+  const partner = '6282222222222@s.whatsapp.net';
+  const self = '6280000000000@s.whatsapp.net';
+  const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
+
+  it.each([
+    ['the chat partner', false, partner],
+    ['the account', true, self],
+  ])('names %s as the reactor of a reaction whose participant is empty', async (_who, fromMe, expected) => {
+    const onMessageReaction = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnMessageReaction: () => onMessageReaction }));
+
+    events.handleMessagesUpsert({
+      type: 'notify',
+      messages: [
+        {
+          key: { id: 'R1', remoteJid: partner, fromMe, participant: '' },
+          messageTimestamp: 1_700_000_000,
+          message: { reactionMessage: { key: { id: 'M1', remoteJid: partner }, text: '👍' } },
+        },
+      ],
+    });
+    for (let i = 0; i < 5; i++) await flush();
+
+    expect(onMessageReaction).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'M1', senderId: expected }));
+  });
+
+  it('flags a sender known only by lid when the participant is empty', async () => {
+    const events = new BaileysEvents(makeHost());
+
+    const incoming = await events.mapMessage(
+      {
+        key: { id: 'L1', remoteJid: '111222333@lid', fromMe: false, participant: '' },
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'hi' },
+      },
+      'conversation',
+    );
+
+    expect(incoming.isLidSender).toBe(true);
+  });
+
+  it.each([
+    ['the guest', false, partner],
+    ['the account', true, self],
+  ])('reports an answer from %s whose RSVP key has an empty participant', async (_who, fromMe, expected) => {
+    const onEventResponse = jest.fn();
+    const events = new BaileysEvents(makeHost({ getOnEventResponse: () => onEventResponse }));
+
+    events.handleMessagesUpdate([
+      {
+        key: { id: 'EVT9', remoteJid: self },
+        update: {
+          eventResponses: [
+            {
+              eventResponseMessageKey: { id: 'RSVP9', remoteJid: partner, fromMe, participant: '' },
+              senderTimestampMs: 1786000000123,
+              response: { response: 1 },
+            },
+          ],
+        },
+      },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ responderId: expected, fromMe }));
+  });
+});
+
 describe('BaileysEvents event RSVPs (event.response)', () => {
   const group = '120363000000000001@g.us';
   const eventKey = { id: 'EVT1', remoteJid: group };
