@@ -134,7 +134,7 @@ GET /api/search?q=<term>&sessionId=<id>&chatId=<id>&direction=<incoming|outgoing
 ```
 
 - **`q`** is required and must be non-empty (whitespace-only is rejected with `400`, and so is one
-  longer than 1000 characters or with more than 32 words, punctuation separating words as whitespace does and each symbol or emoji counting as one; a whitespace-separated word said again counts once). Numeric params
+  longer than 1000 characters or with more than 32 words, punctuation separating words as whitespace does and a symbol or emoji that stands apart counting as one; a whitespace-separated word said again counts once). Numeric params
   are coerced and validated; a non-numeric `limit`/`offset`/`dateFrom`/`dateTo` surfaces as `400`,
   never as a `NaN` SQL parameter.
 - **Auth scoping is authoritative.** The caller's API-key `allowedSessions` is injected by
