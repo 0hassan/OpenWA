@@ -187,6 +187,21 @@ describe('MessageProjector', () => {
       expect(messageRepository.update).not.toHaveBeenCalled();
     });
 
+    it('applies a reaction to a message a REST send stored under the other dialect of the chat id', async () => {
+      messageRepository.findOne.mockResolvedValue({ chatId: '628@s.whatsapp.net', direction: 'outgoing' });
+
+      projector.applyReactionQueued('s1', {
+        messageId: 'M1',
+        chatId: '628@c.us',
+        senderId: '628@c.us',
+        reaction: '👍',
+      });
+      await settle();
+      await settle();
+
+      expect(eventsGateway.emitMessageReaction).toHaveBeenCalledTimes(1);
+    });
+
     it('drops a reaction that names a message of another chat', async () => {
       messageRepository.findOne.mockResolvedValue({ chatId: 'c2@c.us', direction: 'incoming' });
 
@@ -339,6 +354,15 @@ describe('MessageProjector', () => {
           { sessionId: 's1', waMessageId: 'M1' },
           expect.objectContaining({ type: 'revoked' }),
         );
+        expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
+      });
+
+      it('applies the account deleting, from its phone, a message a REST send stored under the other dialect', async () => {
+        row({ chatId: 'c1@s.whatsapp.net', direction: 'outgoing' });
+
+        projector.handleMessageRevoked('s1', engine, revoke, { fromMe: true });
+        await settle();
+
         expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
       });
 

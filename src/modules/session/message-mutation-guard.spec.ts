@@ -52,6 +52,27 @@ describe('mutationTargetsForeignRow', () => {
     ).toBe('chat');
   });
 
+  // The send routes store the chat id as the caller wrote it, in either dialect the docs give, while the
+  // engines report the neutral one.
+  it('reads the id a REST send stored in any dialect of the chat as the same chat', () => {
+    for (const stored of ['628111@s.whatsapp.net', '628111', '628111:7@s.whatsapp.net', '628111@C.US']) {
+      for (const kind of ['reaction', 'edit', 'revoke'] as const) {
+        expect(
+          mutationTargetsForeignRow({ chatId: stored, direction: OUT }, { kind, chatId: direct, fromMe: true }),
+        ).toBeNull();
+      }
+    }
+    expect(
+      mutationTargetsForeignRow(
+        { chatId: '628222@s.whatsapp.net', direction: OUT },
+        { kind: 'reaction', chatId: direct },
+      ),
+    ).toBe('chat');
+    expect(mutationTargetsForeignRow({ chatId: '628111', direction: OUT }, { kind: 'reaction', chatId: group })).toBe(
+      'chat',
+    );
+  });
+
   it('lets any participant react, and an admin delete a message the account sent', () => {
     expect(
       mutationTargetsForeignRow({ chatId: group, direction: OUT }, { kind: 'reaction', chatId: group, fromMe: false }),

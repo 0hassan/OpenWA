@@ -1,4 +1,5 @@
 import { MessageDirection } from '../message/entities/message.entity';
+import { parseWaId } from '../../engine/identity/wa-id';
 
 /** What a stored row says about whose message it is and where it lives. */
 export interface StoredMessageRef {
@@ -17,13 +18,31 @@ export interface MutationSource {
   author?: string;
 }
 
-const isLid = (jid: string): boolean => jid.endsWith('@lid');
-const isPhone = (jid: string): boolean => jid.endsWith('@c.us');
+/**
+ * The entity an id names, whatever its dialect: a phone (`@c.us`, `@s.whatsapp.net`, hosted, a `:device`
+ * form or a bare number, which is how the send routes may have stored it), a lid, a group or a list.
+ * Null for an id this cannot place, which proves nothing.
+ */
+function entityOf(jid: string): { kind: string; id: string } | null {
+  const parsed = parseWaId(jid);
+  if (parsed.kind !== 'unknown') return { kind: parsed.kind, id: parsed.userPart };
+  return !jid.includes('@') && /^\d+$/.test(parsed.userPart) ? { kind: 'user', id: parsed.userPart } : null;
+}
 
-/** Whether two neutral ids provably name different chats or people. A lid against a phone number may be one. */
-function provablyDifferent(a?: string | null, b?: string | null): boolean {
+const isPerson = (kind: string): boolean => kind === 'user' || kind === 'lid';
+
+/**
+ * Whether two ids provably name different chats or people. The engines report the neutral dialect but a
+ * REST send stores the chat id as the caller wrote it, so ids are compared by the entity they name. A lid
+ * against a phone number may be one person.
+ */
+export function provablyDifferent(a?: string | null, b?: string | null): boolean {
   if (!a || !b || a === b) return false;
-  return !((isLid(a) && isPhone(b)) || (isLid(b) && isPhone(a)));
+  const left = entityOf(a);
+  const right = entityOf(b);
+  if (!left || !right) return false;
+  if (left.kind === right.kind) return left.id !== right.id;
+  return !(isPerson(left.kind) && isPerson(right.kind));
 }
 
 /**
