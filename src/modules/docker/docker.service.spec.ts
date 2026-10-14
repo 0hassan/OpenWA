@@ -277,7 +277,7 @@ describe('prestartBuiltinDatabase', () => {
     expect(docker.listContainers).toHaveBeenCalledWith({
       all: true,
       filters: { label: ['com.openwa.service=database'] },
-      abortSignal: expect.any(AbortSignal),
+      abortSignal: expect.any(AbortSignal) as unknown,
     });
     expect(container.start).toHaveBeenCalledTimes(1);
   });
@@ -414,7 +414,7 @@ describe('DockerService.getContainerByService label match and guard rails', () =
     expect(listContainers).toHaveBeenCalledWith({
       all: true,
       filters: { label: ['com.openwa.service=database'] },
-      abortSignal: expect.any(AbortSignal),
+      abortSignal: expect.any(AbortSignal) as unknown,
     });
     expect(getContainer).toHaveBeenCalledWith('label-hit-1');
     expect(result).toEqual({ id: 'label-hit-1' });

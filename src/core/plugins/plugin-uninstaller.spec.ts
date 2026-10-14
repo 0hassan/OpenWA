@@ -173,8 +173,7 @@ describe('PluginUninstaller — uninstall', () => {
     seedEntry(storage, 'relay');
     const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
     const seen: Array<{ onDisk: boolean; running: boolean }> = [];
-    let withRelease!: ReturnType<typeof makeUninstaller>;
-    withRelease = makeUninstaller(config, storage, pluginsDir, () => {
+    const withRelease: ReturnType<typeof makeUninstaller> = makeUninstaller(config, storage, pluginsDir, () => {
       seen.push({
         onDisk: fs.existsSync(dir) && storage.getPluginEntry('relay') !== undefined,
         running: withRelease.plugins.has('relay'),
