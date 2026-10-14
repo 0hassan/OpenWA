@@ -8,6 +8,12 @@ jest.mock('../../common/media/load-remote-media', () => ({
   loadRemoteMediaBuffer: jest.fn(),
 }));
 
+// The probe runs a child process; its own spec drives the real one.
+jest.mock('./baileys-audio-probe', () => ({
+  WAVEFORM_BARS: 64,
+  probeAudio: jest.fn(() => Promise.resolve({})),
+}));
+
 // A fake Baileys socket: an event emitter wearing the methods the adapter calls.
 class FakeSock extends EventEmitter {
   public ev = {
@@ -179,6 +185,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
+import { probeAudio } from './baileys-audio-probe';
 import * as safeLinkPreview from './safe-link-preview';
 
 const fakeStore = {
@@ -4197,10 +4204,31 @@ describe('BaileysAdapter media sends', () => {
   it('sendAudioMessage sets ptt:false', async () => {
     const adapter = await ready();
     await adapter.sendAudioMessage('628111@s.whatsapp.net', { mimetype: 'audio/mp4', data: Buffer.from([1]) });
+    // seconds is always present: an undefined one is what makes Baileys read the file itself.
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
       audio: Buffer.from([1]),
       mimetype: 'audio/mp4',
       ptt: false,
+      seconds: 0,
+    });
+  });
+
+  it('sendAudioMessage hands Baileys the duration and waveform read in the child, so it reads nothing itself', async () => {
+    const waveform = Uint8Array.from({ length: 64 }, (_, bar) => bar);
+    (probeAudio as jest.Mock).mockResolvedValueOnce({ seconds: 7, waveform });
+    const adapter = await ready();
+    await adapter.sendAudioMessage('628111@s.whatsapp.net', {
+      mimetype: 'audio/ogg; codecs=opus',
+      data: Buffer.from([1]),
+      ptt: true,
+    });
+    expect(probeAudio).toHaveBeenLastCalledWith(Buffer.from([1]), true);
+    expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
+      audio: Buffer.from([1]),
+      mimetype: 'audio/ogg; codecs=opus',
+      ptt: true,
+      seconds: 7,
+      waveform,
     });
   });
 
@@ -4230,10 +4258,13 @@ describe('BaileysAdapter media sends', () => {
       data: Buffer.from([1]),
       ptt: true,
     });
+    // A file the child could not read still goes out with both fields set, flat bars for a voice note.
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
       audio: Buffer.from([1]),
       mimetype: 'audio/ogg; codecs=opus',
       ptt: true,
+      seconds: 0,
+      waveform: new Uint8Array(64).fill(40),
     });
   });
 

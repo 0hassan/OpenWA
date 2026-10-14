@@ -44,6 +44,10 @@ import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
+import { probeAudio, WAVEFORM_BARS } from './baileys-audio-probe';
+
+/** Height of every bar of a voice note whose waveform could not be read: visible, and not a loud one. */
+const FLAT_WAVEFORM_BAR = 40;
 
 /**
  * Messaging-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -459,13 +463,26 @@ export class BaileysMessaging {
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), 'audio/mpeg');
+    const ptt = media.ptt ?? false;
+    // Baileys reads the duration, and a voice note's waveform, in this process whenever the content does
+    // not carry them, which a crafted file turns into an abort or an out-of-memory kill of every session.
+    // Both are always given, from a child process, so Baileys never reads the file itself: a file the
+    // child cannot read sends with a zero duration and flat bars, as one Baileys could not read did.
+    const probe = await probeAudio(data, ptt);
     return this.sendContent(
       chatId,
       // Audio carries no caption, so a mention here tags the recipient through contextInfo without
       // visible @text. It is still forwarded: the route accepts `mentions` (SendAudioMessageDto
       // extends SendMediaMessageDto) and whatsapp-web.js sends it, so dropping it here made the same
       // request notify participants on one engine and silently not on the other.
-      { audio: data, mimetype, ptt: media.ptt ?? false, ...this.withMentions(media.mentions) },
+      {
+        audio: data,
+        mimetype,
+        ptt,
+        seconds: probe.seconds ?? 0,
+        ...(ptt ? { waveform: probe.waveform ?? new Uint8Array(WAVEFORM_BARS).fill(FLAT_WAVEFORM_BAR) } : {}),
+        ...this.withMentions(media.mentions),
+      },
       await this.quoteOption(media.quotedMessageId),
     );
   }

@@ -110,6 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve webhook outbox payloads until delivery or durable failure storage succeeds.
 - Keep one terminal webhook failure per receiver idempotency key.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
+- Read the duration and waveform of an outgoing Baileys audio file in a separate process, so a crafted file can no longer abort or exhaust the gateway.
 
 ### Documentation
 
