@@ -83,11 +83,11 @@ three scoping dimensions enforced by `ApiKeyGuard`.
 A route declares its minimum level with `@RequireRole(...)`; a key passes when its role ranks at or
 above that level (`AuthService.hasPermission`). A key below it is rejected with `403 Forbidden`.
 
-| Scope     | Field             | Effect                                                                                                                                                        |
-| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Source IP | `allowedIps`      | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                  |
-| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a request carrying any other session id is rejected with `403`                                                      |
-| Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403`; Bull Board refuses it |
+| Scope     | Field             | Effect                                                                                                                                                                                                       |
+| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Source IP | `allowedIps`      | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                                                                 |
+| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a request carrying any other session id is rejected with `403`                                                                                                     |
+| Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it |
 
 The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
 a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
@@ -553,7 +553,7 @@ app.use(helmet({
 > (updates carry before/after authorization state), rejected authentication, session lifecycle
 > (including disconnects caused by WhatsApp unlinking the device, account restrictions and their
 > lifting, and refused rebinds), integration-instance creation, update, secret rotation, deletion,
-> redrive, and scope-binding bridge failures, send-pacing refusals (sampled) and breaker trips, the
+> redrive, and scope-binding bridge failures, webhook delivery-failure redrive batches, send-pacing refusals (sampled) and breaker trips, the
 > infra operations (config save, restart request, data export/import, storage export/import),
 > WebSocket rate-limit violations (sampled — see §4.6), and Bull Board queue mutations. Enum
 > members for API-key use, session connected, message sends, and webhook lifecycle are explicitly
