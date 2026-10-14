@@ -69,6 +69,47 @@ describe('InfraConfigController.saveConfig SSL reject-unauthorized', () => {
   });
 });
 
+// The saved file is loaded by the next boot, whose validation refuses these values and crash-loops the
+// instance, with the dashboard that could undo the save down.
+describe('InfraConfigController.saveConfig values the next boot refuses', () => {
+  const newController = () => new InfraConfigController({} as never, {} as never, {} as never);
+  const external = { type: 'postgres', builtIn: false, host: 'db', username: 'u', password: 'unit-test-pw' };
+
+  it.each([
+    ['a database port that is not a number', { database: { ...external, port: 'abc' } }],
+    ['a database port above 65535', { database: { ...external, port: '99999' } }],
+    ['a database port of zero', { database: { ...external, port: '0' } }],
+    ['a negative pool size', { database: { ...external, poolSize: -5 } }],
+    ['a fractional pool size', { database: { ...external, poolSize: 1.5 } }],
+    ['a redis port that is not a number', { redis: { enabled: true, host: 'cache', port: 'x' } }],
+  ])('refuses %s instead of writing it', (_label, config) => {
+    (fs.writeFileSync as jest.Mock).mockClear();
+
+    expect(() => newController().saveConfig(config as never)).toThrow(BadRequestException);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('writes a blank host and user as the defaults and trims a padded port', () => {
+    (fs.writeFileSync as jest.Mock).mockClear();
+
+    newController().saveConfig({
+      database: {
+        type: 'postgres',
+        builtIn: false,
+        host: '   ',
+        port: ' 5433 ',
+        username: '  ',
+        password: 'unit-test-pw',
+      },
+    } as never);
+
+    const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
+    expect(content).toContain('DATABASE_HOST=localhost');
+    expect(content).toContain('DATABASE_PORT=5433');
+    expect(content).toContain('DATABASE_USERNAME=postgres');
+  });
+});
+
 describe('InfraConfigController PostgreSQL schema (POSTGRES_SCHEMA)', () => {
   const newController = () => new InfraConfigController({} as never, {} as never, {} as never);
 
