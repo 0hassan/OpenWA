@@ -78,6 +78,25 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     expect(styled.font).toBe(2);
   });
 
+  it('serves a status with no name, push name, caption or styling without those keys', async () => {
+    const postedAt = Date.now();
+    await service.ingest('sess', { waStatusId: 'bare', contactJid: '628333@c.us', type: 'text', postedAt });
+
+    // The columns read back as null, but StatusDto and the openapi schema declare these fields optional,
+    // not nullable: a client typed from the contract must see them absent.
+    const listed = (await service.list('sess')).find(s => s.id === 'bare')!;
+    const [byContact] = await service.listByContact('sess', '628333@c.us');
+    const wire = {
+      id: 'bare',
+      contact: { id: '628333@c.us' },
+      type: 'text',
+      timestamp: new Date(postedAt).toISOString(),
+      expiresAt: new Date(postedAt + 24 * 60 * 60 * 1000).toISOString(),
+    };
+    expect(JSON.parse(JSON.stringify(listed))).toEqual(wire);
+    expect(JSON.parse(JSON.stringify(byContact))).toEqual(wire);
+  });
+
   it('ingest persists media to a file under the cap and records mediaPath', async () => {
     const { row } = await service.ingest('sess', {
       waStatusId: 'w2',
