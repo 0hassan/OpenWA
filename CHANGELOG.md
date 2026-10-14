@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation.
+
 ## [0.25.0] - 2026-10-15
 
 ### Added

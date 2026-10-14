@@ -62,6 +62,7 @@
     "dashboard": "控制面板",
     "sessions": "工作階段",
     "chats": "聊天",
+    "numberChecker": "號碼檢查",
     "webhooks": "Webhooks",
     "templates": "範本",
     "apiKeys": "API 金鑰",

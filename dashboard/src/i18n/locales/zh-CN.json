@@ -62,6 +62,7 @@
     "dashboard": "仪表盘",
     "sessions": "会话",
     "chats": "聊天",
+    "numberChecker": "号码检查",
     "webhooks": "Webhooks",
     "templates": "模板",
     "apiKeys": "API 密钥",
