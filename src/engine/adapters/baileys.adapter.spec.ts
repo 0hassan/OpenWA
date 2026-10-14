@@ -8689,7 +8689,11 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     fireProtocol({ remoteJid: PEER, fromMe: false }, { key: { id: 'MINE' }, type: 0 });
     // The same author, from another group: the author check and the group-delete allowance both pass,
     // so only the chat check refuses it.
-    fireProtocol({ remoteJid: '120363999@g.us', participant: PEER, fromMe: false }, { key: { id: 'OTHER' }, type: 0 });
+    // An envelope has an id of its own, and two of them in flight never share one.
+    fireProtocol(
+      { id: 'ENVELOPE_OTHER', remoteJid: '120363999@g.us', participant: PEER, fromMe: false },
+      { key: { id: 'OTHER' }, type: 0 },
+    );
     await settle();
 
     expect(
@@ -8763,6 +8767,87 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     expect(fakeStore.put).toHaveBeenCalledTimes(2);
     expect(fakeStore.update).toHaveBeenCalledTimes(1);
     expect(fakeStore.put.mock.invocationCallOrder[1]).toBeLessThan(fakeStore.update.mock.invocationCallOrder[0]);
+  });
+
+  // A message id names one message of one chat and one sender. A contact who knows the id of a message
+  // the account is still downloading can send a text under it, and a delete after it: neither may take
+  // the id from the first, nor have the delete judged against the key of the second.
+  it('drops a delivery that reuses the id of a message still downloading under another sender', async () => {
+    let release!: () => void;
+    baileys.downloadMediaMessage.mockReturnValueOnce(
+      new Promise(resolve => {
+        release = () => resolve(streamOf(Buffer.from('JPEG')));
+      }),
+    );
+    const onMessage = jest.fn();
+    const onMessageCreate = jest.fn();
+    const onMessageRevoked = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage, onMessageCreate, onMessageRevoked });
+    fakeSock.fire('connection.update', { connection: 'open' });
+    const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: PEER, fromMe: true, id: 'REUSED' },
+          message: { imageMessage: { mimetype: 'image/jpeg', caption: 'sent from the phone' } },
+          messageTimestamp: 1700000099,
+        },
+      ],
+    });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: PEER, fromMe: false, id: 'REUSED' },
+          message: { conversation: 'theirs' },
+          messageTimestamp: 1700000100,
+        },
+      ],
+    });
+    fireProtocol({ remoteJid: PEER, fromMe: false }, { key: { id: 'REUSED' }, type: 0 });
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onMessageRevoked).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.objectContaining({ msgId: 'REUSED' }),
+    );
+
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+    expect(onMessageCreate).toHaveBeenCalledTimes(1);
+    expect(onMessageCreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'REUSED', fromMe: true }));
+  });
+
+  it('still takes a repeat delivery of a message still downloading from the same chat and sender', async () => {
+    let release!: () => void;
+    baileys.downloadMediaMessage
+      .mockReturnValueOnce(
+        new Promise(resolve => {
+          release = () => resolve(streamOf(Buffer.from('JPEG')));
+        }),
+      )
+      .mockReturnValueOnce(Promise.resolve(streamOf(Buffer.from('JPEG'))));
+    const warn = jest.spyOn(loggerOf(await started()), 'warn').mockImplementation(() => undefined);
+    const delivery = () => ({
+      key: { remoteJid: PEER, fromMe: false, id: 'SAME' },
+      message: { imageMessage: { mimetype: 'image/jpeg', caption: 'twice' } },
+      messageTimestamp: 1700000099,
+    });
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery()] });
+    fakeSock.fire('messages.upsert', { type: 'notify', messages: [delivery()] });
+    for (let i = 0; i < 5; i++) await settle();
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(warn).not.toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.anything(),
+    );
+    expect(fakeStore.put).toHaveBeenCalledTimes(2);
   });
 
   const ownStored = {

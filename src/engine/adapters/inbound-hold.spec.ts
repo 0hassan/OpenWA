@@ -532,6 +532,29 @@ describe('Baileys inbound messages held for storage', () => {
     ]);
   });
 
+  it('names the sender behind a broadcast-list or status message too, and none behind a one-to-one chat', async () => {
+    const h = heldProjector();
+    const admitInbound = jest.fn(h.callbacks.admitInbound);
+    const { events } = build(4, { ...h.callbacks, admitInbound });
+    const key = (id: string, remoteJid: string, fromMe: boolean, participant?: string) => ({
+      ...text(id, remoteJid),
+      key: { id, remoteJid, fromMe, ...(participant ? { participant } : {}) },
+    });
+    upsert(
+      events,
+      key('L', '1700000002@broadcast', false, 'p@s.whatsapp.net'),
+      key('S', 'status@broadcast', false, 's@s.whatsapp.net'),
+      key('M', 'c@s.whatsapp.net', false, 'x@s.whatsapp.net'),
+    );
+    await flush();
+
+    expect(admitInbound.mock.calls.map(([a]) => [a.id, a.author])).toEqual([
+      ['L', 'p@s.whatsapp.net'],
+      ['S', 's@s.whatsapp.net'],
+      ['M', undefined],
+    ]);
+  });
+
   it('still processes a message, and the rest of its batch, when its admission throws', async () => {
     const h = heldProjector();
     let calls = 0;
@@ -990,6 +1013,20 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
     expect(admitInbound.mock.calls.map(([a]) => [a.id, a.fromMe])).toEqual([
       ['mine', true],
       ['theirs', false],
+    ]);
+  });
+
+  it('names the sender behind a group message in the arrival', async () => {
+    const h = heldProjector();
+    const admitInbound = jest.fn(h.callbacks.admitInbound);
+    const { client } = build({ ...h.callbacks, admitInbound });
+    client.emit('message', { ...incoming('grp', '120363000000000001@g.us', undefined, 'hi'), author: '628222@c.us' });
+    client.emit('message', incoming('one', '628111@c.us', undefined, 'hello'));
+    await flush();
+
+    expect(admitInbound.mock.calls.map(([a]) => [a.id, a.fromMe, a.author])).toEqual([
+      ['grp', false, '628222@c.us'],
+      ['one', false, undefined],
     ]);
   });
 

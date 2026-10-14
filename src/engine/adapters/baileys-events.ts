@@ -415,6 +415,17 @@ export class BaileysEvents {
         });
         continue;
       }
+      // An id names one message of one chat and one sender. A delivery that reuses the id of a message
+      // still being processed under another chat or sender is not a repeat of it: let through, it would
+      // take the id first (the row, the stored copy, and the key a delete of the first is judged by).
+      const firstKey = msg.key.id ? this.inboundInFlight.get(msg.key.id)?.key : undefined;
+      if (firstKey && this.namesAnotherMessage(firstKey, msg.key)) {
+        this.host.logger.warn('Dropping a message that reuses the id of one still being processed', {
+          msgId: msg.key.id ?? 'unknown',
+          remoteJid: msg.key.remoteJid,
+        });
+        continue;
+      }
       // Throttle through the limiter so a burst of media messages can't run unbounded parallel
       // downloads (each a full decrypted buffer in heap). Ordering stays correct — the message store
       // keeps the newest by timestamp. The queue is unbounded, so a burst parks rather than shedding
@@ -464,6 +475,21 @@ export class BaileysEvents {
         });
       }
     }
+  }
+
+  /**
+   * Whether two keys of one id provably name different messages: another chat, another side of the
+   * conversation, or (outside the account's own messages) another sender. Fails open, like
+   * {@link differentWaIds}: ids that cannot be compared are the same message.
+   */
+  private namesAnotherMessage(first: WAMessageKey, key: WAMessageKey): boolean {
+    const neutral = (jid: string): string => this.host.toNeutralJid(jid);
+    return (
+      (first.fromMe === true) !== (key.fromMe === true) ||
+      differentWaIds([first.remoteJid, first.remoteJidAlt], [key.remoteJid, key.remoteJidAlt], neutral) ||
+      (key.fromMe !== true &&
+        differentWaIds([first.participant, first.participantAlt], [key.participant, key.participantAlt], neutral))
+    );
   }
 
   /** Admit a live message (see EngineEventCallbacks.admitInbound); undefined where nothing is held. */

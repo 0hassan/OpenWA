@@ -27,18 +27,20 @@ export class MessageMutationProjector {
 
   /**
    * Queue a reaction apply. Reactions read-modify-write the metadata column, so they must be
-   * serialized per message; the caller only knows it has an event to apply.
+   * serialized per message; the caller only knows it has an event to apply. `needsRow` is for a change
+   * the message still arriving under the same id judged foreign: it is applied only to a stored row that
+   * accepts it, and announced only then, so a change nothing stored vouches for goes no further.
    */
-  applyReactionQueued(id: string, event: ReactionEvent): void {
-    this.enqueueMessageMutation(id, event.messageId, () => this.applyReaction(id, event));
+  applyReactionQueued(id: string, event: ReactionEvent, needsRow = false): void {
+    this.enqueueMessageMutation(id, event.messageId, () => this.applyReaction(id, event, needsRow));
   }
 
   /**
    * Queue an edit apply. Shares the reaction chain so rapid edit-vs-reaction on the same message
    * stays ordered rather than racing.
    */
-  applyMessageEditQueued(id: string, message: EditedMessage): void {
-    this.enqueueMessageMutation(id, message.messageId, () => this.applyMessageEdit(id, message));
+  applyMessageEditQueued(id: string, message: EditedMessage, needsRow = false): void {
+    this.enqueueMessageMutation(id, message.messageId, () => this.applyMessageEdit(id, message, needsRow));
   }
 
   /** Queue a message-scoped mutation. A failed operation is isolated so later events still run. */
@@ -52,31 +54,44 @@ export class MessageMutationProjector {
    * change through, as it always went.
    */
   async foreignRowReason(sessionId: string, waMessageId: string, source: MutationSource): Promise<string | null> {
-    if (!waMessageId) return null;
+    return (await this.storedRowVerdict(sessionId, waMessageId, source)).reason;
+  }
+
+  /**
+   * What the stored row says of a change: whether there is one to ask, and why the change must not touch
+   * it (null when it may). A row that cannot be read is reported absent with no reason, as before.
+   */
+  async storedRowVerdict(
+    sessionId: string,
+    waMessageId: string,
+    source: MutationSource,
+  ): Promise<{ exists: boolean; reason: string | null }> {
+    if (!waMessageId) return { exists: false, reason: null };
     try {
       const row = await this.messageRepository.findOne({
         where: { sessionId, waMessageId },
         select: { chatId: true, direction: true, author: true },
       });
-      return row ? mutationTargetsForeignRow(row, source) : null;
+      return row ? { exists: true, reason: mutationTargetsForeignRow(row, source) } : { exists: false, reason: null };
     } catch {
-      return null;
+      return { exists: false, reason: null };
     }
   }
 
-  private async applyReaction(id: string, event: ReactionEvent): Promise<void> {
+  private async applyReaction(id: string, event: ReactionEvent, needsRow: boolean): Promise<void> {
     try {
       // Guard the lookup key before it reaches TypeORM: `findOne` DROPS an undefined condition from
       // the where-clause rather than matching nothing, so an engine that couldn't resolve the reacted
       // message's id would silently match an arbitrary row and clobber/emit its reactions. `!msg` is
       // no protection against that — the row it finds is real, just the wrong one.
       if (!event.messageId) return;
-      const foreign = await this.foreignRowReason(id, event.messageId, { kind: 'reaction', chatId: event.chatId });
-      if (foreign) {
+      const verdict = await this.storedRowVerdict(id, event.messageId, { kind: 'reaction', chatId: event.chatId });
+      if (needsRow && !verdict.exists) return;
+      if (verdict.reason) {
         this.logger.warn('Dropping a reaction aimed at a message of another chat', {
           sessionId: id,
           messageId: event.messageId,
-          reason: foreign,
+          reason: verdict.reason,
         });
         return;
       }
@@ -114,18 +129,19 @@ export class MessageMutationProjector {
   }
 
   /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
-  private async applyMessageEdit(id: string, message: EditedMessage): Promise<void> {
-    const foreign = await this.foreignRowReason(id, message.messageId, {
+  private async applyMessageEdit(id: string, message: EditedMessage, needsRow: boolean): Promise<void> {
+    const verdict = await this.storedRowVerdict(id, message.messageId, {
       kind: 'edit',
       chatId: message.chatId,
       fromMe: message.fromMe,
       author: message.author,
     });
-    if (foreign) {
+    if (needsRow && !verdict.exists) return;
+    if (verdict.reason) {
       this.logger.warn('Dropping an edit aimed at a message of another chat or sender', {
         sessionId: id,
         messageId: message.messageId,
-        reason: foreign,
+        reason: verdict.reason,
       });
       return;
     }
