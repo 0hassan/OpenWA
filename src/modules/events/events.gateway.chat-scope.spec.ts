@@ -146,6 +146,22 @@ describe('chat-scoped WebSocket rooms', () => {
     });
   });
 
+  it('delivers an event response only to keys whose chats include the chat it names', async () => {
+    const group = '120363000000000001@g.us';
+    const inside = await connect('inside', [group]);
+    const outside = await connect('outside', ['120363000000000002@g.us']);
+    const unrestricted = await connect('unrestricted', null);
+    gateway.emitEventResponse('s1', { chatId: group, eventMessageId: 'EVT1', response: 'going' });
+    gateway.emitEventResponse('s1', { eventMessageId: 'EVT2', response: 'going' });
+    await flush();
+    expect(events(inside).map(frame => frame.payload.data)).toEqual([
+      expect.objectContaining({ eventMessageId: 'EVT1' }),
+    ]);
+    expect(events(outside)).toHaveLength(0);
+    // An unrestricted key hears every one, a payload with no chat included.
+    expect(events(unrestricted)).toHaveLength(2);
+  });
+
   it('refuses a subscribe that can never fit before it builds a single room name', async () => {
     const chats = Array.from({ length: 450 }, (_, index) => `62811${String(index).padStart(7, '0')}@c.us`);
     const restricted = await connect('restricted', chats);
