@@ -13,6 +13,7 @@ const property = (dto: object, name: string) =>
     nullable?: boolean;
     minLength?: number;
     maxLength?: number;
+    maxItems?: number;
   };
 
 describe('API key DTO contract', () => {
@@ -37,6 +38,11 @@ describe('API key DTO contract', () => {
 
   it.each([CreateApiKeyDto, UpdateApiKeyDto])('publishes the name length bounds %p validates', dto => {
     expect(property(dto.prototype, 'name')).toEqual(expect.objectContaining({ minLength: 3, maxLength: 100 }));
+  });
+
+  // @ArrayMaxSize is runtime-only: a client generated from the schema learns the bound from maxItems or not at all.
+  it.each([CreateApiKeyDto, UpdateApiKeyDto])('publishes the allowedChats bound of %p', dto => {
+    expect(property(dto.prototype, 'allowedChats').maxItems).toBe(ALLOWED_CHATS_MAX);
   });
 
   it.each([CreateApiKeyDto, UpdateApiKeyDto])('bounds the allowedChats list of %p', async dto => {

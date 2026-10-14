@@ -75,6 +75,9 @@ export class CreateApiKeyDto {
       'A contact entry also matches its resolved `@lid` form (and vice versa) through the lid mapping ' +
       'table. Omit or leave empty to let the key reach every chat.',
     example: ['120363000000000000@g.us', '919999999999@c.us'],
+    // @ArrayMaxSize is runtime-only; without this the schema, and every client generated from it,
+    // advertises an unbounded list and learns the limit from a 400.
+    maxItems: ALLOWED_CHATS_MAX,
   })
   @IsOptional()
   @IsArray()
@@ -190,7 +193,7 @@ export class UpdateApiKeyDto {
   @Validate(IsSessionIdConstraint, { each: true })
   allowedSessions?: string[];
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ maxItems: ALLOWED_CHATS_MAX })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(ALLOWED_CHATS_MAX)

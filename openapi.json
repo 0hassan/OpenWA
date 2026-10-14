@@ -18196,6 +18196,7 @@
               "120363000000000000@g.us",
               "919999999999@c.us"
             ],
+            "maxItems": 2000,
             "type": "array",
             "items": {
               "type": "string"
@@ -18382,6 +18383,7 @@
             }
           },
           "allowedChats": {
+            "maxItems": 2000,
             "type": "array",
             "items": {
               "type": "string"
