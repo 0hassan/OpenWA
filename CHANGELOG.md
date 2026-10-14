@@ -12,9 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow chat-restricted API keys to subscribe to chat WebSocket events.
 - Allow chat-restricted MCP keys to read and send within their chat allowlist using the REST authorization rules.
 - Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` or `kind` filter scopes delivery events per chat.
-- Filter stored messages by time, direction, type or message reference, with stable message-time pagination; the SDKs take these filters from the next SDK release after 0.5.1.
+- Filter stored messages by time, direction, type or message reference, with stable message-time pagination; the JavaScript, Python, Java and Go SDKs take these filters from the next SDK release after 0.5.1, and the PHP SDK already forwards any query key.
 - Scope built-in message search and group detail/settings to a chat-restricted key's allowed chats; reject plugin search for these keys.
-- Expose poll choices and selection mode in message events, stored messages and history, and poll choices in dashboard chats; the SDKs type them from the next SDK release after 0.5.1.
+- Expose poll choices and selection mode in message events, stored messages and history, and poll choices in dashboard chats; the SDKs type the poll of a live history message from the next SDK release after 0.5.1.
 - Expose optional last-message types in chat lists and, from the next SDK release after 0.5.1, in the SDKs.
 - Add bounded webhook failure redrive with optional payload retention; the SDKs expose it from the next SDK release after 0.5.1.
 - Expose caller-supplied send idempotency keys in all five SDKs from the next SDK release after 0.5.1; the 0.5.1 JavaScript and PHP packages ignore the extra argument.
@@ -69,7 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retire the ingress replay sweep's duplicate dead letter when it races another dead-letter write, and stop logging an event a redrive delivered meanwhile as dead-lettered.
 - Fall back instead of hanging when an ingress, webhook or infra status queue call runs before Redis has ever connected.
 - Drop whatsapp-web.js inbound media over `MEDIA_DOWNLOAD_MAX_BYTES` in the page when the sender understates its size.
-- Trust `NODE_EXTRA_CA_CERTS` in `backup.sh`'s PostgreSQL TLS check on Node older than 22.15.
 - Set `PGSSLMODE` in the `psql` import command `restore.sh` prints when `DATABASE_SSL=true`.
 - Use the `OPENWA_DATA_DIR` volume's `media/`, even before it exists, for a leftover `STORAGE_LOCAL_PATH=./uploads` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./uploads`.
 - Read the `./data` database defaults and `./data/...` paths in `./.env` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs, instead of the working directory's `./data`.
@@ -83,22 +82,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop the dashboard Chats page from marking the open chat read on a newly selected session.
 - Refuse bulk batches once shutdown begins, and answer `503` for a batch saved during shutdown instead of sending it.
 - Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown, waiting a bounded time for a replay in hand.
-- Close queue workers, waiting up to 10 s for running jobs, before plugins shut down, so no new job is taken against stopped plugins.
+- Close queue workers before plugins shut down, waiting up to 10 s for running jobs and then abandoning a close still pending, so no new job is taken against stopped plugins and a stalled close cannot hold up the database close.
 - Answer new HTTP requests other than health probes with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`; a Socket.IO handshake is still admitted until the server closes.
 - Disable plugins in parallel at shutdown, capping the whole plugin phase, including waits for enables in progress, at 10 s.
 - Exit with status 1 when teardown runs 67 s past the shutdown delay, so a stalled close no longer runs into the kill deadline or hangs `POST /api/infra/restart`.
 - Destroy open HTTP connections and WebSocket clients when the server closes at shutdown, so an open request cannot hold up the database close.
-- Stop waiting for a queue worker whose close outlasts its 10 s cap, so it cannot hold up the database close.
 - Settle a failed or hung queue producer close within 2 s per queue at shutdown, so a Redis outage or network partition no longer skips the database close.
 - Raise `stop_grace_period` and `terminationGracePeriodSeconds` from 45 to 75 s to cover the worst-case teardown.
 - Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.
 - Answer `400` instead of `500` when a plugin upload arrives under an unexpected multipart field name.
-- Refuse Baileys animated stickers over 500 frames and run at most two sticker conversions at once.
+- Refuse Baileys sticker conversions of more than 500 animation frames and run at most two conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
-- Stop `backup.sh` and `restore.sh` on an env line they cannot parse instead of falling back to a default path or TLS setting.
+- Stop `backup.sh` and `restore.sh` on an env line they cannot parse instead of falling back to a default path.
 - Verify the PostgreSQL server certificate in `backup.sh` when `DATABASE_SSL=true`, as the app does.
 - Leave no truncated archive in `BACKUP_DIR` when the final tar step of `backup.sh` fails, for example on a full volume.
 - Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
@@ -112,7 +110,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade proxy-addr to 2.0.8 (GHSA-jqcg-44mw-7w3h, critical) to correct IPv4-mapped IPv6 proxy trust matching.
 - Upgrade source-map-js to 1.2.2 to validate indexed source-map offsets.
 - Fix Baileys first-contact addresses and reject phone numbers reported as unregistered before sending.
-- Preserve archived media and reactions during concurrent metadata updates.
+- Stop a reaction from overwriting metadata written to the same message concurrently.
 - Keep sent media when merging onto an echo row fails.
 - Enforce chat media size limits using decoded payload bytes.
 - Keep narrow chat panes scrollable and prevent message actions from shrinking previews.
@@ -142,7 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@modelcontextprotocol/sdk` 1.30.0 to 1.32.1, closing a high-severity advisory in its OAuth client (GHSA-6qxp-vccf-f47h). It ships in the runtime tree, which uses only the server side.
 - `sharp` ^0.35.4 to ^0.35.5, closing a high-severity advisory in its bundled librsvg (GHSA-wq5f-xc86-pv6w). It ships in the runtime tree.
 - `shell-quote` override raised from ^1.10.0 to ^1.11.0, closing a critical command-injection advisory in `quote()` (GHSA-pqg4-j6r4-53mv). It reaches the root tree only through `concurrently`, so it is dev-only.
-- `music-metadata` 11.13.0 to 11.16.1, the parser Baileys uses to read an outgoing audio file's duration. It closes three advisories in which a crafted audio file could abort the process or exhaust memory (GHSA-5gfj-9q3v-qfp3, GHSA-8j4c-6x6g-rq3j, GHSA-f94x-6692-553q).
+- `music-metadata` 11.13.0 to 11.16.1, the parser Baileys uses to read an outgoing audio file's duration. It closes two advisories in which a crafted audio file could abort the process or exhaust memory (GHSA-5gfj-9q3v-qfp3, GHSA-8j4c-6x6g-rq3j).
 
 ### Upgrade notes (behavior changes)
 
@@ -150,26 +148,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A stop that runs 67 s past the shutdown delay now exits with status 1 instead of being killed (137), which matters if you alert on exit codes.
 - A sandboxed plugin's `onDisable` now shares one 10 s cap with all other plugins at shutdown, and a worker still running then dies with the process.
 - `docker-compose.dev.yml` now waits up to 75 s on a stuck stop instead of Docker's 10 s default.
-- Queue workers now stop taking jobs when shutdown begins and wait at most 10 s for running ones, so a queued webhook or plugin ingress job still running then is re-run after the next start; receivers must deduplicate on `X-OpenWA-Idempotency-Key`.
+- Queue workers now stop taking jobs at shutdown, the ingress worker when it begins and the webhook worker when teardown starts, and each waits at most 10 s for running ones; a job still running then is re-run after the next start, so webhook receivers must deduplicate on `X-OpenWA-Idempotency-Key` and plugin ingress handlers on the delivery id.
 - Boot fails on a `PORT` with surrounding whitespace or a whitespace-only `PORT`; remove the padding.
 - Boot fails on a `WEBHOOK_SHUTDOWN_DRAIN_MS` that is not a non-negative integer (for example `30s`) instead of silently using 5000.
 - Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
 - Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
 - With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
-- Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working until it is edited.
+- Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working on the REST routes, but over `/events` a subscribe that would hold more than 4096 rooms (the subscribed events times the key's chat ids, two per phone number) is refused with `TOO_MANY_SUBSCRIPTIONS`, so shorten it.
 - `GET /api/search` answers `400` for a `q` over 1000 characters or with more than 32 distinct words; a repeated word counts once.
 - Without an ffmpeg binary (`FFMPEG_PATH`), a Baileys voice note goes out with flat waveform bars instead of its real ones; the official image ships ffmpeg.
 - With `DATABASE_SSL=true`, the PostgreSQL certificate is now verified against `DATABASE_HOST` even when it is an IP address (`pg` 8.23.1). A certificate that names only `localhost` stops matching a connection by IP: use the certificate's DNS name as the host or add the IP to its subject alternative names. `DATABASE_SSL_REJECT_UNAUTHORIZED=false` remains the escape hatch.
-- The first boot builds three indexes on `messages` (`IDX_messages_session_timestamp_id`, `IDX_messages_session_chat_timestamp_id` and `IDX_messages_session_direction_timestamp_id`) not concurrently; on a large table boot takes longer, on PostgreSQL writes to that table wait until each build finishes, and the table with its indexes grows by about 240 MB per million messages.
-- Baileys answers `400` for an animated sticker with more than 500 frames.
+- The first boot builds three indexes on `messages` (`IDX_messages_session_timestamp_id`, `IDX_messages_session_chat_timestamp_id` and `IDX_messages_session_direction_timestamp_id`) not concurrently, and the table with its indexes grows by about 240 MB per million messages. On PostgreSQL writes to that table wait until the boot migrations commit, after all three builds, and the Helm chart's startup probe (about 295 s) restarts a pod whose boot outlasts it, so on a large table run the migrations first (migration guide, section 14.5).
+- Baileys answers `400` for an animated image of more than 500 frames that it has to convert to WebP; an animated WebP is sent unchanged.
+- Baileys answers `400` for an `image/svg+xml` sticker, which 0.24.0 converted to WebP; convert it to PNG or WebP before sending.
 - New Baileys pairings show `Ubuntu` instead of `OpenWA` as the device name in Linked Devices; set `BAILEYS_BROWSER_NAME=OpenWA` to keep the old name. Linked sessions are unaffected.
-- `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse; fix the line or pass the key in the environment.
+- `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse, or exists and the running user cannot read it; fix the line or the permissions, or pass the key in the environment.
 - With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`, and give `DATABASE_URL` the host name the certificate carries or set `PGSSLMODE`.
 - Baileys answers `400` for a phone number WhatsApp reports as unregistered, where it answered `201`, and `503` when the recipient lookup gets no answer; every send to a phone number without a known LID now makes one lookup first.
 - `vote-poll` on whatsapp-web.js answers `400` `POLL_OPTION_NOT_FOUND` when none of the option texts match, where it answered `200` and cleared the vote; an empty `options` list still clears it.
-- Once teardown begins, every request except `/api/health` and `/api/health/*` answers `503` with `Connection: close`, `GET /api/infra/health` included; probe `/api/health/live` for a check that survives teardown.
-- A compose file or pod spec of your own that drops all capabilities must add `KILL` to the shipped five, or a stop never reaches the app: it runs out the grace period and exits `137`.
+- Once teardown begins, every HTTP request except `/api/health` and `/api/health/*` answers `503` with `Connection: close`, `GET /api/infra/health` included, while a new `/events` handshake is still admitted until the server closes; probe `/api/health/live` for a check that survives teardown.
+- A compose file or pod spec of your own that drops all capabilities and starts the container as root must add `KILL` to the `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` that 0.24.0 shipped, or a stop never reaches the app: it runs out the grace period and exits `137`.
 - Rolling back to 0.24.0 while webhook outbox rows are in state `queued` strands them: 0.24.0 never replays that state and prunes it after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). The upgrade also deletes duplicate terminal `webhook_delivery_failures` rows, which a rollback does not restore.
 
 ## [0.24.0] - 2026-10-03
