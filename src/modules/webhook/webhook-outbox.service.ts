@@ -1,6 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { And, In, IsNull, LessThan, Not, Raw, Repository } from 'typeorm';
+import { And, In, IsNull, LessThan, Not, QueryDeepPartialEntity, Raw, Repository } from 'typeorm';
 import { WebhookOutboxEvent, WebhookOutboxState } from './entities/webhook-outbox-event.entity';
 import { createLogger } from '../../common/services/logger.service';
 import { isUniqueViolation } from '../../common/utils/db-errors';
@@ -92,18 +92,19 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
    */
   async open(row: Omit<ReplayableDelivery, 'id' | 'attempts'> & { deliveryId: string }): Promise<void> {
     try {
-      await this.outbox.save(
-        this.outbox.create({
-          webhookId: row.webhookId,
-          sessionId: row.sessionId,
-          event: row.event,
-          idempotencyKey: row.idempotencyKey,
-          deliveryId: row.deliveryId,
-          payload: row.payload,
-          state: 'pending',
-          attempts: 0,
-        }),
-      );
+      // A bare INSERT, not save(): save() wraps it in a transaction, and on SQLite's single shared
+      // connection the rollback of the unique violation expected here would also discard any other
+      // write made while it was open.
+      await this.outbox.insert({
+        webhookId: row.webhookId,
+        sessionId: row.sessionId,
+        event: row.event,
+        idempotencyKey: row.idempotencyKey,
+        deliveryId: row.deliveryId,
+        payload: row.payload,
+        state: 'pending',
+        attempts: 0,
+      } as QueryDeepPartialEntity<WebhookOutboxEvent>);
     } catch (error) {
       // A conflict means this exact delivery is already recorded, which is what a replay looks
       // like: keep the existing row rather than duplicating it.
