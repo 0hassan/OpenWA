@@ -522,7 +522,7 @@ describe('Baileys inbound messages held for storage', () => {
       ...text('C', '120363000000000001@g.us'),
       key: { id: 'C', remoteJid: '120363000000000001@g.us', fromMe: false, participant: 'm@s.whatsapp.net' },
     };
-    upsert(events, text('A', 'c@s.whatsapp.net'), own as WAMessage, member as WAMessage);
+    upsert(events, text('A', 'c@s.whatsapp.net'), own, member);
     await flush();
 
     expect(admitInbound.mock.calls.map(([a]) => [a.id, a.fromMe, a.author])).toEqual([
