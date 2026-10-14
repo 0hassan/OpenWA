@@ -87,14 +87,22 @@ class OpenWAClient:
         *,
         # Seconds per network operation (connect, read, write, pool), not for the whole call: a response
         # that keeps trickling bytes is not cut off. 0 or None means no timeout.
-        timeout: float | None = 30.0,
+        timeout: float | httpx.Timeout | tuple[float | None, float | None, float | None, float | None] | None = 30.0,
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not base_url:
             raise ValueError("OpenWAClient: base_url is required")
+        # A key read from a secret file usually ends in a newline, which the HTTP layer refuses with an error
+        # that quotes the whole key. Trim it, and refuse anything that is still not a plain token.
+        api_key = api_key.strip() if isinstance(api_key, str) else api_key
         if not api_key:
             raise ValueError("OpenWAClient: api_key is required")
+        if not isinstance(api_key, str) or not all("!" <= char <= "~" for char in api_key):
+            raise ValueError(
+                "OpenWAClient: api_key contains illegal characters (whitespace, control or non-ASCII); "
+                "check for a stray newline"
+            )
         _warn_if_insecure_http(base_url)
         self._http = HttpExecutor(
             base_url=base_url,

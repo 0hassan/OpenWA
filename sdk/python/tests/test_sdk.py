@@ -263,6 +263,27 @@ class TestClientCore:
         assert "Bad Gateway" in str(caught.value)
         assert "None" not in str(caught.value)
 
+    def test_an_httpx_timeout_or_a_tuple_is_taken_as_given(self):
+        # The published 0.5.1 handed `timeout` straight to httpx, which takes both.
+        per_operation = httpx.Timeout(10.0, connect=2.0)
+        client = OpenWAClient(base_url="https://x", api_key="k", timeout=per_operation)
+        assert client._http._client.timeout == per_operation
+        client = OpenWAClient(base_url="https://x", api_key="k", timeout=(1.0, 2.0, 3.0, 4.0))
+        assert client._http._client.timeout == httpx.Timeout(connect=1.0, read=2.0, write=3.0, pool=4.0)
+        for bad in [(1.0, 2.0), (1.0, 2.0, 3.0, -1.0), (1.0, "2", 3.0, 4.0)]:
+            with pytest.raises(ValueError, match="timeout tuple"):
+                OpenWAClient(base_url="https://x", api_key="k", timeout=bad)  # type: ignore[arg-type]
+
+    def test_the_api_key_loses_a_trailing_newline_and_an_illegal_one_is_refused_without_being_quoted(self):
+        client = OpenWAClient(base_url="https://x", api_key="owa_k1_secret\n")
+        assert client._http._client.headers["X-API-Key"] == "owa_k1_secret"
+        for bad in ["owa_k1 secret", "owa_k1_se\x00cret", "owa_k1_sécret"]:
+            with pytest.raises(ValueError, match="api_key") as raised:
+                OpenWAClient(base_url="https://x", api_key=bad)
+            assert bad not in str(raised.value)
+        with pytest.raises(ValueError, match="required"):
+            OpenWAClient(base_url="https://x", api_key="  \n")
+
     def test_timeout_zero_none_and_inf_mean_none_and_a_bad_value_raises(self):
         for none in (0, None, float("inf")):
             client = OpenWAClient(base_url="https://x", api_key="k", timeout=none)

@@ -65,15 +65,33 @@ def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) 
     return str(httpx.URL(url).copy_merge_params(params))
 
 
-def resolve_timeout(timeout: float | None) -> float | None:
+def resolve_timeout(
+    timeout: float | httpx.Timeout | tuple[float | None, float | None, float | None, float | None] | None,
+) -> float | httpx.Timeout | None:
     """The timeout httpx is given: seconds per network operation, or ``None`` for none.
 
     ``None``, ``0`` and ``math.inf`` mean no timeout, as ``0`` does in the JavaScript and PHP clients;
-    httpx would otherwise take ``0`` literally and fail every connect. Anything that is not a
+    httpx would otherwise take ``0`` literally and fail every connect. An :class:`httpx.Timeout`, or a
+    ``(connect, read, write, pool)`` tuple, goes to httpx as given: they were accepted before this
+    validator existed, and are the way to set the operations apart. Anything else that is not a
     non-negative number raises at construction rather than at the first request.
     """
     if timeout is None:
         return None
+    if isinstance(timeout, httpx.Timeout):
+        return timeout
+    if isinstance(timeout, tuple):
+        parts = [part for part in timeout]
+        if len(parts) != 4 or any(
+            part is not None
+            and (isinstance(part, bool) or not isinstance(part, (int, float)) or math.isnan(part) or part < 0)
+            for part in parts
+        ):
+            raise ValueError(
+                "OpenWAClient: a timeout tuple is (connect, read, write, pool), each a non-negative number "
+                f"of seconds or None (got {timeout!r})"
+            )
+        return httpx.Timeout(timeout)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or math.isnan(timeout) or timeout < 0:
         raise ValueError(
             f"OpenWAClient: timeout must be a non-negative number of seconds, or None for none (got {timeout!r})"
@@ -92,7 +110,7 @@ class HttpExecutor:
         self,
         base_url: str,
         api_key: str,
-        timeout: float | None = 30.0,
+        timeout: float | httpx.Timeout | tuple[float | None, float | None, float | None, float | None] | None = 30.0,
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -116,7 +134,13 @@ class HttpExecutor:
         if transport is not None:
             client_kwargs["transport"] = transport
         self._client = httpx.Client(**client_kwargs)
-        self._timeout = timeout
+        # The seconds a timeout error reports: the one number given, or for an httpx.Timeout the longest
+        # of its operations that has a limit.
+        if isinstance(timeout, httpx.Timeout):
+            limits = [part for part in (timeout.connect, timeout.read, timeout.write, timeout.pool) if part is not None]
+            self._timeout: float | None = max(limits) if limits else None
+        else:
+            self._timeout = timeout
 
     def close(self) -> None:
         self._client.close()
