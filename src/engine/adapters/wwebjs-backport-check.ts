@@ -78,9 +78,13 @@ export function partialBackportSites(wwjsDir?: string): string[] {
   }
 }
 
-/** What the startup guard should say about the installed backport, or undefined when it needs no word. */
+/**
+ * What the startup guard should say about the installed backport, or undefined when it needs no word.
+ * A partly applied tree is named first: an interrupted run usually stops before Message.js, which then
+ * reads as unpatched, and the patcher refuses a partly applied tree rather than finish it.
+ */
 export function backportProblem(wwjsDir?: string): string | undefined {
-  if (isBackportMissing(wwjsDir)) return BACKPORT_MISSING_MESSAGE;
   const sites = partialBackportSites(wwjsDir);
-  return sites.length ? partialBackportMessage(sites) : undefined;
+  if (sites.length) return partialBackportMessage(sites);
+  return isBackportMissing(wwjsDir) ? BACKPORT_MISSING_MESSAGE : undefined;
 }

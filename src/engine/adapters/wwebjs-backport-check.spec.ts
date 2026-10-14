@@ -90,10 +90,22 @@ describe('isBackportMissing', () => {
 
     it('answers a tree with no backport at all with the missing-backport message, not a list of sites', () => {
       const dir = wholeInstall();
-      fs.writeFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'this.id = data.id;');
+      for (const [rel] of REQUIRED_SITES) fs.writeFileSync(path.join(dir, rel), 'this.id = data.id;');
 
       expect(partialBackportSites(dir)).toEqual([]);
       expect(backportProblem(dir)).toBe(BACKPORT_MISSING_MESSAGE);
+    });
+
+    // Message.js is the 11th of 12 files the patcher writes, so a run that was killed usually stopped
+    // before it: ten sites landed, Message.js did not, and the tree is not a pristine one.
+    it('names a tree whose run stopped before Message.js, not the missing-backport message', () => {
+      const dir = wholeInstall();
+      fs.writeFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'this.id = data.id;');
+      fs.writeFileSync(path.join(dir, 'src', 'util', 'Injected', 'Utils.js'), '_serialized: msg.id._serialized');
+
+      expect(isBackportMissing(dir)).toBe(true);
+      expect(partialBackportSites(dir)).toEqual(['src/structures/Message.js', 'src/util/Injected/Utils.js']);
+      expect(backportProblem(dir)).toContain('src/structures/Message.js, src/util/Injected/Utils.js');
     });
 
     it('leaves a tree fixed upstream in its own way alone', () => {

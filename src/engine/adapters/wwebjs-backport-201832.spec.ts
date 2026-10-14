@@ -135,10 +135,37 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched[\s\S]*Injected\/Utils\.js/);
   });
 
+  // `patch` writes in diff order and Message.js is the 11th of 12 files, so a run that was killed usually
+  // stopped before it. Applying the diff again would reject the ten hunks that landed, leave their .rej
+  // files in the tree and call an interrupted install version skew.
+  it('refuses a tree whose run stopped before Message.js, without touching it', () => {
+    const dir = copyWwjs();
+    const messageJs = path.join(dir, 'src', 'structures', 'Message.js');
+    const utilsJs = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
+    const pristine = [messageJs, utilsJs].map(file => fs.readFileSync(file, 'utf8'));
+    applyBackport(dir);
+    fs.writeFileSync(messageJs, pristine[0]);
+    fs.writeFileSync(utilsJs, pristine[1]);
+
+    expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched[\s\S]*Message\.js[\s\S]*reinstall/i);
+
+    expect(fs.readFileSync(messageJs, 'utf8')).toBe(pristine[0]);
+    const litter: string[] = [];
+    const walk = (current: string): void => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.(rej|orig)$/.test(entry.name)) litter.push(path.relative(dir, full));
+      }
+    };
+    walk(path.join(dir, 'src'));
+    expect(litter).toEqual([]);
+  });
+
   it('refuses to stand down on a half-patched tree', () => {
     const dir = copyWwjs();
-    // Exactly what a run that died mid-apply leaves: `patch` writes as it goes and Message.js is patched
-    // early, so the load-bearing constructor normalizes while its siblings never did. Standing down here
+    // Exactly what a run that died mid-apply leaves: `patch` writes as it goes and Message.js is the
+    // second to last file, so the load-bearing constructor normalizes while its siblings never did. Standing down here
     // latches the broken tree in for good — every later run reads Message.js and takes the same branch —
     // and ships a whatsapp-web.js whose ids work in some paths and not others.
     const msgJs = path.join(dir, 'src', 'structures', 'Message.js');

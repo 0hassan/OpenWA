@@ -127,7 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound `GET /api/search` to 1000 characters and 32 words, punctuation counted as a separator and each symbol or emoji as a word, and run a repeated word once, so one request can no longer hold the event loop on SQLite for seconds.
 - Print the startup banner's API Docs URL only when Swagger is served, so a production boot no longer points at a `404`.
 - Decode numeric and common named character references in a Baileys link preview's title and description, so `&#8217;` and `&eacute;` no longer reach the recipient as written.
-- Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach.
+- Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach, and have the patcher refuse such a tree, whichever file the interrupted install stopped at, instead of reporting version skew and leaving `.rej` files.
 - Handle an engine disconnect again when the session row read fails, so the session reconnects instead of staying registered with no reconnect armed.
 - Show the error a sandboxed plugin's worker threw before it died in the plugin's status and the log, instead of only its exit code.
 
