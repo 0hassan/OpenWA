@@ -450,6 +450,8 @@ export class RedriveWebhookDeliveriesDto {
     type: [String],
     description: 'Only these failure rows (ids from `GET /webhooks/delivery-failures`).',
     example: ['0a941dac-a965-45e7-b318-74ae8be134f0'],
+    maxItems: 500,
+    items: { type: 'string', maxLength: 128 },
   })
   @IsOptional()
   @IsArray()
@@ -458,7 +460,12 @@ export class RedriveWebhookDeliveriesDto {
   @MaxLength(128, { each: true })
   ids?: string[];
 
-  @ApiPropertyOptional({ description: 'Max rows replayed by this call (1-500, default 100).', example: 100 })
+  @ApiPropertyOptional({
+    description: 'Max rows replayed by this call (1-500, default 100).',
+    example: 100,
+    minimum: 1,
+    maximum: 500,
+  })
   @IsOptional()
   @IsInt()
   @Min(1)

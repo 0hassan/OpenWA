@@ -19658,15 +19658,19 @@
             "example": [
               "0a941dac-a965-45e7-b318-74ae8be134f0"
             ],
-            "type": "array",
+            "maxItems": 500,
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "maxLength": 128
+            },
+            "type": "array"
           },
           "limit": {
             "type": "number",
             "description": "Max rows replayed by this call (1-500, default 100).",
-            "example": 100
+            "example": 100,
+            "minimum": 1,
+            "maximum": 500
           }
         }
       },
