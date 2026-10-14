@@ -281,6 +281,27 @@ describe('RedriveService', () => {
       await expect(makeSvc().redriveInstance('p', 'i', null)).rejects.toThrow('database is gone');
     });
 
+    it('settles its teardown when the redrive it waits for fails', async () => {
+      (repo.find as jest.Mock).mockResolvedValue([failure('f1', 'd1')]);
+      // A bookkeeping write after the enqueue is not covered by the shutdown refusal above, so the run rejects.
+      (events.update as jest.Mock).mockRejectedValueOnce(new Error('database is gone'));
+      let finishFirst!: () => void;
+      (ingressEnqueue.enqueue as jest.Mock).mockImplementationOnce(
+        () => new Promise(resolve => (finishFirst = () => resolve({ outcome: 'queued' }))),
+      );
+      const svc = makeSvc();
+      const running = svc.redriveInstance('p', 'i', null);
+      const failed = expect(running).rejects.toThrow('database is gone');
+      while (!finishFirst) await tick();
+
+      const destroyed = svc.onModuleDestroy();
+      finishFirst();
+
+      // A rejecting destroy hook makes Nest skip every later one (plugin onDisable, the DataSource close).
+      await expect(destroyed).resolves.toBeUndefined();
+      await failed;
+    });
+
     it('waits at most the dispatch timeout for a replay still in hand', async () => {
       jest.useFakeTimers();
       try {
