@@ -1120,7 +1120,12 @@ export class MessageProjector {
   }
 
   /** Engine callback body, lifted out of initializeEngine so the wiring table stays readable. */
-  handleMessageRevoked(id: string, engine: IWhatsAppEngine, message: RevokedMessage): void {
+  handleMessageRevoked(
+    id: string,
+    engine: IWhatsAppEngine,
+    message: RevokedMessage,
+    actor?: { fromMe: boolean },
+  ): void {
     if (!this.engines.isLive(id, engine)) return;
     this.logger.debug(`Message revoked: ${message.id}`, {
       sessionId: id,
@@ -1136,15 +1141,38 @@ export class MessageProjector {
     // `message.id` is the revocation notification, which never matches a stored row.
     // `revokedId` falls back to `id` (Baileys, where the two are the same).
     const revokedWaMessageId = message.revokedId ?? message.id;
-    void this.recordRevoke(id, revokedWaMessageId);
-    const inFlight = this.inboundInFlight.get(`${id}:${revokedWaMessageId}`);
-    if (inFlight) inFlight.revokeAnnounced = true;
+    const apply = (): void => {
+      void this.recordRevoke(id, revokedWaMessageId);
+      const inFlight = this.inboundInFlight.get(`${id}:${revokedWaMessageId}`);
+      if (inFlight) inFlight.revokeAnnounced = true;
 
-    // Notify consumers regardless of whether the row existed: webhook (message.revoked
-    // is a declared event) + the real-time dashboard stream.
-    const revokedPayload = message as unknown as Record<string, unknown>;
-    void this.webhookService.dispatch(id, 'message.revoked', revokedPayload);
-    this.eventsGateway.emitMessageRevoked(id, revokedPayload);
+      // Notify consumers regardless of whether the row existed: webhook (message.revoked
+      // is a declared event) + the real-time dashboard stream.
+      const revokedPayload = message as unknown as Record<string, unknown>;
+      void this.webhookService.dispatch(id, 'message.revoked', revokedPayload);
+      this.eventsGateway.emitMessageRevoked(id, revokedPayload);
+    };
+    // An engine that applies no validation to a revoke says who made it, and the stored row says whose
+    // message it names: a revoke the row proves foreign is dropped, announcement included. whatsapp-web.js
+    // reports only what WhatsApp Web itself accepted, so it passes no actor and is applied at once.
+    if (!actor) {
+      apply();
+      return;
+    }
+    void this.mutationProjector
+      .foreignRowReason(id, revokedWaMessageId, { kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe })
+      .then(foreign => {
+        if (!this.engines.isLive(id, engine)) return;
+        if (foreign) {
+          this.logger.warn('Dropping a revoke aimed at a message of another chat or sender', {
+            sessionId: id,
+            messageId: revokedWaMessageId,
+            reason: foreign,
+          });
+          return;
+        }
+        apply();
+      });
   }
 
   /** History backfill persist, extracted to message-history-projector.ts (stateless function). */

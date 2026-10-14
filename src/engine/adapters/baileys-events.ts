@@ -594,7 +594,7 @@ export class BaileysEvents {
           this.changeStoredMessage(pm.key?.id, stored =>
             this.mayChange(stored.key, msg.key, true) ? { ...stored, message: null } : null,
           );
-          this.host.getOnMessageRevoked()?.(revoked);
+          this.host.getOnMessageRevoked()?.(revoked, { fromMe: msg.key.fromMe === true });
           return;
         }
         if (pm?.type === b.proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {

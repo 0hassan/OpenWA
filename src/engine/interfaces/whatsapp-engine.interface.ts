@@ -879,7 +879,11 @@ export interface EngineEventCallbacks {
    * carries no chat, and the emitted payload then omits the field rather than guess.
    */
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
-  onMessageRevoked?: (message: RevokedMessage) => void;
+  /**
+   * `actor.fromMe` says whether the account itself made the revoke (from its phone). Only an engine that
+   * receives the raw protocol message can say; whatsapp-web.js leaves it out.
+   */
+  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   /**

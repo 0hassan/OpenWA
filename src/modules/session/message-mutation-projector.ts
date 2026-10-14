@@ -6,6 +6,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { ReactionEvent, EditedMessage } from '../../engine/interfaces/whatsapp-engine.interface';
 import { updateMessageMetadata } from '../message/message-metadata';
+import { mutationTargetsForeignRow, type MutationSource } from './message-mutation-guard';
 
 /**
  * Applies stored-message mutations — reactions, inbound edits, REST outbound-edit echoes — behind
@@ -45,6 +46,24 @@ export class MessageMutationProjector {
     this.messageMutations.enqueue(`${id}:${messageId}`, work);
   }
 
+  /**
+   * Why a change must not touch the stored row it names (see message-mutation-guard), or null: the row
+   * is absent, unreadable, or the change is consistent with it. Never rejects: a read that fails lets the
+   * change through, as it always went.
+   */
+  async foreignRowReason(sessionId: string, waMessageId: string, source: MutationSource): Promise<string | null> {
+    if (!waMessageId) return null;
+    try {
+      const row = await this.messageRepository.findOne({
+        where: { sessionId, waMessageId },
+        select: { chatId: true, direction: true, author: true },
+      });
+      return row ? mutationTargetsForeignRow(row, source) : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async applyReaction(id: string, event: ReactionEvent): Promise<void> {
     try {
       // Guard the lookup key before it reaches TypeORM: `findOne` DROPS an undefined condition from
@@ -52,6 +71,15 @@ export class MessageMutationProjector {
       // message's id would silently match an arbitrary row and clobber/emit its reactions. `!msg` is
       // no protection against that — the row it finds is real, just the wrong one.
       if (!event.messageId) return;
+      const foreign = await this.foreignRowReason(id, event.messageId, { kind: 'reaction', chatId: event.chatId });
+      if (foreign) {
+        this.logger.warn('Dropping a reaction aimed at a message of another chat', {
+          sessionId: id,
+          messageId: event.messageId,
+          reason: foreign,
+        });
+        return;
+      }
 
       // A revoked row reads as absent, like the edit paths: a reaction that lands after the delete must
       // not write a reactions map back onto the cleared metadata.
@@ -87,6 +115,20 @@ export class MessageMutationProjector {
 
   /** Persist an edit before notifying consumers, while still surfacing the occurrence if storage fails. */
   private async applyMessageEdit(id: string, message: EditedMessage): Promise<void> {
+    const foreign = await this.foreignRowReason(id, message.messageId, {
+      kind: 'edit',
+      chatId: message.chatId,
+      fromMe: message.fromMe,
+      author: message.author,
+    });
+    if (foreign) {
+      this.logger.warn('Dropping an edit aimed at a message of another chat or sender', {
+        sessionId: id,
+        messageId: message.messageId,
+        reason: foreign,
+      });
+      return;
+    }
     try {
       // Never onto a revoked row: a late edit must not bring back text the sender deleted.
       await this.messageRepository.update(

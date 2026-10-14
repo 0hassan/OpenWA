@@ -2794,6 +2794,8 @@ describe('BaileysAdapter inbound fan-out', () => {
           ? { id: 'TARGET', revokedId: 'TARGET', body: '' }
           : { messageId: 'TARGET', body: 'updated' }),
       }),
+      // A revoke also says who made it: here the account's own API delete, echoed.
+      ...(operation === 'delete' ? [{ fromMe: true }] : []),
     );
     expect(operation === 'delete' ? onMessageEdited : onMessageRevoked).not.toHaveBeenCalled();
     expect(onMessageCreate).not.toHaveBeenCalled();
@@ -3661,7 +3663,9 @@ describe('BaileysAdapter inbound fan-out', () => {
     await new Promise(r => setImmediate(r));
 
     expect(firstEditedMessage(onMessageEdited)).toMatchObject({ messageId: 'EDITED_ID', body: 'fixed' });
-    expect(onMessageRevoked).toHaveBeenCalledWith(expect.objectContaining({ id: 'REVOKED_ID' }));
+    expect(onMessageRevoked).toHaveBeenCalledWith(expect.objectContaining({ id: 'REVOKED_ID' }), {
+      fromMe: false,
+    });
     expect(onMessageReaction).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'REACTED_ID', reaction: 'ok' }),
     );
@@ -3712,8 +3716,12 @@ describe('BaileysAdapter inbound fan-out', () => {
     expect(firstEditedMessage(onMessageEdited)).toMatchObject({ messageId: 'E1', chatId: '628222@c.us' });
     expect(onMessageRevoked).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'R1', chatId: '628222@c.us', from: '628222@c.us' }),
+      expect.anything(),
     );
-    expect(onMessageRevoked).toHaveBeenCalledWith(expect.objectContaining({ id: 'R2', chatId: LIST, to: LIST }));
+    expect(onMessageRevoked).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'R2', chatId: LIST, to: LIST }),
+      expect.anything(),
+    );
     expect(onMessageReaction).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'X1', chatId: '628222@c.us', senderId: '628222@c.us' }),
     );

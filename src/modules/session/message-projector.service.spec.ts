@@ -132,6 +132,73 @@ describe('MessageProjector', () => {
     });
   });
 
+  describe('edits and reactions aimed at a stored row', () => {
+    it('drops an edit the counterparty made of a message the account sent', async () => {
+      messageRepository.findOne.mockResolvedValue({ chatId: 'c1@c.us', direction: 'outgoing' });
+
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'M1',
+        chatId: 'c1@c.us',
+        body: 'forged',
+        fromMe: false,
+      } as never);
+      await settle();
+      await settle();
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+      expect(webhookService.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("applies the counterparty's edit of its own message", async () => {
+      messageRepository.findOne.mockResolvedValue({ chatId: 'c1@c.us', direction: 'incoming' });
+
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'M1',
+        chatId: 'c1@c.us',
+        body: 'fixed typo',
+        fromMe: false,
+      } as never);
+      await settle();
+      await settle();
+
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 's1', waMessageId: 'M1' }),
+        { body: 'fixed typo' },
+      );
+    });
+
+    it("drops a group member's edit of another member's message", async () => {
+      messageRepository.findOne.mockResolvedValue({
+        chatId: '120363@g.us',
+        direction: 'incoming',
+        author: '628111@c.us',
+      });
+
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'M1',
+        chatId: '120363@g.us',
+        body: 'forged',
+        fromMe: false,
+        author: '628222@c.us',
+      } as never);
+      await settle();
+      await settle();
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('drops a reaction that names a message of another chat', async () => {
+      messageRepository.findOne.mockResolvedValue({ chatId: 'c2@c.us', direction: 'incoming' });
+
+      projector.applyReactionQueued('s1', { messageId: 'M1', chatId: 'c1@c.us', senderId: '628@c.us', reaction: '👍' });
+      await settle();
+      await settle();
+
+      expect(messageRepository.update).not.toHaveBeenCalled();
+      expect(eventsGateway.emitMessageReaction).not.toHaveBeenCalled();
+    });
+  });
+
   describe('applyReactionQueued', () => {
     it('ignores a reaction with no target message id instead of querying for one', async () => {
       // findOne DROPS an undefined condition rather than matching nothing, so reaching the repository
@@ -239,6 +306,71 @@ describe('MessageProjector', () => {
         { sessionId: 's1', waMessageId: 'ORIGINAL' },
         expect.objectContaining({ type: 'revoked' }),
       );
+    });
+
+    describe('when the engine says who made the revoke', () => {
+      const revoke = { id: 'M1', revokedId: 'M1', chatId: 'c1@c.us' } as never;
+      const row = (fields: Record<string, unknown>): void => {
+        messageRepository.findOne.mockResolvedValue({ chatId: 'c1@c.us', direction: 'incoming', ...fields });
+      };
+
+      it('drops a revoke the counterparty made of a message the account sent', async () => {
+        // WhatsApp clients ignore it, and Baileys hands it over unchecked, so the stored row must not follow.
+        row({ direction: 'outgoing' });
+
+        projector.handleMessageRevoked('s1', engine, revoke, { fromMe: false });
+        await settle();
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalled();
+        expect(eventsGateway.emitMessageRevoked).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['the counterparty of its own message', { direction: 'incoming' }, false],
+        ['the account from its phone of its own message', { direction: 'outgoing' }, true],
+      ])('applies a revoke made by %s', async (_who, fields, fromMe) => {
+        row(fields);
+
+        projector.handleMessageRevoked('s1', engine, revoke, { fromMe });
+        await settle();
+
+        expect(messageRepository.update).toHaveBeenCalledWith(
+          { sessionId: 's1', waMessageId: 'M1' },
+          expect.objectContaining({ type: 'revoked' }),
+        );
+        expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
+      });
+
+      it('drops a revoke that names a message of another chat', async () => {
+        row({ chatId: 'c2@c.us' });
+
+        projector.handleMessageRevoked('s1', engine, revoke, { fromMe: false });
+        await settle();
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+        expect(eventsGateway.emitMessageRevoked).not.toHaveBeenCalled();
+      });
+
+      it('still applies a group admin deleting a message the account sent', async () => {
+        row({ chatId: '120363@g.us', direction: 'outgoing' });
+
+        projector.handleMessageRevoked('s1', engine, { id: 'M1', revokedId: 'M1', chatId: '120363@g.us' } as never, {
+          fromMe: false,
+        });
+        await settle();
+
+        expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
+      });
+
+      it('applies a revoke of a message nothing stored, as it always did', async () => {
+        messageRepository.findOne.mockResolvedValue(null);
+
+        projector.handleMessageRevoked('s1', engine, revoke, { fromMe: false });
+        await settle();
+
+        expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('ignores an event from an engine that no longer owns the session', async () => {
