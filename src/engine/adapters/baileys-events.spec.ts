@@ -1178,6 +1178,29 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     await flush();
   });
 
+  it('reads the edit of an original that finishes while the edit is still reading the store', async () => {
+    // The edit's read of the store is issued while the original is in flight, and answers (null: the row
+    // was written after the read began) only once the original has finished and left the in-flight map.
+    const reads: Array<(stored: WAMessage | null) => void> = [];
+    // Only these two reads are held; any later read of the id (the guard that follows) answers at once.
+    const getStoredMessage = (id: string): Promise<WAMessage | null> =>
+      id === 'ORIG1' && reads.length < 2 ? new Promise(resolve => reads.push(resolve)) : Promise.resolve(null);
+    const { events, onMessageEdited } = setup({ getStoredMessage });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+    await flush();
+    expect(reads).toHaveLength(2);
+
+    reads[0](null); // the original's own repeat-delivery check answers: it is stored and done
+    await flush();
+    reads[1](null); // now the edit's read answers, finding no row and no in-flight entry
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
+  });
+
   describe('leaves an encrypted edit unapplied when', () => {
     it.each([
       ['another member sealed it for the message', () => editEnvelope({ participant: reactor })],

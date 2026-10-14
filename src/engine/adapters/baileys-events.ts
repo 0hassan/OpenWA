@@ -852,11 +852,14 @@ export class BaileysEvents {
         const editType = b.proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT;
         if (type !== editType && type !== 'MESSAGE_EDIT') return undefined;
       }
+      // Looked up before the store is read: an original that finishes while the read is out leaves the
+      // in-flight map and, if its row was written after the read began, is in neither place.
+      const processing = this.inboundInFlight.get(targetId);
       const stored = await this.readStoredMessage(
         targetId,
         'reading the message an encrypted edit or reaction targets',
       );
-      const inFlight = this.inboundInFlight.get(targetId);
+      const inFlight = processing ?? this.inboundInFlight.get(targetId);
       const original = stored ?? (inFlight ? { key: inFlight.key, message: inFlight.message } : undefined);
       const secret = messageSecretOf(original?.message);
       if (!original || !secret) {
