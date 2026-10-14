@@ -114,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 - Read the duration of an outgoing Baileys audio file in a separate process and a voice note's waveform through ffmpeg, status voice notes included, so a crafted file can no longer abort or exhaust the gateway.
 - Bound `GET /api/search` to 1000 characters and 32 distinct words and run a repeated word once, so one request can no longer hold the event loop on SQLite for seconds.
+- Print the startup banner's API Docs URL only when Swagger is served, so a production boot no longer points at a `404`.
 
 ### Documentation
 
