@@ -1233,6 +1233,13 @@ describe('EventsGateway rate limiting', () => {
       };
       expect(otherSubnet.type).not.toBe('error');
     });
+  });
+
+  // A reply that carried client JSON back made the transport serialize whatever the client nested in it,
+  // so every path that answers a frame is held to the same rule: a string of at most 128 characters, or none.
+  describe('request id in replies', () => {
+    const HOSTILE = ['x'.repeat(129), { a: { b: 1 } }, ['r'], 7, true, null];
+    const idOf = (reply: unknown): unknown => (reply as { requestId?: unknown }).requestId;
 
     it('echoes a request id only when it is a short string, never structure the client built', async () => {
       process.env.WS_RATE_LIMIT_FRAME_PER_SECOND = '1000';
@@ -1246,12 +1253,58 @@ describe('EventsGateway rate limiting', () => {
 
       expect((await send({ type: 'ping', requestId: 'r1' })).requestId).toBe('r1');
       expect((await send({ type: 'ping', requestId: 'x'.repeat(128) })).requestId).toBe('x'.repeat(128));
-      // A reply that carried client JSON back made the transport serialize whatever the client nested in it.
-      for (const hostile of ['x'.repeat(129), { a: { b: 1 } }, ['r'], 7, true, null]) {
+      for (const hostile of HOSTILE) {
         expect((await send({ type: 'ping', requestId: hostile })).requestId).toBeUndefined();
         const refused = await send({ type: 'no-such-type', requestId: hostile });
         expect(refused.code).toBe('INVALID_MESSAGE');
         expect(refused.requestId).toBeUndefined();
+      }
+    });
+
+    it('drops it from the RATE_LIMITED reply too, the one an abusive client is sent', async () => {
+      process.env.WS_RATE_LIMIT_FRAME_PER_SECOND = '1';
+      process.env.WS_RATE_LIMIT_FRAME_BURST = '1';
+      jest.useFakeTimers();
+      const gw = buildGateway();
+      const sock = makeSock('a', {}, '203.0.113.9');
+      await gw.handleMessage(asSocket(sock), { type: 'ping' }); // spends the one token
+
+      for (const hostile of HOSTILE) {
+        const reply = await gw.handleMessage(asSocket(sock), { type: 'ping', requestId: hostile } as never);
+        expect(reply).toMatchObject({ type: 'error', code: 'RATE_LIMITED' });
+        expect(idOf(reply)).toBeUndefined();
+      }
+      const short = await gw.handleMessage(asSocket(sock), { type: 'ping', requestId: 'r1' } as never);
+      expect(short).toMatchObject({ code: 'RATE_LIMITED', requestId: 'r1' });
+      // The frame the socket was pushed is the one a client reads: none of the hostile ids is in it.
+      const pushed = sock.emit.mock.calls.map(([, frame]) => idOf(frame));
+      expect(pushed.filter(id => id !== undefined)).toEqual(['r1']);
+    });
+
+    it('drops it from subscribe and unsubscribe replies, granted or refused', async () => {
+      process.env.WS_RATE_LIMIT_FRAME_PER_SECOND = '1000';
+      process.env.WS_RATE_LIMIT_FRAME_BURST = '1000';
+      authService.validateApiKey.mockResolvedValue({ id: 'k1', name: 'k', allowedSessions: null });
+      const gw = buildGateway();
+      const sock = makeSock('s1', { apiKey: 'good' });
+      await gw.handleConnection(asSocket(sock));
+      const send = (message: Record<string, unknown>) =>
+        gw.handleMessage(asSocket(sock), message as unknown as WSClientMessage);
+
+      const commands: Array<[string, Record<string, unknown>, string]> = [
+        ['subscribed', { type: 'subscribe', sessionId: 'sess-1', events: ['message.received'] }, 'subscribed'],
+        ['refused subscribe', { type: 'subscribe', sessionId: 'sess:1', events: ['*'] }, 'error'],
+        ['unsubscribed', { type: 'unsubscribe', sessionId: 'sess-1' }, 'unsubscribed'],
+        ['refused unsubscribe', { type: 'unsubscribe', sessionId: 'sess:1' }, 'error'],
+      ];
+      for (const [label, command, type] of commands) {
+        const kept = await send({ ...command, requestId: 'r1' });
+        expect([label, kept]).toEqual([label, expect.objectContaining({ type, requestId: 'r1' })]);
+        for (const hostile of HOSTILE) {
+          const reply = await send({ ...command, requestId: hostile });
+          expect([label, reply]).toEqual([label, expect.objectContaining({ type })]);
+          expect([label, idOf(reply)]).toEqual([label, undefined]);
+        }
       }
     });
   });
