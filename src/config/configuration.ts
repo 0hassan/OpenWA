@@ -431,8 +431,8 @@ export default () => ({
     archiveEnabled: process.env.CHAT_MEDIA_ARCHIVE_ENABLED === 'true',
     // Extend archiving to media this account SENT. A sub-flag rather than a mode of its own, so what
     // it writes lands under the same prefix and is maintained by the same retention purge and orphan
-    // sweep. Off by default because it doubles storage again for the outbound half, and because a
-    // URL-based send stores no bytes to archive in the first place.
+    // sweep. Off by default because it doubles storage again for the outbound half; a URL-based send
+    // stores no bytes to archive on Baileys, and on whatsapp-web.js the echo row may hold them.
     archiveOutbound: process.env.CHAT_MEDIA_ARCHIVE_OUTBOUND === 'true',
     // Per-file cap on archived chat media (default 25 MiB). Media above it is simply not archived —
     // the message row and its inline copy are unaffected.
