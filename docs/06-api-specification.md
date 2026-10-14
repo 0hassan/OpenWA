@@ -1963,7 +1963,7 @@ Send a video (by URL or base64) with an optional caption. Uses the same `SendMed
 
 #### POST /api/sessions/:sessionId/messages/send-audio
 
-Send an audio message (by URL or base64). Uses `SendAudioMessageDto`. A `caption` is accepted by the DTO but not persisted for audio. Set `ptt: true` to send a real WhatsApp **voice note** (microphone bubble + waveform) instead of a plain audio file. `ptt` is a JSON boolean, exclusive to this endpoint and to `audio` items of `send-bulk`, and — because voice notes require `audio/ogg; codecs=opus` — the server defaults the mimetype to that when you set `ptt` without one; for reliable playback (especially on the Baileys engine, which does not transcode) supply OGG/Opus bytes. A `ptt` voice note is stored as message `type: "voice"`.
+Send an audio message (by URL or base64). Uses `SendAudioMessageDto`. A `caption` is accepted by the DTO but not persisted for audio. Set `ptt: true` to send a real WhatsApp **voice note** (microphone bubble + waveform) instead of a plain audio file. `ptt` is a JSON boolean, exclusive to this endpoint and to `audio` items of `send-bulk`, and — because voice notes require `audio/ogg; codecs=opus` — the server defaults the mimetype to that when you set `ptt` without one; for reliable playback (especially on the Baileys engine, which does not transcode) supply OGG/Opus bytes. A `ptt` voice note is stored as message `type: "voice"`. On the Baileys engine its waveform is read through ffmpeg (`FFMPEG_PATH`, also with media conversion disabled), at most the first 35 minutes of it, and a note whose waveform cannot be read goes out with flat bars; the duration is read in a separate process and is `0` when it cannot be read.
 
 **Auth:** API key (OPERATOR)
 

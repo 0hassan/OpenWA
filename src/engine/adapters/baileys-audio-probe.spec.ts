@@ -1,4 +1,9 @@
-import { probeAudio, WAVEFORM_BARS } from './baileys-audio-probe';
+import { describeAudio, WAVEFORM_BARS } from './baileys-audio-probe';
+import { runFfmpeg } from '../../modules/media/ffmpeg';
+
+// ffmpeg is the one dependency of the waveform; the duration read runs the real child process.
+jest.mock('../../modules/media/ffmpeg', () => ({ runFfmpeg: jest.fn() }));
+const ffmpeg = runFfmpeg as jest.Mock;
 
 const u32be = (value: number): Buffer => {
   const out = Buffer.alloc(4);
@@ -17,7 +22,7 @@ function oversizedAiff(): Buffer {
   return Buffer.concat([Buffer.from('FORM'), u32be(body.length), body]);
 }
 
-/** Unsigned 8-bit mono PCM at 8 kHz: a square wave, so every stretch of it is as loud as any other. */
+/** Unsigned 8-bit mono PCM at 8 kHz, a square wave: music-metadata reads its duration from the header. */
 function wav(seconds: number): Buffer {
   const rate = 8000;
   const samples = Buffer.alloc(rate * seconds);
@@ -38,34 +43,93 @@ function wav(seconds: number): Buffer {
   return Buffer.concat([header, samples]);
 }
 
-describe('probeAudio', () => {
-  // Each probe is a Node process that loads a parser, and a decoder for a voice note.
+/** What ffmpeg writes with `-ac 1 -ar 8000 -f s16le`: `count` samples, each `level(index)` high. */
+function pcm(count: number, level: (index: number) => number): Buffer {
+  const out = Buffer.alloc(count * 2);
+  for (let i = 0; i < count; i++) out.writeInt16LE(level(i), i * 2);
+  return out;
+}
+
+describe('describeAudio', () => {
+  // The duration read is a Node process that loads a parser.
   jest.setTimeout(60_000);
 
-  it('reads the duration of an audio file', async () => {
-    const probe = await probeAudio(wav(3), false);
+  beforeEach(() => ffmpeg.mockReset());
 
-    expect(probe.seconds).toBe(3);
-    expect(probe.waveform).toBeUndefined();
+  it('reads the duration of an audio file and decodes nothing for a plain audio file', async () => {
+    const described = await describeAudio(wav(3), false);
+
+    expect(described).toEqual({ seconds: 3 });
+    expect(ffmpeg).not.toHaveBeenCalled();
   });
 
-  it('reads the waveform of a voice note as 64 bars scaled so the loudest is 100', async () => {
-    const probe = await probeAudio(wav(3), true);
+  it('builds a voice note waveform of 64 bars, the loudest scaled to 100, from ffmpeg samples', async () => {
+    // Quiet first half, loud second half: the bars must follow the signal, not be flat.
+    const samples = 8000 * 3;
+    ffmpeg.mockResolvedValue(pcm(samples, i => (i < samples / 2 ? 1000 : 8000)));
 
-    expect(probe.seconds).toBe(3);
-    expect(probe.waveform).toBeInstanceOf(Uint8Array);
-    expect(probe.waveform).toHaveLength(WAVEFORM_BARS);
-    expect(Math.max(...(probe.waveform as Uint8Array))).toBe(100);
+    const described = await describeAudio(wav(3), true);
+
+    expect(described.seconds).toBe(3);
+    const bars = described.waveform as Uint8Array;
+    expect(bars).toHaveLength(WAVEFORM_BARS);
+    expect(Math.max(...bars)).toBe(100);
+    expect(bars[0]).toBe(12); // 1000 / 8000
+    expect(bars[WAVEFORM_BARS - 1]).toBe(100);
+    // Decoded as 8 kHz mono signed 16-bit and stopped at a fixed size, whatever the file claims to hold.
+    expect(ffmpeg).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      'bin',
+      'raw',
+      expect.arrayContaining(['-ac', '1', '-ar', '8000', '-f', 's16le']),
+      expect.objectContaining({ maxOutputBytes: 32 * 1024 * 1024 }),
+    );
   });
 
-  it('answers nothing for bytes no parser reads, rather than rejecting', async () => {
-    await expect(probeAudio(Buffer.from('not audio at all'), true)).resolves.toEqual({});
+  it.each([
+    ['ffmpeg cannot run or refuses the file', () => ffmpeg.mockRejectedValue(new Error('no ffmpeg'))],
+    ['the decoded audio is silent', () => ffmpeg.mockResolvedValue(pcm(8000, () => 0))],
+    ['the decoded audio is shorter than one sample per bar', () => ffmpeg.mockResolvedValue(pcm(10, () => 500))],
+  ])('sends flat bars when %s', async (_name, arrange) => {
+    arrange();
+
+    const described = await describeAudio(wav(3), true);
+
+    expect(described.seconds).toBe(3);
+    expect(described.waveform).toEqual(new Uint8Array(WAVEFORM_BARS).fill(40));
+  });
+
+  it('takes the duration from the decoded samples when the parser could not read it', async () => {
+    ffmpeg.mockResolvedValue(pcm(8000 * 5, i => (i % 2 === 0 ? 3000 : -3000)));
+
+    const described = await describeAudio(Buffer.from('not audio at all'), true);
+
+    expect(described.seconds).toBe(5);
+  });
+
+  it('does not trust a duration from samples that ffmpeg was cut off at', async () => {
+    ffmpeg.mockResolvedValue(pcm((32 * 1024 * 1024) / 2, i => (i % 2 === 0 ? 3000 : -3000)));
+
+    const described = await describeAudio(Buffer.from('not audio at all'), true);
+
+    expect(described.seconds).toBe(0);
+  });
+
+  it('answers a zero duration and flat bars for bytes nothing reads, rather than rejecting', async () => {
+    ffmpeg.mockRejectedValue(new Error('Invalid data found when processing input'));
+
+    await expect(describeAudio(Buffer.from('not audio at all'), true)).resolves.toEqual({
+      seconds: 0,
+      waveform: new Uint8Array(WAVEFORM_BARS).fill(40),
+    });
   });
 
   it('survives a file that aborts the process of a reader that opens it', async () => {
     // Opened as a file, music-metadata dies on this one with SIGABRT in node::fs::Read. Whatever the
     // child does with it, the caller must get an answer and keep running.
-    await expect(probeAudio(oversizedAiff(), false)).resolves.toEqual({});
-    await expect(probeAudio(oversizedAiff(), true)).resolves.toEqual({});
+    ffmpeg.mockRejectedValue(new Error('refused'));
+
+    await expect(describeAudio(oversizedAiff(), false)).resolves.toEqual({ seconds: 0 });
+    await expect(describeAudio(oversizedAiff(), true)).resolves.toMatchObject({ seconds: 0 });
   });
 });

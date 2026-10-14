@@ -10,8 +10,7 @@ jest.mock('../../common/media/load-remote-media', () => ({
 
 // The probe runs a child process; its own spec drives the real one.
 jest.mock('./baileys-audio-probe', () => ({
-  WAVEFORM_BARS: 64,
-  probeAudio: jest.fn(() => Promise.resolve({})),
+  describeAudio: jest.fn(() => Promise.resolve({ seconds: 0 })),
 }));
 
 // A fake Baileys socket: an event emitter wearing the methods the adapter calls.
@@ -185,7 +184,7 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { LidNotMappedError } from '../../common/errors/lid-not-mapped.error';
 import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 import { loadRemoteMediaBuffer } from '../../common/media/load-remote-media';
-import { probeAudio } from './baileys-audio-probe';
+import { describeAudio } from './baileys-audio-probe';
 import * as safeLinkPreview from './safe-link-preview';
 
 const fakeStore = {
@@ -4215,14 +4214,14 @@ describe('BaileysAdapter media sends', () => {
 
   it('sendAudioMessage hands Baileys the duration and waveform read in the child, so it reads nothing itself', async () => {
     const waveform = Uint8Array.from({ length: 64 }, (_, bar) => bar);
-    (probeAudio as jest.Mock).mockResolvedValueOnce({ seconds: 7, waveform });
+    (describeAudio as jest.Mock).mockResolvedValueOnce({ seconds: 7, waveform });
     const adapter = await ready();
     await adapter.sendAudioMessage('628111@s.whatsapp.net', {
       mimetype: 'audio/ogg; codecs=opus',
       data: Buffer.from([1]),
       ptt: true,
     });
-    expect(probeAudio).toHaveBeenLastCalledWith(Buffer.from([1]), true);
+    expect(describeAudio).toHaveBeenLastCalledWith(Buffer.from([1]), true);
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
       audio: Buffer.from([1]),
       mimetype: 'audio/ogg; codecs=opus',
@@ -4258,13 +4257,11 @@ describe('BaileysAdapter media sends', () => {
       data: Buffer.from([1]),
       ptt: true,
     });
-    // A file the child could not read still goes out with both fields set, flat bars for a voice note.
     expect(fakeSock.sendMessage).toHaveBeenCalledWith('628111@s.whatsapp.net', {
       audio: Buffer.from([1]),
       mimetype: 'audio/ogg; codecs=opus',
       ptt: true,
       seconds: 0,
-      waveform: new Uint8Array(64).fill(40),
     });
   });
 
@@ -8470,6 +8467,23 @@ describe('BaileysAdapter voice status', () => {
     expect(content.ptt).toBe(true);
     expect(content.audio).toBeDefined();
     expect(options.statusJidList).toEqual(['628111@s.whatsapp.net']);
+  });
+
+  // Baileys reads the file itself, in this process, for whichever of the two the content leaves out.
+  it('hands Baileys the duration and waveform read in the child, as a sent voice note does', async () => {
+    const waveform = Uint8Array.from({ length: 64 }, (_, bar) => bar);
+    (describeAudio as jest.Mock).mockResolvedValueOnce({ seconds: 4, waveform });
+    const adapter = await ready();
+
+    await adapter.postVoiceStatus(
+      { mimetype: 'audio/ogg; codecs=opus', data: Buffer.from('audio').toString('base64') },
+      { recipients: ['628111@c.us'] },
+    );
+
+    expect(describeAudio).toHaveBeenLastCalledWith(Buffer.from('audio'), true);
+    const [, content] = fakeSock.sendMessage.mock.calls[0] as [string, { seconds?: number; waveform?: Uint8Array }];
+    expect(content.seconds).toBe(4);
+    expect(content.waveform).toBe(waveform);
   });
 
   // WhatsApp has nowhere to render a caption on a status voice note.
