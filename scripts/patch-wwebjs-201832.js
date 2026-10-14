@@ -42,13 +42,15 @@ const EXPECTED_REJECTS = new Set(['src/structures/Contact.js.rej']);
 // unnoticed. `patch` always writes a .rej for a hunk it couldn't place, but a hunk placed at the
 // WRONG offset would be silent — these assertions are what close that gap.
 //
-// This list must cover every file the patch normalizes, not just the structure constructors, because
+// This list must cover every file the patch writes, not just the structure constructors, because
 // the skip branch below uses it to decide a half-patched tree apart from an upstream fix. `patch`
 // applies the diff in file order and Utils.js is applied LAST, one file after Message.js — which is
 // what the skip branch keys on. Omitting a file here means a run that died in that window leaves a
 // tree where every assertion passes, so every later run stands down and the missing site latches in
-// permanently. One entry per file: `siteLanded` resolves a file's marker with `.find`, so a second
-// entry for the same path would never be read.
+// permanently. The same holds at the other end: index.d.ts is the FIRST file written, and a run that
+// died right after it reads as a pristine tree, so the diff is applied again and rejects its hunk.
+// One entry per file: `siteLanded` resolves a file's marker with `.find`, so a second entry for the
+// same path would never be read.
 const REQUIRED_SITES = [
   ['src/structures/Base.js', /static _normalizeId\(id\)/],
   ['src/structures/Message.js', /this\.id = Base\._normalizeId\(data\.id\)/],
@@ -63,6 +65,8 @@ const REQUIRED_SITES = [
   ['src/util/Injected/Utils.js', /_serialized: msg\.id\.\$1/],
   ['src/Client.js', /res\.gid\._serialized \|\| res\.gid\.\$1/],
   ['src/structures/GroupChat.js', /pWid\._serialized \|\| pWid\.\$1/],
+  // The typings hunk, the one file the patch writes before any of the above.
+  ['index.d.ts', /sendReaction\(messageId: string, reaction: string\): Promise<void>;/],
 ];
 
 /** Artifacts `patch` can leave behind. `.~N~` are GNU's backup-if-mismatch copies of pre-patch source. */

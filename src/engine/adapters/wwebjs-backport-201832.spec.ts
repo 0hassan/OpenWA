@@ -162,6 +162,26 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(litter).toEqual([]);
   });
 
+  // index.d.ts is the FIRST file `patch` writes. No structure marker covers it, so a run that died right
+  // after it read as a pristine tree: the diff was applied again, its typings hunk rejected and the
+  // interrupted install reported as version skew with a .rej left behind.
+  it('refuses a tree whose run stopped right after the first file, without touching it', () => {
+    const done = copyWwjs();
+    applyBackport(done);
+    const dir = copyWwjs();
+    const typings = path.join(dir, 'index.d.ts');
+    fs.copyFileSync(path.join(done, 'index.d.ts'), typings);
+    const before = fs.readFileSync(typings, 'utf8');
+    const baseJs = path.join(dir, 'src', 'structures', 'Base.js');
+    const base = fs.readFileSync(baseJs, 'utf8');
+
+    expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched[\s\S]*Message\.js[\s\S]*reinstall/i);
+
+    expect(fs.readFileSync(typings, 'utf8')).toBe(before);
+    expect(fs.readFileSync(baseJs, 'utf8')).toBe(base);
+    expect(fs.existsSync(`${typings}.rej`)).toBe(false);
+  });
+
   it('refuses to stand down on a half-patched tree', () => {
     const dir = copyWwjs();
     // Exactly what a run that died mid-apply leaves: `patch` writes as it goes and Message.js is the

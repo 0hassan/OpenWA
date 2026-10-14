@@ -108,6 +108,21 @@ describe('isBackportMissing', () => {
       expect(backportProblem(dir)).toContain('src/structures/Message.js, src/util/Injected/Utils.js');
     });
 
+    // index.d.ts is the first file written, so a run killed right after it leaves every structure file
+    // unpatched: the tree is not a pristine one, and the answer is the list, not "run the patcher".
+    it('names a tree where only the first file the patcher writes landed', () => {
+      const dir = wholeInstall();
+      for (const [rel] of REQUIRED_SITES) {
+        if (rel !== 'index.d.ts') fs.writeFileSync(path.join(dir, rel), 'this.id = data.id;');
+      }
+
+      expect(isBackportMissing(dir)).toBe(true);
+      expect(partialBackportSites(dir)).toHaveLength(REQUIRED_SITES.length - 1);
+      expect(partialBackportSites(dir)).not.toContain('index.d.ts');
+      expect(backportProblem(dir)).toContain('src/structures/Message.js');
+      expect(backportProblem(dir)).not.toBe(BACKPORT_MISSING_MESSAGE);
+    });
+
     it('leaves a tree fixed upstream in its own way alone', () => {
       const dir = install('this.id = data.id._serialized || data.id.$1;');
 
