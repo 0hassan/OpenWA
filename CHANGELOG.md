@@ -124,6 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound `GET /api/search` to 1000 characters and 32 distinct words and run a repeated word once, so one request can no longer hold the event loop on SQLite for seconds.
 - Print the startup banner's API Docs URL only when Swagger is served, so a production boot no longer points at a `404`.
 - Decode numeric and common named character references in a Baileys link preview's title and description, so `&#8217;` and `&eacute;` no longer reach the recipient as written.
+- Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach.
 
 ### Documentation
 

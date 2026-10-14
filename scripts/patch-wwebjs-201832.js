@@ -80,6 +80,24 @@ function siteLanded(wwjsDir, rel) {
 }
 
 /**
+ * The REQUIRED_SITES a backport this patcher began did not reach, by relative path. The tree is judged
+ * ours by the id read in the Message constructor: without it the backport never started (the caller's
+ * own check says so) or upstream fixed the tree its own way. A file that cannot be read is not counted,
+ * since an install that cannot be inspected is not evidence of a broken one.
+ */
+function missingSites(wwjsDir = DEFAULT_WWJS) {
+  const landed = rel => {
+    try {
+      return siteLanded(wwjsDir, rel);
+    } catch {
+      return undefined;
+    }
+  };
+  if (landed('src/structures/Message.js') !== true) return [];
+  return REQUIRED_SITES.filter(([rel]) => landed(rel) === false).map(([rel]) => rel);
+}
+
+/**
  * Flag an error raised against a tree that is no longer pristine — either this run wrote to it, or a
  * previous run left it half-patched. `--best-effort` degrades on a pre-flight failure (no `patch`
  * binary — nothing ran, tree untouched) but must never swallow one of these: `patch` applies hunks as
@@ -331,6 +349,8 @@ if (require.main === module) {
 
 module.exports = {
   applyBackport,
+  missingSites,
+  REQUIRED_SITES,
   normalizeArtifactPath,
   gitApplyLeftTreeUntouched,
   DEFAULT_WWJS,

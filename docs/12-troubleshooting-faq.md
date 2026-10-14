@@ -736,7 +736,8 @@ curl -H "X-API-Key: $API_KEY" \
 - `POST /api/sessions/{id}/messages/send-text` returns `{"statusCode":500,"message":"Internal server error"}` — but the message _is_ delivered
 - Logs show `the engine returned no message for this send, so it may not have been delivered`
 - Unrelated operations fail with the minified error `r: r`: `GET /api/sessions/{id}/chats`, media downloads, typing indicators
-- Startup logs may contain `The installed whatsapp-web.js is missing the message-id backport…`
+- Startup logs may contain `The installed whatsapp-web.js is missing the message-id backport…`, or
+  `The installed whatsapp-web.js carries only part of the message-id backport…` after an interrupted install
 
 **Cause:** WhatsApp Web 2.3000.x renamed the internal message-id property that whatsapp-web.js
 reads. OpenWA ships a backport that restores it, applied at install time by
