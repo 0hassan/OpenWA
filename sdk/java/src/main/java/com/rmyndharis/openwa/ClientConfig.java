@@ -30,7 +30,7 @@ public final class ClientConfig {
         }
         if (hasIllegalChar(key)) {
             throw new IllegalArgumentException(
-                "OpenWAClient: apiKey contains illegal characters (whitespace, control or non-ASCII) — check for a stray newline");
+                "OpenWAClient: apiKey contains illegal characters (control or non-ASCII) — check for a stray newline");
         }
         if (b.timeout != null && (b.timeout.isZero() || b.timeout.isNegative())) {
             throw new IllegalArgumentException("OpenWAClient: timeout must be positive");

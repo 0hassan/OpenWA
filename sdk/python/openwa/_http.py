@@ -71,10 +71,11 @@ def resolve_timeout(
     """The timeout httpx is given: seconds per network operation, or ``None`` for none.
 
     ``None``, ``0`` and ``math.inf`` mean no timeout, as ``0`` does in the JavaScript and PHP clients;
-    httpx would otherwise take ``0`` literally and fail every connect. An :class:`httpx.Timeout`, or a
-    ``(connect, read, write, pool)`` tuple, goes to httpx as given: they were accepted before this
-    validator existed, and are the way to set the operations apart. Anything else that is not a
-    non-negative number raises at construction rather than at the first request.
+    httpx would otherwise take ``0`` literally and fail every connect. A ``(connect, read, write, pool)``
+    tuple is the way to set the operations apart, and each of its elements means the same: ``0`` and
+    ``math.inf`` leave that operation without a limit. An :class:`httpx.Timeout` goes to httpx as given,
+    since it was accepted before this validator existed. Anything else that is not a non-negative number
+    raises at construction rather than at the first request.
     """
     if timeout is None:
         return None
@@ -91,12 +92,34 @@ def resolve_timeout(
                 "OpenWAClient: a timeout tuple is (connect, read, write, pool), each a non-negative number "
                 f"of seconds or None (got {timeout!r})"
             )
-        return httpx.Timeout(timeout)
+        connect, read, write, pool = (
+            None if part is None or part == 0 or math.isinf(part) else float(part) for part in parts
+        )
+        return httpx.Timeout(connect=connect, read=read, write=write, pool=pool)
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or math.isnan(timeout) or timeout < 0:
         raise ValueError(
             f"OpenWAClient: timeout must be a non-negative number of seconds, or None for none (got {timeout!r})"
         )
     return None if timeout == 0 or math.isinf(timeout) else float(timeout)
+
+
+_HEADER_NAME_CHARS = frozenset("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+
+
+def check_default_headers(default_headers: Mapping[str, str] | None) -> None:
+    """Refuse a default header the HTTP layer would refuse, naming the header and never its value.
+
+    A credential for a proxy in front of the gateway is usually read from a file and keeps its newline;
+    the stack's own error quotes the value, which would put the credential in the application's log.
+    """
+    for name, value in (default_headers or {}).items():
+        if not isinstance(name, str) or not name or not all(char in _HEADER_NAME_CHARS for char in name):
+            raise ValueError("OpenWAClient: default_headers has a header name that is not a valid HTTP token")
+        if not isinstance(value, str) or any(char != "\t" and not " " <= char <= "~" for char in value):
+            raise ValueError(
+                f"OpenWAClient: default_headers value for {name!r} must be text without control or non-ASCII "
+                "characters; check for a stray newline"
+            )
 
 
 class HttpExecutor:
@@ -115,6 +138,7 @@ class HttpExecutor:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         timeout = resolve_timeout(timeout)
+        check_default_headers(default_headers)
         # Caller-supplied default headers are applied FIRST so the auth/JSON
         # headers below always win and can never be clobbered (mirrors the JS SDK).
         # httpx.Headers matches names case-insensitively, so a lowercase copy is

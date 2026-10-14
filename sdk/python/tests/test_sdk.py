@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import get_args, get_type_hints
 
@@ -273,16 +274,39 @@ class TestClientCore:
         for bad in [(1.0, 2.0), (1.0, 2.0, 3.0, -1.0), (1.0, "2", 3.0, 4.0)]:
             with pytest.raises(ValueError, match="timeout tuple"):
                 OpenWAClient(base_url="https://x", api_key="k", timeout=bad)  # type: ignore[arg-type]
+        # 0 and infinity mean no limit for that operation, as they do for the scalar: left as they are,
+        # httpx fails the first connect or read, or raises OverflowError, instead of the call.
+        client = OpenWAClient(base_url="https://x", api_key="k", timeout=(5, 0, 5, math.inf))
+        assert client._http._client.timeout == httpx.Timeout(connect=5.0, read=None, write=5.0, pool=None)
 
     def test_the_api_key_loses_a_trailing_newline_and_an_illegal_one_is_refused_without_being_quoted(self):
         client = OpenWAClient(base_url="https://x", api_key="owa_k1_secret\n")
         assert client._http._client.headers["X-API-Key"] == "owa_k1_secret"
-        for bad in ["owa_k1 secret", "owa_k1_se\x00cret", "owa_k1_sécret"]:
+        for bad in ["owa_k1_se\tcret", "owa_k1_se\x00cret", "owa_k1_sécret", "owa_k1_se\ncret"]:
             with pytest.raises(ValueError, match="api_key") as raised:
                 OpenWAClient(base_url="https://x", api_key=bad)
             assert bad not in str(raised.value)
         with pytest.raises(ValueError, match="required"):
             OpenWAClient(base_url="https://x", api_key="  \n")
+
+    def test_a_key_with_an_inner_space_is_accepted_as_the_gateway_and_other_clients_take_it(self):
+        client = OpenWAClient(base_url="https://x", api_key="correct horse battery staple correct horse\n")
+        assert client._http._client.headers["X-API-Key"] == "correct horse battery staple correct horse"
+
+    def test_a_default_header_the_stack_would_refuse_is_refused_without_quoting_its_value(self):
+        for name, value in [
+            ("CF-Access-Client-Secret", "s3cret-token\n"),
+            ("X-Trace", "caf\u00e9"),
+            ("X-Trace", "a\x00b"),
+        ]:
+            with pytest.raises(ValueError, match=name) as raised:
+                OpenWAClient(base_url="https://x", api_key="k", default_headers={name: value})
+            assert value.strip() not in str(raised.value)
+        with pytest.raises(ValueError, match="header name"):
+            OpenWAClient(base_url="https://x", api_key="k", default_headers={"X Bad": "v"})
+        # A tab and plain printable ASCII are fine.
+        client = OpenWAClient(base_url="https://x", api_key="k", default_headers={"X-Trace": "a\tb c"})
+        assert client._http._client.headers["X-Trace"] == "a\tb c"
 
     def test_timeout_zero_none_and_inf_mean_none_and_a_bad_value_raises(self):
         for none in (0, None, float("inf")):

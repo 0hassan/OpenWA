@@ -49,7 +49,7 @@ import java.util.Map;
  * // Sessions are addressed by the UUID that create() returns, not by name.
  * SessionResponse session = client.sessions.create(CreateSessionRequest.builder().name("my-session").build());
  * client.sessions.start(session.id());
- * // Link the account before sending: scan sessions.getQrCode or use sessions.requestPairingCode,
+ * // Link the account before sending: scan sessions.getQrCode (or use sessions.requestPairingCode for a number with no linked session),
  * // then wait for status READY. An unlinked session answers the send with 409.
  * client.messages.sendText(session.id(),
  *     SendTextRequest.builder().chatId("628123456789@c.us").text("Hello!").build());
@@ -255,10 +255,12 @@ public final class OpenWAClient {
         } catch (IllegalArgumentException e) {
             // e.g. a JDK-restricted header name in defaultHeaders, or a URI-illegal char — keep it
             // inside the OpenWAError contract instead of leaking a raw JDK exception to the caller.
-            // The JDK words a refused header as: invalid header value: "<the value>". Never repeat that.
+            // The JDK words a refused header VALUE as: invalid header value: "<the value>". Never repeat that.
+            // A refused header NAME is worded with the name only (restricted header name: "Host"), which is
+            // what tells the caller what to change, so it stays.
             String why = reason(e);
-            if (why.toLowerCase(java.util.Locale.ROOT).contains("header")) {
-                why = "a header was refused by the HTTP stack (check defaultHeaders for control or non-ASCII characters)";
+            if (why.toLowerCase(java.util.Locale.ROOT).contains("header value")) {
+                why = "a header value was refused by the HTTP stack (check defaultHeaders for control or non-ASCII characters)";
             }
             throw new OpenWAError("Invalid request — " + method + " " + path + ": " + why);
         }

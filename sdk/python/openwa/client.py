@@ -14,7 +14,7 @@ transport) and exposes domain resources as properties::
     # Sessions are addressed by the UUID that create() returns, not by name.
     session = client.sessions.create({"name": "my-session"})
     client.sessions.start(session["id"])
-    # Link the account before sending: scan sessions.get_qr_code or use sessions.request_pairing_code,
+    # Link the account before sending: scan sessions.get_qr_code (or use sessions.request_pairing_code for a number with no linked session),
     # then wait for status "ready". An unlinked session answers the send with 409.
     client.messages.send_text(session["id"], {
         "chatId": "628123456789@c.us",
@@ -94,14 +94,14 @@ class OpenWAClient:
         if not base_url:
             raise ValueError("OpenWAClient: base_url is required")
         # A key read from a secret file usually ends in a newline, which the HTTP layer refuses with an error
-        # that quotes the whole key. Trim it, and refuse anything that is still not a plain token.
+        # that quotes the whole key. Trim it, and refuse a control or non-ASCII character left inside: the
+        # gateway takes any printable ASCII, a space included, and the other clients send it as it is.
         api_key = api_key.strip() if isinstance(api_key, str) else api_key
         if not api_key:
             raise ValueError("OpenWAClient: api_key is required")
-        if not isinstance(api_key, str) or not all("!" <= char <= "~" for char in api_key):
+        if not isinstance(api_key, str) or not all(" " <= char <= "~" for char in api_key):
             raise ValueError(
-                "OpenWAClient: api_key contains illegal characters (whitespace, control or non-ASCII); "
-                "check for a stray newline"
+                "OpenWAClient: api_key contains a control or non-ASCII character; check for a stray newline"
             )
         _warn_if_insecure_http(base_url)
         self._http = HttpExecutor(

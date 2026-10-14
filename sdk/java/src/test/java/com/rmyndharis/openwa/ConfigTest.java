@@ -94,6 +94,33 @@ class ConfigTest {
     }
 
     @Test
+    void aRefusedHeaderValueIsNotRepeatedButARefusedHeaderNameIsNamed() {
+        HttpTransport badValue = req -> {
+            throw new IllegalArgumentException("invalid header value: \"s3cret-token\"");
+        };
+        OpenWAError value = assertThrows(OpenWAError.class,
+            () -> new OpenWAClient(base().transport(badValue).build())
+                .request(HttpMethod.GET, "/x", null, null, SuccessResult.class));
+        assertFalse(value.getMessage().contains("s3cret-token"));
+        assertTrue(value.getMessage().contains("header value"));
+
+        HttpTransport restricted = req -> {
+            throw new IllegalArgumentException("restricted header name: \"Host\"");
+        };
+        OpenWAError name = assertThrows(OpenWAError.class,
+            () -> new OpenWAClient(base().transport(restricted).build())
+                .request(HttpMethod.GET, "/x", null, null, SuccessResult.class));
+        assertTrue(name.getMessage().contains("restricted header name: \"Host\""));
+    }
+
+    @Test
+    void anApiKeyWithAnInnerSpaceIsAcceptedAsTheGatewayAndOtherClientsTakeIt() {
+        MockTransport tx = new MockTransport().respond(200, "{\"valid\":true}");
+        new OpenWAClient(ClientConfig.builder().baseUrl("http://h").apiKey("correct horse battery staple\n").transport(tx).build()).auth();
+        assertEquals("correct horse battery staple", tx.lastRequest().headers().get("X-API-Key"));
+    }
+
+    @Test
     void rejectsApiKeyWithNonAsciiCharacterWithoutEchoingIt() {
         // A zero-width space is a common copy artifact; the JDK would quote the whole key when it
         // refused the header, so the key is refused here and never repeated.
