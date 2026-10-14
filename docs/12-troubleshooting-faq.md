@@ -862,6 +862,10 @@ MEDIA_DOWNLOAD_MAX_BYTES=52428800
 # Default 25mb.
 BODY_SIZE_LIMIT=25mb
 
+# Behind nginx, raise client_max_body_size to match: its default is 1m, so a base64 media send
+# is refused with nginx's own HTML 413 before OpenWA sees it. Behind ingress-nginx, set the
+# nginx.ingress.kubernetes.io/proxy-body-size annotation (default 1m).
+
 # Note: send the body uncompressed. A request carrying Content-Encoding: gzip (or deflate/br)
 # is refused with 415 — the aggregate in-flight cap counts bytes on the wire, so a compressed
 # body would be admitted small and then inflated past the memory that cap exists to bound.
@@ -1326,6 +1330,11 @@ curl -X POST http://localhost:2785/api/sessions/{id}/messages/reply \
 server {
     listen 443 ssl;
     server_name api.example.com;
+
+    # nginx refuses a request body over 1m by default, below the 25mb OpenWA itself accepts
+    # (BODY_SIZE_LIMIT), so base64 media sends would answer 413 before reaching OpenWA.
+    # Keep this at or above BODY_SIZE_LIMIT.
+    client_max_body_size 25m;
 
     location / {
         proxy_pass http://localhost:2785;

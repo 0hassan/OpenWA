@@ -145,9 +145,10 @@
 > connected to node A receives an event raised on node B. Scope honestly: this distributes event
 > **fan-out only**. The per-key WS rate-limit buckets (counted per replica) and the engine registry
 > are still process-local. Without `REDIS_ENABLED` the adapter is inert and delivery is single-node,
-> exactly as before. With it, every chat event also costs the emitting node one or two `lid_mappings`
-> lookups, even when no chat-restricted key exists: it cannot know whether another replica holds a
-> restricted socket, so it names the chat in every form for the rooms to match.
+> exactly as before. With it, every event of a one-to-one chat also costs the emitting node one or two
+> `lid_mappings` lookups (one for a `@lid` chat, none for a group), even when no chat-restricted key
+> exists: it cannot know whether another replica holds a restricted socket, so it names the chat in
+> every form for the rooms to match.
 >
 > **Mid-connection key eviction converges on a timer, not a broadcast, and only on one node.** The
 > node that processes a revoke, delete, or narrowing tears down that key's sockets synchronously, in
@@ -660,6 +661,10 @@ upstream openwa {
 server {
     listen 80;
     server_name openwa.example.com;
+
+    # nginx refuses a request body over 1m by default, below the 25mb OpenWA itself accepts
+    # (BODY_SIZE_LIMIT), so base64 media sends would answer 413 before reaching a node.
+    client_max_body_size 25m;
 
     location / {
         proxy_pass http://openwa;

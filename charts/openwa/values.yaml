@@ -138,6 +138,10 @@ containerSecurityContext:
 ingress:
   enabled: false
   className: ""
+  # ingress-nginx refuses a request body over 1m by default, below the 25mb the app accepts
+  # (BODY_SIZE_LIMIT), so a base64 media send fails with 413 before it reaches the pod. Raise it
+  # to at least BODY_SIZE_LIMIT, for example:
+  #   nginx.ingress.kubernetes.io/proxy-body-size: 25m
   annotations: {}
   host: openwa.example.com
   paths:
