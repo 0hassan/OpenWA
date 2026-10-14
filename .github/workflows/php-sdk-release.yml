@@ -93,7 +93,7 @@ jobs:
           persist-credentials: false # stop the GITHUB_TOKEN extraheader from shadowing the PAT in the push URL
 
       # The job that holds the token refuses any other ref itself, whatever ran before it.
-      - name: Guard — ref must be a php-sdk-v* release tag
+      - name: Guard - ref must be a php-sdk-v* release tag
         env:
           REF: ${{ github.ref }}
         run: |
