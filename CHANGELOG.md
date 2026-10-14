@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP tools refuse a `chatId`, `fromChatId` or `toChatId` over 255 characters, as the send routes do, where PostgreSQL answered an internal tool error.
 - A start that fails while another start of the same session is in flight leaves the claim to that start, so its engine is no longer left on a row no node holds.
 - Uninstalling a plugin hands the chats it had taken over back to the bot, so other plugins are no longer silent there.
+- A `CORS_ORIGINS` entry written with a path or a trailing slash is used as the origin it names, and a warning at boot lists it, where it matched no `Origin` header.
 - Index ingress dead letters by delivery id, so the reconciler's per-delivery checks stop scanning every dead letter of an instance; the first boot builds the index.
 - Replay stranded ingress events past one whose stored payload is not valid JSON, instead of failing every sweep on it.
 - Hand a chat back to the bot when the plugin instance that took it over is deleted, instead of silencing every other plugin on it.
