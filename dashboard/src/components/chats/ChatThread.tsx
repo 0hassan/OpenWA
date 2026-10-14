@@ -295,19 +295,23 @@ function ChatThread({
     return () => el.removeEventListener('scroll', onScroll);
   });
 
-  // The reaction popover is centred on its icon, and the icon of a short bubble is a few pixels from the pane's
-  // edge, so the emoji nearest the edge would be clipped and out of the pointer's reach. When it opens it is
-  // measured against the pane and shifted back inside by the amount it runs over (see Chats.css).
+  // The reaction popover is centred on its icon and opens above it. The icon of a short bubble is a few pixels
+  // from the pane's side edge, and a message at the top of the pane has no room above it, so the emoji
+  // nearest an edge would be clipped and out of the pointer's reach. When it opens it is measured against
+  // the pane: shifted back inside by the amount it runs over sideways, and opened below the icon when it
+  // would lie above the pane (see Chats.css).
   const fitReactionPopover = useCallback(
     (event: SyntheticEvent<HTMLDivElement>) => {
       const popover = event.currentTarget.querySelector<HTMLElement>('.reaction-quick-popover');
       const pane = messagesContainerRef.current;
       if (!popover || !pane) return;
       popover.style.removeProperty('--popover-shift');
+      popover.removeAttribute('data-below');
       const at = popover.getBoundingClientRect();
       const edge = pane.getBoundingClientRect();
       const shift = at.left < edge.left ? edge.left - at.left : at.right > edge.right ? edge.right - at.right : 0;
       if (shift !== 0) popover.style.setProperty('--popover-shift', `${Math.round(shift)}px`);
+      if (at.top < edge.top) popover.setAttribute('data-below', '');
     },
     [messagesContainerRef],
   );

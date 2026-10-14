@@ -896,6 +896,31 @@ test('the reaction popover is shifted back inside the thread when it opens past 
   popover.getBoundingClientRect = rect(300, 508);
   rtl.fireEvent.mouseEnter(wrapper);
   assert.equal(popover.style.getPropertyValue('--popover-shift'), '');
+  assert.equal(popover.hasAttribute('data-below'), false);
+});
+
+// A message at the top of the pane has no room above its icon: the popover opens below it, and is measured
+// again each time, so scrolling the message down puts it back above.
+test('the reaction popover opens below its icon when it would lie above the thread', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const wrapper = bubblesOf(container)[0].querySelector<HTMLElement>('.reaction-trigger-wrapper');
+  const popover = wrapper?.querySelector<HTMLElement>('.reaction-quick-popover');
+  assert.ok(wrapper && popover);
+  const rect = (top: number) => () => ({ left: 300, right: 508, top, bottom: top + 44, width: 208 }) as DOMRect;
+  thread.getBoundingClientRect = () => ({ left: 100, right: 700, top: 200, bottom: 600, width: 600 }) as DOMRect;
+
+  popover.getBoundingClientRect = rect(170);
+  rtl.fireEvent.mouseEnter(wrapper);
+  assert.equal(popover.hasAttribute('data-below'), true);
+
+  popover.getBoundingClientRect = rect(260);
+  rtl.fireEvent.mouseEnter(wrapper);
+  assert.equal(popover.hasAttribute('data-below'), false);
+
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  assert.match(css, /\.reaction-quick-popover\[data-below\] \{[^}]*top:\s*100%;/);
 });
 
 test('the scroll-to-bottom button is the last child of the scroller and jumps without animating', async () => {

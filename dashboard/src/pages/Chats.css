@@ -1186,6 +1186,22 @@
   transform: translateX(var(--popover-shift, 0px)) translateY(-6px);
 }
 
+/* Opened below the icon when there is no room above it in the pane (ChatThread sets data-below). */
+.chats-page .reaction-quick-popover[data-below] {
+  bottom: auto;
+  top: 100%;
+  transform: translateX(calc(-50% + var(--popover-shift, 0px))) translateY(6px);
+}
+
+.chats-page .message-bubble-wrapper.outgoing .reaction-quick-popover[data-below] {
+  transform: translateX(var(--popover-shift, 0px)) translateY(6px);
+}
+
+.chats-page .reaction-quick-popover[data-below]::after {
+  top: auto;
+  bottom: 100%;
+}
+
 .chats-page .reaction-quick-popover::after {
   content: '';
   position: absolute;
