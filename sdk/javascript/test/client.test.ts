@@ -23,6 +23,24 @@ function client(transport: MockTransport): OpenWAClient {
 }
 
 describe('OpenWAClient', () => {
+  // A client that is logged, inspected or captured by an error tracker while a call is debugged must not
+  // write its bearer-equivalent key out.
+  it('does not show the API key when the client is printed or serialized', () => {
+    const secret = 'owa_k1_do_not_print';
+    const printed = new OpenWAClient({ baseUrl: 'http://localhost:2785', apiKey: secret });
+
+    // What a logger, util.inspect and an error tracker walk is the enumerable own properties.
+    const seen = new Set<unknown>();
+    const reachable = (value: unknown): boolean => {
+      if (typeof value === 'string') return value.includes(secret);
+      if (typeof value !== 'object' || value === null || seen.has(value)) return false;
+      seen.add(value);
+      return Object.values(value).some(reachable);
+    };
+    expect(reachable(printed)).toBe(false);
+    expect(Object.getOwnPropertyDescriptor(printed, 'config')?.enumerable).toBe(false);
+  });
+
   it('requires baseUrl and apiKey', () => {
     expect(() => new OpenWAClient({ baseUrl: '', apiKey: 'x' })).toThrow();
     expect(() => new OpenWAClient({ baseUrl: 'http://x', apiKey: '' })).toThrow();

@@ -60,21 +60,26 @@ export interface OpenWAClientOptions {
 }
 
 export class OpenWAClient {
-  private readonly config: Required<Omit<ClientConfig, 'fetch'>> & { fetch: FetchLike };
+  // Defined non-enumerable in the constructor, so the API key does not appear when a client is logged,
+  // inspected or serialized (`declare` keeps the class field from creating an enumerable one).
+  private declare readonly config: Required<Omit<ClientConfig, 'fetch'>> & { fetch: FetchLike };
 
   constructor(options: OpenWAClientOptions) {
     if (!options.baseUrl) throw new Error('OpenWAClient: baseUrl is required');
     if (!options.apiKey) throw new Error('OpenWAClient: apiKey is required');
 
-    this.config = {
-      baseUrl: options.baseUrl,
-      apiKey: options.apiKey,
-      timeoutMs: toTimeoutMs(options.timeoutMs ?? 30000),
-      defaultHeaders: options.defaultHeaders ?? {},
-      // Looked up on each call rather than captured here, so a fetch installed on globalThis after
-      // the client is built (a polyfill or a test stub) is the one used.
-      fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
-    };
+    Object.defineProperty(this, 'config', {
+      enumerable: false,
+      value: {
+        baseUrl: options.baseUrl,
+        apiKey: options.apiKey,
+        timeoutMs: toTimeoutMs(options.timeoutMs ?? 30000),
+        defaultHeaders: options.defaultHeaders ?? {},
+        // Looked up on each call rather than captured here, so a fetch installed on globalThis after
+        // the client is built (a polyfill or a test stub) is the one used.
+        fetch: options.fetch ?? ((input, init) => globalThis.fetch(input, init)),
+      },
+    });
 
     warnIfInsecureHttpUrl(options.baseUrl);
   }
