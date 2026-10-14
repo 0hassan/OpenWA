@@ -36,6 +36,11 @@ Or bring your own Secret: `--set existingSecret=my-openwa-secret`.
 The container port is fixed at 2785; do not set PORT in env (probes and the
 Service targetPort are pinned to it) — service.port changes the Service port.
 
+The kubelet startup probe allows `startupProbe.periodSeconds` x (`startupProbe.failureThreshold` - 1)
+seconds for a boot, 295 by default. The first boot after an upgrade can build indexes on a large
+`messages` table before the port opens: raise `startupProbe.failureThreshold`, or run the migrations
+first ([docs/14-migration-guide.md](../../docs/14-migration-guide.md), section 14.5).
+
 All other values (`persistence`, `resources`, `ingress`, `serviceMonitor`, …) are
 documented inline in [values.yaml](values.yaml). The chart does NOT bundle
 PostgreSQL/Redis/MinIO — point `env` at your own, or stay on the SQLite default.
