@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A status post the engine refuses is logged with its session and type, as a failed chat send already is.
 - Storage import abort messages name the `STORAGE_IMPORT_MAX_BYTES` or `STORAGE_IMPORT_MAX_ENTRIES` setting that stopped them.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
-- The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, so phone-number pairing works without setting `BAILEYS_BROWSER_NAME`.
+- The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, because some accounts reject a non-standard name on phone-number pairing (#1857, thanks @yoosufhaffejee).
 - The `/events` WebSocket echoes a `requestId` only when it is a string of at most 128 characters; any other value is dropped from the reply.
 - The Baileys engine refuses SVG input to its image decoder, so a sticker sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
 
