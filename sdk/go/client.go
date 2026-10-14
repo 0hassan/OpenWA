@@ -88,8 +88,16 @@ func New(baseURL, apiKey string, opts ...Option) (*Client, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, errors.New("openwa: baseURL is required")
 	}
-	if strings.TrimSpace(apiKey) == "" {
+	// A key read from a secret file usually ends in a newline: trimmed, as the other clients do. A control
+	// character left inside is refused here, by the key's name and without repeating it.
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
 		return nil, errors.New("openwa: apiKey is required")
+	}
+	for _, r := range apiKey {
+		if r < 0x20 || r == 0x7f {
+			return nil, errors.New("openwa: apiKey contains a control character; check for a stray newline")
+		}
 	}
 
 	cfg := &config{

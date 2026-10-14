@@ -436,6 +436,51 @@ describe('OpenWAClient', () => {
     }
   });
 
+  it('trims a key read from a file, and refuses what fetch cannot send without repeating it', async () => {
+    const t = new MockTransport().on('GET', '/api/sessions', { body: [] });
+    const c = new OpenWAClient({ baseUrl: 'http://x', apiKey: ' owa_k1_secret\n', fetch: t.asFetch() });
+    await c.sessions.list();
+    expect(t.lastCall!.headers['x-api-key']).toBe('owa_k1_secret');
+
+    // An inner space is part of a passphrase key and is sent as it is.
+    const spaced = new OpenWAClient({ baseUrl: 'http://x', apiKey: 'correct horse battery', fetch: t.asFetch() });
+    await spaced.sessions.list();
+    expect(t.lastCall!.headers['x-api-key']).toBe('correct horse battery');
+
+    for (const bad of ['owa_k1_se\ncret', 'owa_k1_se\u0000cret', 'owa_k1_s\u2603cret']) {
+      let message = '';
+      try {
+        new OpenWAClient({ baseUrl: 'http://x', apiKey: bad });
+      } catch (error) {
+        message = String((error as Error).message);
+      }
+      expect(message).toContain('apiKey');
+      expect(message).not.toContain('cret');
+    }
+    expect(() => new OpenWAClient({ baseUrl: 'http://x', apiKey: '  \n' })).toThrow('apiKey is required');
+  });
+
+  it('refuses a default header value fetch cannot send, naming the header and not the value', () => {
+    for (const [name, value] of [
+      ['CF-Access-Client-Secret', 's3cret-token\nX-Injected: 1'],
+      ['X-Trace', 'a\u0000b'],
+      ['X-Name', 'snow\u2603'],
+    ]) {
+      let message = '';
+      try {
+        new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', defaultHeaders: { [name]: value } });
+      } catch (error) {
+        message = String((error as Error).message);
+      }
+      expect(message).toContain(`"${name}"`);
+      expect(message).not.toContain(value);
+    }
+    // A tab, printable ASCII and a Latin-1 character are sent as before.
+    expect(
+      () => new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', defaultHeaders: { 'X-Trace': 'a\tb caf\u00e9' } }),
+    ).not.toThrow();
+  });
+
   it('keeps X-API-Key winning over defaultHeaders', async () => {
     const t = new MockTransport().on('GET', '/api/sessions', { body: [] });
     const c = new OpenWAClient({

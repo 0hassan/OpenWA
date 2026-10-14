@@ -27,7 +27,7 @@
  * @packageDocumentation
  */
 
-import { request, requestBytes, encodeSegment, toTimeoutMs, warnIfInsecureHttpUrl, type BinaryResponse, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
+import { request, requestBytes, encodeSegment, hasUnsendableChar, toTimeoutMs, warnIfInsecureHttpUrl, type BinaryResponse, type ClientConfig, type FetchLike, type RequestOptions } from './http.js';
 import { CallsResource } from './resources/calls.js';
 import { MediaResource } from './resources/media.js';
 import { CatalogResource } from './resources/catalog.js';
@@ -66,13 +66,26 @@ export class OpenWAClient {
 
   constructor(options: OpenWAClientOptions) {
     if (!options.baseUrl) throw new Error('OpenWAClient: baseUrl is required');
-    if (!options.apiKey) throw new Error('OpenWAClient: apiKey is required');
+    // A key read from a secret file usually ends in a newline: trimmed, as the other clients do. A control or
+    // non-Latin-1 character left inside is refused here, because fetch's own error quotes the whole value.
+    const apiKey = typeof options.apiKey === 'string' ? options.apiKey.trim() : options.apiKey;
+    if (!apiKey) throw new Error('OpenWAClient: apiKey is required');
+    if (typeof apiKey !== 'string' || hasUnsendableChar(apiKey)) {
+      throw new Error('OpenWAClient: apiKey contains a control or non-Latin-1 character; check for a stray newline');
+    }
+    for (const [name, value] of Object.entries(options.defaultHeaders ?? {})) {
+      if (hasUnsendableChar(String(value))) {
+        throw new Error(
+          `OpenWAClient: defaultHeaders value for "${name}" contains a control or non-Latin-1 character; check for a stray newline`,
+        );
+      }
+    }
 
     Object.defineProperty(this, 'config', {
       enumerable: false,
       value: {
         baseUrl: options.baseUrl,
-        apiKey: options.apiKey,
+        apiKey,
         timeoutMs: toTimeoutMs(options.timeoutMs ?? 30000),
         defaultHeaders: options.defaultHeaders ?? {},
         // Looked up on each call rather than captured here, so a fetch installed on globalThis after

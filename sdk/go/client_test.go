@@ -66,6 +66,33 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
+func TestNewTrimsTheKeyAndRefusesAControlCharacterWithoutRepeatingIt(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{"valid":true}`}
+	c, err := New("https://x", " owa_k1_test\n", WithTransport(rt))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := c.Auth.Validate(context.Background()); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := rt.lastReq.Header.Get("X-API-Key"); got != "owa_k1_test" {
+		t.Fatalf("X-API-Key = %q, want the trimmed key", got)
+	}
+	// An inner space is part of a passphrase key.
+	if _, err := New("https://x", "correct horse battery"); err != nil {
+		t.Fatalf("a key with an inner space: %v", err)
+	}
+	for _, bad := range []string{"owa_k1_se\ncret", "owa_k1_se\x00cret", "owa_k1_se\x7fcret"} {
+		_, err := New("https://x", bad)
+		if err == nil {
+			t.Fatalf("expected an error for %q", bad)
+		}
+		if strings.Contains(err.Error(), "cret") {
+			t.Fatalf("the error repeats the key: %v", err)
+		}
+	}
+}
+
 func TestSendTextHitsCorrectPath(t *testing.T) {
 	rt := &recordTransport{status: 200, body: `{"messageId":"m1","timestamp":123}`}
 	c := newTestClient(t, rt)
