@@ -79,6 +79,24 @@ esac
   const convertDirs = async (): Promise<string[]> =>
     (await readdir(tmpdir())).filter(name => name.startsWith('openwa-convert-'));
 
+  // ffmpeg decodes bytes a caller chose, on every Baileys voice note too: it gets no secret of the gateway's.
+  // Read from the spawn options: Jest sandboxes process.env, so what the child printed could not tell.
+  it('does not hand the gateway environment to ffmpeg', async () => {
+    const spawned = jest.mocked(spawn);
+    spawned.mockClear();
+    process.env.OWA_PROBE_SECRET = 'hunter2';
+    try {
+      await runFfmpeg(Buffer.from('input'), 'bin', 'ogg', [], options());
+    } finally {
+      delete process.env.OWA_PROBE_SECRET;
+    }
+
+    const env = (spawned.mock.calls[0][2] as { env?: Record<string, string> }).env;
+    expect(env).toBeDefined();
+    expect(env).not.toHaveProperty('OWA_PROBE_SECRET');
+    expect(env).toHaveProperty('PATH');
+  });
+
   it('returns the bytes the process produced', async () => {
     const output = await runFfmpeg(Buffer.from('input'), 'bin', 'ogg', [], options());
 
