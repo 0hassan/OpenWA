@@ -400,7 +400,7 @@ curl -X POST "$BASE/api/sessions/$SESSION_ID/messages/unpin" \
 
 Download a message's stored media: the archived file when one exists (`CHAT_MEDIA_ARCHIVE_ENABLED`,
 plus `CHAT_MEDIA_ARCHIVE_OUTBOUND` for media this account sent), else the inline copy on the message
-row — which covers media sent by this account either way, except a send made by `url`, whose bytes are not stored; `404` when neither holds bytes.
+row — which covers media sent by this account either way, except a send made by `url`, whose bytes the gateway does not store (on whatsapp-web.js the own-send echo may still hold them, so that route can answer `200` or `404`); `404` when neither holds bytes.
 
 ```bash
 curl "$BASE/api/sessions/$SESSION_ID/messages/628123456789@c.us/true_628123456789@c.us_3EB0ABCD/media" \

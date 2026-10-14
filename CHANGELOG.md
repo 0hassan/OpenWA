@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Baileys engine refuses SVG input to its image decoder, so a sticker, profile picture or group picture sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
 - The ffmpeg runs of the gateway itself (media conversion and the voice note waveform) start with only `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` from the gateway's environment, so no secret reaches them or a wrapper script behind `FFMPEG_PATH`.
 - The release workflow keeps its staging image when a gate fails on a good build, so a re-run of the failed jobs finds it; an abandoned release leaves one stray tag.
-- The PHP SDK release pushes its tag with git hooks disabled.
+- The PHP SDK release runs its tests in a job without the mirror token, and a second job tags the mirror with git hooks disabled; the mirror workflow pushes with hooks disabled too.
 - The JavaScript SDK release builds, tests and packs the tarball in a job without the publish credential, and a second job publishes that tarball; the Java SDK release runs its tests in a job without the Maven Central token and the signing key.
 - The release workflow reads the version it extracts the release notes for from the environment instead of interpolating it into the script.
 - Dependabot watches the Python, Java, PHP and Go SDK manifests.
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep the dashboard chat's scroll-to-bottom button in view while the reader is scrolled up, where it moved with the thread and was off screen.
 - Refuse to save a local `storage.localPath` the app cannot create or write, where the next start refused to boot and the dashboard that could undo the save was down.
 - Answer `400` for a send route's or a product send's `chatId`, or a bulk `batchId`, over 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
-- Answer `400` for a chat action's `chatId` over 255 characters, as the send routes do, instead of handing it to the engine.
+- Answer `400` for a `chatId` over 255 characters in the request body of a chat action, as the send routes do, instead of handing it to the engine.
 - Use the body hash as the delivery id of an ingress request whose dedup header is longer than 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
 - MCP tools refuse a `chatId`, `fromChatId` or `toChatId` over 255 characters, as the send routes do, where PostgreSQL answered an internal tool error.
 - A start that fails while another start of the same session is in flight leaves the claim to that start, so its engine is no longer left on a row no node holds.
@@ -157,9 +157,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parse a dashboard message made of many code spans or code blocks in linear time, so one long message no longer freezes the tab for seconds.
 - Render a dashboard message body over 4096 characters without links, so link detection no longer freezes the tab on a very long body.
 - Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`.
-- Python SDK (next SDK release after 0.5.1): a `timeout` of `None`, 0 or infinity means no timeout, an `httpx.Timeout` or a four-value tuple is passed through, and a negative, NaN or non-number raises `ValueError`.
+- Python SDK (next SDK release after 0.5.1): a `timeout` of `None`, 0 or infinity means no timeout, an `httpx.Timeout` or a four-value tuple is passed through with a 0 or infinite element leaving that operation without a limit, and a negative, NaN or non-number raises `ValueError`.
 - Python SDK (next SDK release after 0.5.1): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
-- JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key.
+- JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key, and the PHP client keeps its default header values out of a dump, an export and a cast as well.
+- Python and PHP SDKs (next SDK release after 0.5.1): the API key is trimmed, and one with a control or non-ASCII character is refused when the client is built, without repeating it.
+- Python and PHP SDKs (next SDK release after 0.5.1): a default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
 - Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`.
 - Java SDK (next SDK release after 0.5.1): a key or default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
 - Java SDK (next SDK release after 0.5.1): a logged `HttpRequestData` shows neither the key nor the body.
@@ -219,6 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ⚠️ **Breaking (API).** `vote-poll` on whatsapp-web.js answers `400` `POLL_OPTION_NOT_FOUND` when none of the option texts match, where it answered `200` and cleared the vote; an empty `options` list still clears it.
 - ⚠️ **Breaking (API).** Once teardown begins, every request except `/api/health`, `/api/health/*`, the dashboard's HTML pages and CORS preflights answers `503` with `Connection: close`, `GET /api/infra/health` included, while a new `/events` handshake is still admitted until the server closes; probe `/api/health/live` for a check that survives teardown.
 - A compose file or pod spec of your own that drops all capabilities and starts the container as root must add `KILL` to the `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` that 0.24.0 shipped, or a stop never reaches the app: it runs out the grace period and exits `137`.
+- On Helm, upgrade with `--reset-then-reuse-values` (Helm 3.14 or later) or with `-f values.yaml`: plain `--reuse-values` keeps the 0.24.0 chart defaults (a 45 s grace period and no `KILL`), so every pod stop ends in `SIGKILL`.
 - Rolling back to 0.24.0 while webhook outbox rows are in state `queued` strands them: 0.24.0 never replays that state and prunes it after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). The upgrade also deletes duplicate terminal `webhook_delivery_failures` rows, which a rollback does not restore.
 - ⚠️ **Breaking (API).** `PUT /api/infra/config` answers `400` for a database or Redis port outside 1-65535, a negative or fractional pool size and a local storage path the app cannot create or write, which it used to store and the next boot refused.
 - An `FFMPEG_PATH` wrapper script that reads an environment variable outside `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` no longer sees it; set what it needs inside the script.

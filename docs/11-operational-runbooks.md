@@ -786,8 +786,8 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > docker cp openwa-api:/app/data/backups/. ./backups/ \
 >   && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # do not let archives pile up on the volume
 > # Helm: kubectl exec <pod> -- env BACKUP_DIR=/app/data/backups ./scripts/backup.sh
-> #       kubectl cp <pod>:/app/data/backups ./backups
-> #       kubectl exec <pod> -- sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'
+> #       kubectl cp <pod>:/app/data/backups ./backups \
+> #         && kubectl exec <pod> -- sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'
 > ```
 >
 > The script stages a full copy of the data in `TMPDIR` before archiving it. The compose file mounts

@@ -392,7 +392,7 @@ try {
   });
 } catch (err) {
   if (err instanceof OpenWAConflictError) {
-    // 409: the session is not ready (start it first), or a keyed send is pending or unconfirmed.
+    // 409: a conflicting state, typically a session that is not ready (start it first), or a keyed send pending or unconfirmed (see err.code).
   } else if (err instanceof OpenWANotFoundError) {
     // 404 — session/chat does not exist.
   } else if (err instanceof OpenWARateLimitError) {
@@ -485,27 +485,27 @@ OpenWAClient(
     base_url: str,
     api_key: str,
     *,
-    timeout: float | None = 30.0,
+    timeout: float | httpx.Timeout | tuple[float | None, float | None, float | None, float | None] | None = 30.0,
     default_headers: Mapping[str, str] | None = None,
     transport: httpx.BaseTransport | None = None,
 )
 ```
 
-| Parameter         | Type                          | Default      | Description                                                                                                                             |
-| ----------------- | ----------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `base_url`        | `str`                         | _(required)_ | Gateway base URL, e.g. `http://localhost:2785`. Raises `ValueError` if empty. A trailing `/` is stripped; any path prefix is preserved. |
-| `api_key`         | `str`                         | _(required)_ | API key sent as the `X-API-Key` header. Raises `ValueError` if empty.                                                                   |
-| `timeout`         | `float \| None`               | `30.0`       | Seconds per network operation, not per call; `0` or `None` turns it off. A breach raises `OpenWATimeoutError`.                          |
-| `default_headers` | `Mapping[str, str] \| None`   | `None`       | Extra headers applied to every request. Applied **first**, so the SDK's `X-API-Key` and `Content-Type: application/json` always win.    |
-| `transport`       | `httpx.BaseTransport \| None` | `None`       | Optional `httpx` transport override (e.g. `httpx.MockTransport`) sharing the one connection pool. Useful for testing.                   |
+| Parameter         | Type                                      | Default      | Description                                                                                                                                                                                                   |
+| ----------------- | ----------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `base_url`        | `str`                                     | _(required)_ | Gateway base URL, e.g. `http://localhost:2785`. Raises `ValueError` if empty. A trailing `/` is stripped; any path prefix is preserved.                                                                       |
+| `api_key`         | `str`                                     | _(required)_ | API key sent as the `X-API-Key` header. Surrounding whitespace is trimmed; raises `ValueError` if empty or if it holds a control or non-ASCII character.                                                      |
+| `timeout`         | `float \| httpx.Timeout \| tuple \| None` | `30.0`       | Seconds per network operation, not per call; `0`, `inf` or `None` turns it off. An `httpx.Timeout` or a `(connect, read, write, pool)` tuple sets the operations apart. A breach raises `OpenWATimeoutError`. |
+| `default_headers` | `Mapping[str, str] \| None`               | `None`       | Extra headers applied to every request. Applied **first**, so the SDK's `X-API-Key` and `Content-Type: application/json` always win.                                                                          |
+| `transport`       | `httpx.BaseTransport \| None`             | `None`       | Optional `httpx` transport override (e.g. `httpx.MockTransport`) sharing the one connection pool. Useful for testing.                                                                                         |
 
 The client also exposes a few non-resource members:
 
-| Member    | Signature                                                | Description                                                  |
-| --------- | -------------------------------------------------------- | ------------------------------------------------------------ |
-| `auth`    | `auth() -> AuthValidateResponse`                         | `POST /api/auth/validate` — validate the configured API key. |
-| `request` | `request(method, path, *, query=None, body=None) -> Any` | Raw escape hatch; `path` begins with `/`.                    |
-| `close`   | `close() -> None`                                        | Close the underlying `httpx.Client`.                         |
+| Member    | Signature                                                | Description                                                                                                            |
+| --------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `auth`    | `auth() -> AuthValidateResponse`                         | `POST /api/auth/validate` — validate the configured API key; a key restricted to selected chats is refused with `403`. |
+| `request` | `request(method, path, *, query=None, body=None) -> Any` | Raw escape hatch; `path` begins with `/`.                                                                              |
+| `close`   | `close() -> None`                                        | Close the underlying `httpx.Client`.                                                                                   |
 
 ### Resources & Methods
 
@@ -769,7 +769,7 @@ try:
         "text": "Hi!",
     })
 except OpenWAConflictError:
-    print("Session engine not ready yet — start it first.")
+    print("Conflict: typically the session is not ready yet (start it first); see error.code.")
 except OpenWANotFoundError:
     print("Session does not exist.")
 except OpenWARateLimitError:
@@ -840,10 +840,10 @@ The entry class is `OpenWA\Client`. It validates that `baseUrl` and `apiKey` are
 
 Two escape hatches sit on the client itself:
 
-| Method    | Signature                                                                             | Description                                                                                |
-| --------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `auth`    | `auth(): array`                                                                       | `POST /api/auth/validate` — validate the configured key and resolve its role.              |
-| `request` | `request(string $method, string $path, array $query = [], mixed $body = null): mixed` | Raw request against any path (advanced use); returns decoded JSON or `null` for empty/204. |
+| Method    | Signature                                                                             | Description                                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth`    | `auth(): array`                                                                       | `POST /api/auth/validate` — validate the configured key and resolve its role; a key restricted to selected chats is refused with `403`. |
+| `request` | `request(string $method, string $path, array $query = [], mixed $body = null): mixed` | Raw request against any path (advanced use); returns decoded JSON or `null` for empty/204.                                              |
 
 ### Client Configuration
 
@@ -1090,11 +1090,11 @@ All payloads are associative arrays; all listed methods are synchronous and retu
 
 ### Error Handling
 
-All exceptions the SDK raises itself live in `OpenWA\Exceptions` and descend from `OpenWAException` (which extends PHP's `\Exception`). A connection failure surfaces as Guzzle's `ConnectException` and an invalid argument as `InvalidArgumentException`, so a catch-all names those as well. Any non-2xx response is raised as an `OpenWAApiException`; the static `classify()` factory picks the most specific subclass by status code. An `OpenWAApiException` carries the HTTP status (`getStatus(): int`), the parsed error body (`getBody(): mixed`), and the NestJS `error` kind when present (`getErrorKind(): ?string`), plus the body's `code` (`getErrorCode(): ?string`), the retry delay in seconds from the body's `retryAfterSeconds` or the `Retry-After` header (`getRetryAfterSeconds(): ?int`) and the response headers (`getHeaders(): array`).
+All exceptions the SDK raises itself live in `OpenWA\Exceptions` and descend from `OpenWAException` (which extends PHP's `\Exception`). A transport failure that is not a timeout (a refused connection, a reset, a TLS verification failure) surfaces as one of Guzzle's own `GuzzleHttp\Exception\TransferException` subclasses (`ConnectException`, `RequestException`) and an invalid argument as `InvalidArgumentException`, so a catch-all names those as well. Any non-2xx response is raised as an `OpenWAApiException`; the static `classify()` factory picks the most specific subclass by status code. An `OpenWAApiException` carries the HTTP status (`getStatus(): int`), the parsed error body (`getBody(): mixed`), and the NestJS `error` kind when present (`getErrorKind(): ?string`), plus the body's `code` (`getErrorCode(): ?string`), the retry delay in seconds from the body's `retryAfterSeconds` or the `Retry-After` header (`getRetryAfterSeconds(): ?int`) and the response headers (`getHeaders(): array`).
 
 | Exception                           | Extends              | Trigger                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | ----------------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OpenWAException`                   | `\Exception`         | Base for the SDK's own errors (also thrown for missing `baseUrl`/`apiKey`); a transport failure other than a timeout is Guzzle's own.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `OpenWAException`                   | `\Exception`         | Base for the SDK's own errors (also thrown for missing `baseUrl`/`apiKey`); a transport failure other than a timeout is Guzzle's own (`TransferException`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `OpenWAApiException`                | `OpenWAException`    | Any non-2xx (including unfollowed 3xx and other 4xx/5xx).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `OpenWAAuthException`               | `OpenWAApiException` | `401` — missing/invalid API key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `OpenWAForbiddenException`          | `OpenWAApiException` | `403` — the key's role or scope refuses the call (e.g. operator-only endpoint, or a session, IP or chat outside its allow-lists), or WhatsApp itself refused the operation (for example, missing group admin rights).                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -1119,7 +1119,7 @@ try {
         'text'   => 'Hello!',
     ]);
 } catch (OpenWAConflictException $e) {
-    // 409: the session is not ready yet, or a keyed send is pending or unconfirmed
+    // 409: a conflicting state, typically a session that is not ready yet, or a keyed send pending or unconfirmed (see getErrorCode())
 } catch (OpenWARateLimitException $e) {
     // 429 — back off and retry yourself (no auto-retry)
 } catch (OpenWATimeoutException $e) {

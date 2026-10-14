@@ -748,7 +748,8 @@ export class MessageController {
     description:
       'No stored media for this message — it carries no media, media download was disabled or the ' +
       'payload was over the cap when it was stored (size-only marker), it was a URL-based API send ' +
-      '(those bytes are never stored), or the message is not in this gateway’s history.',
+      '(the gateway stores none of those bytes, though on whatsapp-web.js the own-send echo may), or ' +
+      'the message is not in this gateway’s history.',
   })
   async getChatMedia(
     @Param('sessionId') sessionId: string,
