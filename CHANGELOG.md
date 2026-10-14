@@ -149,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key.
 - Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`, a key outside visible ASCII is refused when the client is built without being repeated, and a logged `HttpRequestData` shows neither the key nor the body.
 - Go SDK (next SDK release after 0.5.1): `WithIdempotencyKey` sends the header only on the twelve routes that honor it, so `net/http` no longer sends another request again after a dropped connection, and an error answer from a proxy reads its own `message` or the status text.
+- PHP SDK (next SDK release after 0.5.1): an omitted participant list in `approveMembershipRequests` and `rejectMembershipRequests` goes out as `{}`, and an error body whose `error` is not a string maps to the SDK's exception instead of raising a `TypeError`.
 - Every SDK package ships the MIT license text from the next SDK release after 0.5.1.
 
 ### Documentation
