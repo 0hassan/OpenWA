@@ -929,10 +929,12 @@ adapter boundary — none silently stubs.
   (the latter via ffmpeg), rejecting anything else with `Invalid media format`. Baileys stamps
   `image/webp` on the payload unconditionally and transcodes nothing
   (`prepareWAMessageMedia` → `MIMETYPE_MAP.sticker`), so the adapter converts before the socket:
-  WebP passes through byte-identical (preserving its sticker-pack EXIF), other `image/*` input is
-  re-encoded to a 512×512 WebP with animation retained (up to 500 frames; a longer animation is
-  refused with a `400`), and everything else — **including `video/*`** — is refused with a `400`.
-  So an animated-video sticker works on wwjs and answers `400` on Baileys. ffmpeg is deliberately
+  WebP passes through byte-identical (preserving its sticker-pack EXIF), other raster `image/*`
+  input is re-encoded to a 512×512 WebP with animation retained (up to 500 frames; a longer
+  animation is refused with a `400`), and everything else, **including `video/*` and
+  `image/svg+xml`** (the adapter blocks SVG decoding), is refused with a `400`. So an
+  animated-video sticker works on wwjs and answers `400` on Baileys, and so does an SVG, which
+  whatsapp-web.js hands to the page like any other `image/*`. ffmpeg is deliberately
   not wired in on the Baileys side: the binary ships only in the Docker image, so depending on it
   would make the same request succeed or fail depending on how the gateway was installed.
 - **`deleteStatus` (baileys).** Baileys sends a status stanza, the revoke included, to exactly its
