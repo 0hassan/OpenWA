@@ -616,6 +616,49 @@ test('a revoked bubble that still holds focus gives it to the stop that takes it
   assert.equal(focusedMessage(), 'wamid.3');
 });
 
+// The newest message has no stop after it, so the one before takes its place, and never the oldest.
+test('keyboard focus goes to the stop before the deleted message when it was the newest', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const del = bubblesOf(container)[2].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+
+  rerenderWith([a, b, { ...c, type: 'revoked', body: '' }]);
+
+  assert.equal(focusedMessage(), 'wamid.2');
+});
+
+// Focus the page reports as lost while the control that held it is still a stop (a disabled button, a
+// browser that reports the page as active): the thread has nothing to give back, and moving focus to a
+// neighbour on a later change of the list would take it from wherever the reader put it.
+test('focus the page reports as lost is left alone while the control is still a stop', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+  Object.defineProperty(document, 'activeElement', { configurable: true, get: () => document.body });
+  try {
+    rerenderWith([a, b, { ...c, status: 'read' }]);
+  } finally {
+    delete (document as { activeElement?: unknown }).activeElement;
+  }
+
+  // Nothing moved focus: the button still holds it for jsdom.
+  assert.ok(document.activeElement === del, 'focus was moved off the control that still holds it');
+});
+
 // What was remembered is used once. Here the only stop is gone and nothing in the thread can take the
 // focus; a message that arrives later, after the place of the old bubble, does not draw it in.
 test('focus is given back once, not at every later change of the list', () => {
