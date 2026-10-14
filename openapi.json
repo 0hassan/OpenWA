@@ -4483,6 +4483,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
             "content": {
@@ -4735,6 +4745,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
             "content": {
@@ -4867,6 +4887,16 @@
           },
           "403": {
             "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5016,6 +5046,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
             "content": {
@@ -5149,6 +5189,16 @@
           },
           "403": {
             "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5299,6 +5349,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
             "content": {
@@ -5430,6 +5490,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "409": {
             "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
             "content": {
@@ -5552,6 +5622,16 @@
           },
           "403": {
             "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5696,6 +5776,16 @@
           },
           "403": {
             "description": "The API key's role, session or chat scope, or IP allow-list does not allow this operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such message: the id is outside the engine's lookup window (roughly the last hundred messages of the chat, or absent from the Baileys store) or the message was revoked.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8114,6 +8204,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Shutdown teardown has begun: every route except /api/health and /api/health/* answers 503 then. Probe /api/health/live for a check that survives teardown."
           }
         },
         "summary": "Health check endpoint",
@@ -17900,7 +17993,7 @@
   },
   "info": {
     "title": "OpenWA API",
-    "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API\n\n**Gateway-wide responses.** Three statuses are returned by middleware before routing, so any operation can emit them:\n\n- `415 Unsupported Media Type` — the request body carries a `Content-Encoding` other than `identity`. The aggregate in-flight body cap counts wire bytes, so a compressed body would be admitted on its compressed size and then inflated past the memory it is meant to bound. Send the body uncompressed.\n- `413 Payload Too Large`: the declared `Content-Length` is more than the gateway could hold in flight for this caller even when idle. The body is not read; retrying it unchanged cannot succeed.\n- `503 Service Unavailable` with `Retry-After` — the gateway already has too much request body data in flight. The body is not read; retry after the given delay.\n\nEvery operation that takes an API key can also answer `429 Too Many Requests` (the per-IP rate-limit windows; with send pacing on, a send can also be refused with `code: SEND_PACING_LIMITED` and `retryAfterSeconds`) and `500 Internal Server Error` (an unexpected failure, or `code: ENGINE_PAGE_ERROR` when WhatsApp Web threw inside the page during a whatsapp-web.js send or status post). Error bodies follow the `ErrorResponse` schema.",
+    "description": "Open Source WhatsApp API Gateway - Free, Self-Hosted HTTP API\n\n**Gateway-wide responses.** Three statuses are returned by middleware before routing, so any operation can emit them:\n\n- `415 Unsupported Media Type` — the request body carries a `Content-Encoding` other than `identity`. The aggregate in-flight body cap counts wire bytes, so a compressed body would be admitted on its compressed size and then inflated past the memory it is meant to bound. Send the body uncompressed.\n- `413 Payload Too Large`: the declared `Content-Length` is more than the gateway could hold in flight for this caller even when idle. The body is not read; retrying it unchanged cannot succeed.\n- `503 Service Unavailable` with `Retry-After` — the gateway already has too much request body data in flight (the body is not read; retry after the given delay), or, without `Retry-After`, shutdown teardown has begun: every route except `/api/health` and `/api/health/*` then answers it with `Connection: close`.\n\nEvery operation that takes an API key can also answer `429 Too Many Requests` (the per-IP rate-limit windows; with send pacing on, a send can also be refused with `code: SEND_PACING_LIMITED` and `retryAfterSeconds`) and `500 Internal Server Error` (an unexpected failure, or `code: ENGINE_PAGE_ERROR` when WhatsApp Web threw inside the page during a whatsapp-web.js send or status post). Error bodies follow the `ErrorResponse` schema.",
     "version": "0.24.0",
     "contact": {
       "name": "OpenWA",
@@ -22899,7 +22992,7 @@
             ]
           },
           "warnings": {
-            "description": "Why the restore was rolled back (per-row failures, a failed session ownership restore, chat-state re-key or restored-row cleanup, or a backup with no rows). Non-empty only when `imported` is false; non-fatal messages are in `notices`.",
+            "description": "Why the restore was rolled back (per-row failures, a failed session ownership restore, chat-state re-key or restored-row cleanup, a failed trim of the send idempotency claims, or a backup with no rows). Non-empty only when `imported` is false; non-fatal messages are in `notices`.",
             "example": [],
             "type": "array",
             "items": {
@@ -25561,11 +25654,18 @@
           },
           "code": {
             "type": "string",
-            "description": "A stable machine-readable reason, on some errors only: SESSION_NAME_TEARDOWN_PENDING (409), SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), SEND_PACING_LIMITED (429), ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES and IMPORT_NESTED_TRANSACTION (409)."
+            "description": "A stable machine-readable reason, on some errors only: SESSION_NAME_TEARDOWN_PENDING (409), SESSION_STOP_INCOMPLETE, SESSION_LOGOUT_INCOMPLETE and SESSION_FORCE_KILL_INCOMPLETE (502), SEND_PACING_LIMITED (429), ENGINE_PAGE_ERROR (500, whatsapp-web.js: WhatsApp Web threw inside the page during a send or status post), IMPORT_ALREADY_RUNNING, EXPORT_IN_PROGRESS, IMPORT_WOULD_ORPHAN_ENGINES and IMPORT_NESTED_TRANSACTION (409), IDEMPOTENCY_KEY_INVALID (400), IDEMPOTENCY_KEY_REUSED (422), IDEMPOTENCY_KEY_IN_PROGRESS and IDEMPOTENCY_OUTCOME_UNKNOWN (409), POLL_OPTION_NOT_FOUND (400, whatsapp-web.js vote-poll)."
           },
           "retryAfterSeconds": {
             "type": "integer",
             "description": "With SEND_PACING_LIMITED: seconds until the session accepts sends again."
+          },
+          "validOptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "With POLL_OPTION_NOT_FOUND: the option texts the poll offers."
           },
           "pageError": {
             "type": "object",
