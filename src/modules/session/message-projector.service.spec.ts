@@ -203,7 +203,7 @@ describe('MessageProjector', () => {
     });
 
     it('drops a reaction that names a message of another chat', async () => {
-      messageRepository.findOne.mockResolvedValue({ chatId: 'c2@c.us', direction: 'incoming' });
+      messageRepository.findOne.mockResolvedValue({ chatId: '120363@g.us', direction: 'incoming' });
 
       projector.applyReactionQueued('s1', { messageId: 'M1', chatId: 'c1@c.us', senderId: '628@c.us', reaction: '👍' });
       await settle();
@@ -367,7 +367,7 @@ describe('MessageProjector', () => {
       });
 
       it('drops a revoke that names a message of another chat', async () => {
-        row({ chatId: 'c2@c.us' });
+        row({ chatId: '120363@g.us' });
 
         projector.handleMessageRevoked('s1', engine, revoke, { fromMe: false });
         await settle();

@@ -30,10 +30,36 @@ describe('mutationTargetsForeignRow', () => {
 
   it('refuses a change that names a message of another chat, whatever the kind', () => {
     for (const kind of ['edit', 'revoke', 'reaction'] as const) {
-      expect(mutationTargetsForeignRow({ chatId: '628222@c.us', direction: IN }, { kind, chatId: direct })).toBe(
-        'chat',
-      );
       expect(mutationTargetsForeignRow({ chatId: group, direction: IN }, { kind, chatId: direct })).toBe('chat');
+      expect(mutationTargetsForeignRow({ chatId: direct, direction: IN }, { kind, chatId: group })).toBe('chat');
+      expect(
+        mutationTargetsForeignRow({ chatId: '120363000000000002@g.us', direction: IN }, { kind, chatId: group }),
+      ).toBe('chat');
+    }
+  });
+
+  // A REST send keeps the number as its caller wrote it ('+', spaces, no mobile marker digit) while the
+  // engine reports the canonical one.
+  it('reads the spellings of one phone number as one chat', () => {
+    const spellings: Array<[string, string]> = [
+      ['+628111@c.us', '628111@c.us'],
+      ['62 811 1@c.us', '628111@c.us'],
+      ['5511987654321@c.us', '551187654321@c.us'],
+      ['5215512345678@c.us', '525512345678@c.us'],
+      ['5491123456789@c.us', '541123456789@c.us'],
+    ];
+    for (const [stored, reported] of spellings) {
+      expect(
+        mutationTargetsForeignRow({ chatId: stored, direction: OUT }, { kind: 'reaction', chatId: reported }),
+      ).toBeNull();
+    }
+  });
+
+  it('still calls two different phone numbers different chats', () => {
+    for (const stored of ['628222@c.us', '+628222@s.whatsapp.net', '628222', '551187654322@c.us']) {
+      expect(
+        mutationTargetsForeignRow({ chatId: stored, direction: IN }, { kind: 'reaction', chatId: '628111@c.us' }),
+      ).toBe('chat');
     }
   });
 
@@ -62,12 +88,6 @@ describe('mutationTargetsForeignRow', () => {
         ).toBeNull();
       }
     }
-    expect(
-      mutationTargetsForeignRow(
-        { chatId: '628222@s.whatsapp.net', direction: OUT },
-        { kind: 'reaction', chatId: direct },
-      ),
-    ).toBe('chat');
     expect(mutationTargetsForeignRow({ chatId: '628111', direction: OUT }, { kind: 'reaction', chatId: group })).toBe(
       'chat',
     );

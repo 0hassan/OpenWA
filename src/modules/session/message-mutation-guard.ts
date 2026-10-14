@@ -19,22 +19,35 @@ export interface MutationSource {
 }
 
 /**
+ * What two spellings of one phone number share: its digits, without a '+', spaces or dashes, and without
+ * the mobile marker digit that the id WhatsApp reports for a Brazilian, Mexican or Argentine number
+ * drops, which a REST caller usually types (a send stores the chat id as its caller wrote it).
+ */
+function phoneKey(local: string): string {
+  return local
+    .replace(/\D/g, '')
+    .replace(/^55(\d{2})9(\d{8})$/, '55$1$2')
+    .replace(/^521(\d{10})$/, '52$1')
+    .replace(/^549(\d+)$/, '54$1');
+}
+
+/**
  * The entity an id names, whatever its dialect: a phone (`@c.us`, `@s.whatsapp.net`, hosted, a `:device`
  * form or a bare number, which is how the send routes may have stored it), a lid, a group or a list.
  * Null for an id this cannot place, which proves nothing.
  */
 function entityOf(jid: string): { kind: string; id: string } | null {
   const parsed = parseWaId(jid);
+  if (parsed.kind === 'user') return { kind: 'user', id: phoneKey(parsed.userPart) };
   if (parsed.kind !== 'unknown') return { kind: parsed.kind, id: parsed.userPart };
-  return !jid.includes('@') && /^\d+$/.test(parsed.userPart) ? { kind: 'user', id: parsed.userPart } : null;
+  return !jid.includes('@') && /^\+?\d[\d \-]*$/.test(jid.trim()) ? { kind: 'user', id: phoneKey(jid) } : null;
 }
 
 const isPerson = (kind: string): boolean => kind === 'user' || kind === 'lid';
 
 /**
- * Whether two ids provably name different chats or people. The engines report the neutral dialect but a
- * REST send stores the chat id as the caller wrote it, so ids are compared by the entity they name. A lid
- * against a phone number may be one person.
+ * Whether two ids provably name different chats or people, compared by the entity they name rather than
+ * by dialect or spelling. A lid against a phone number may be one person.
  */
 export function provablyDifferent(a?: string | null, b?: string | null): boolean {
   if (!a || !b || a === b) return false;

@@ -65,7 +65,7 @@ describe('persistHistoryMessages revokes', () => {
   });
 
   it('leaves a row of another chat alone', async () => {
-    await stored('628222@s.whatsapp.net');
+    await stored('120363000000000001@g.us');
 
     const cleared = await run([tombstone('628111@c.us')]);
 
