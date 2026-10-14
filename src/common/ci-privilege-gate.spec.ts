@@ -502,10 +502,11 @@ describe('a job that can mint a publish credential pins global npm installs and 
   // holds a publish credential executes what it restores, with that credential in its environment. A job
   // holds one when it can mint a token, or passes a secret other than the run's own token as a step input,
   // an environment value or in a command line, or carries one in its own environment.
-  const SECRET_REF = /\bsecrets\.(?!GITHUB_TOKEN\b)/;
+  const SECRET_REF = /\bsecrets(?:\.(?!GITHUB_TOKEN\b)|\s*\[|\s*\))/;
   const cachesBesideCredential = (workflow: OidcWorkflow): string[] => {
     const holdsCredential = (def: OidcJob): boolean =>
       grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions) ||
+      SECRET_REF.test(JSON.stringify(workflow.env ?? {})) ||
       SECRET_REF.test(JSON.stringify(def.env ?? {})) ||
       (def.steps ?? []).some(step => SECRET_REF.test(JSON.stringify([step.env, step.with, step.run])));
     return Object.entries(workflow.jobs ?? {})
@@ -784,29 +785,45 @@ describe.each([
   const jobs = (): Record<string, PhpJob> => (workflowOf(file) as unknown as { jobs: Record<string, PhpJob> }).jobs;
   const runsOf = (job: PhpJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
   const TOKEN = 'PHP_SDK_SPLIT_TOKEN';
-  const usesToken = (job: PhpJob): boolean => JSON.stringify([job.env, ...(job.steps ?? [])]).includes(TOKEN);
+  const workflowEnv = (): unknown => (workflowOf(file) as unknown as { env?: unknown }).env;
+  // The whole job and the workflow's env: a token in the job's container, services or outputs counts too.
+  const usesToken = (job: PhpJob): boolean => JSON.stringify([workflowEnv(), job]).includes(TOKEN);
+  // Any secret but the run's own token: `secrets['X']` and `toJSON(secrets)` hand the job the mirror token as well.
+  const ANY_SECRET = /\bsecrets(?:\.(?!GITHUB_TOKEN\b)|\s*\[|\s*\))/;
+  const holdsSecret = (job: PhpJob): boolean => ANY_SECRET.test(JSON.stringify([workflowEnv(), job]));
   // The command each segment of a line starts with, after env assignments and the usual wrappers, so that
   // `cd sdk/php && composer install` and `(cd sdk/php; phpunit)` are read as the commands they run, and
   // a word inside an echoed message is not.
-  const WRAPPERS = new Set(['sudo', 'exec', 'command', 'time', 'env', 'nohup', 'xargs', 'nice']);
+  const WRAPPERS = new Set([
+    ...['sudo', 'exec', 'command', 'time', 'env', 'nohup', 'xargs', 'nice', 'timeout', 'stdbuf', 'setsid', 'eval'],
+    ...['!', '{', 'if', 'then', 'do', 'else', 'elif', 'while', 'until'],
+  ]);
+  const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh']);
+  const unquote = (word: string): string => word.replace(/^[\\"']+|["']+$/g, '');
   const startsWith = (run: string): string[] =>
     run
       .split('\n')
-      .flatMap(line => line.split(/&&|\|\||[;|()`]|\$\(/))
-      .map(segment => {
+      .flatMap(line => line.split(/&&|\|\||[;|&()`]|\$\(/))
+      .flatMap(segment => {
         const words = segment.trim().split(/\s+/).filter(Boolean);
         let wrapped = false;
         for (;;) {
           const word = words[0] ?? '';
           if (WRAPPERS.has(word)) wrapped = true;
-          else if (!/^[A-Za-z_]\w*=/.test(word) && !(wrapped && word.startsWith('-'))) break;
+          else if (!/^[A-Za-z_]\w*=/.test(word) && !(wrapped && (word.startsWith('-') || /^\d+[smhd]?$/.test(word))))
+            break;
           words.shift();
         }
-        return words[0] ?? '';
-      })
-      .filter(Boolean);
+        const word = unquote(words[0] ?? '');
+        // `sh -c "composer install"`: the string is a command line of its own.
+        if (SHELLS.has(word) && words[1] === '-c') return [word, ...startsWith(unquote(words.slice(2).join(' ')))];
+        return word ? [word] : [];
+      });
   const isProjectCommand = (word: string): boolean =>
-    /(?:^|\/)(?:composer|php|phpunit)(?:\.phar)?$/.test(word) || /vendor\/bin|^\.\/scripts\//.test(word);
+    /(?:^|\/)(?:composer\d*|php[\d.]*(?:-[a-z]+)?|phpunit)(?:\.phar)?$/.test(word) ||
+    /vendor\/bin|scripts\//.test(word);
+  // A repository script or a vendored binary handed to an interpreter (`bash ./scripts/x.sh`) is no command word.
+  const SCRIPT_WORD = /vendor\/bin|(?:^|[\s'"=])(?:\.\/)?scripts\//;
 
   it('runs the tests in a job that holds no token, and the push in a job that needs it', () => {
     const entries = Object.entries(jobs());
@@ -815,11 +832,13 @@ describe.each([
     expect(testers.map(([name]) => name)).toEqual(['test']);
     expect(pushers.map(([name]) => name)).toEqual([pusher]);
     expect(usesToken(jobs().test)).toBe(false);
+    expect(holdsSecret(jobs().test)).toBe(false);
     expect([jobs()[pusher].needs].flat()).toContain('test');
   });
 
   it('runs no PHP, Composer or project script, at any command position, in the job that holds the token', () => {
     expect(startsWith(runsOf(jobs()[pusher])).filter(isProjectCommand)).toEqual([]);
+    expect(runsOf(jobs()[pusher])).not.toMatch(SCRIPT_WORD);
   });
 
   it('uses no action but the checkout in the job that holds the token', () => {
@@ -845,16 +864,36 @@ describe.each([
       'x=1 ./vendor/bin/phpunit',
       'sudo -n composer.phar update',
       './scripts/anything.sh',
+      'timeout 60 composer install',
+      'sh -c "composer install"',
+      'if true; then composer install; fi',
+      '{ php -v; }',
+      'sleep 1 & composer install',
+      'eval composer install',
+      '! composer install',
+      '"composer" install',
+      'php8.2 -v',
     ]) {
       expect(startsWith(line).some(isProjectCommand)).toBe(true);
+    }
+    for (const line of [
+      'bash ./scripts/anything.sh',
+      'source ./scripts/x.sh',
+      '. ./scripts/x.sh',
+      'sh vendor/bin/phpunit',
+    ]) {
+      expect(SCRIPT_WORD.test(line)).toBe(true);
     }
     for (const line of [
       'git push origin main',
       'echo "must run from a php-sdk-v* tag"',
       'echo phpstorm',
       'git -c core.hooksPath=/dev/null push',
+      'SPLIT_SHA="$(git subtree split --prefix=sdk/php HEAD)"',
+      'echo "Mirrored sdk/php -> rmyndharis/openwa-php@main"',
     ]) {
       expect(startsWith(line).some(isProjectCommand)).toBe(false);
+      expect(SCRIPT_WORD.test(line)).toBe(false);
     }
     expect(usesToken({ env: { SPLIT: `\${{ secrets.${TOKEN} }}` }, steps: [] })).toBe(true);
     expect(usesToken({ steps: [{ run: 'x', env: { SPLIT: `\${{ secrets.${TOKEN} }}` } }] })).toBe(true);

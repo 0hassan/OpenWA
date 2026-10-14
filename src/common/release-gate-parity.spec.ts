@@ -85,11 +85,19 @@ describe('release gate jobs can stop the publish jobs', () => {
   type GateStep = {
     name?: string;
     uses?: string;
+    run?: string;
+    env?: Record<string, unknown>;
     with?: Record<string, unknown>;
     if?: unknown;
     'continue-on-error'?: unknown;
   };
-  type GateJob = { needs?: string | string[]; if?: unknown; 'continue-on-error'?: unknown; steps?: GateStep[] };
+  type GateJob = {
+    needs?: string | string[];
+    if?: unknown;
+    'continue-on-error'?: unknown;
+    strategy?: { matrix?: { platform?: string[] } };
+    steps?: GateStep[];
+  };
   const jobs = (): Record<string, GateJob> =>
     (yaml.load(fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8')) as { jobs?: Record<string, GateJob> })
       .jobs ?? {};
@@ -146,6 +154,38 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(String(trivy[0].with?.['exit-code'])).toBe('1');
     expect(trivy[0].with?.severity).toBe('CRITICAL,HIGH');
     expect(trivy[0].with?.trivyignores).toBe('.trivyignore');
+  });
+
+  // What the scan looks at is pinned as well as what it fails on: a scan of the checkout, of OS packages
+  // alone, with a directory skipped, or of one architecture reads green for an image it did not inspect.
+  it('image-scan reads the OS packages and libraries of the image on both architectures, skipping nothing', () => {
+    const scan = (jobs()['image-scan'].steps ?? []).find(step => (step.uses ?? '').startsWith('aquasecurity/'));
+    expect(scan?.with?.['scan-type']).toBe('image');
+    expect(scan?.with?.['vuln-type']).toBe('os,library');
+    for (const input of ['skip-dirs', 'skip-files', 'scanners', 'ignore-policy']) {
+      expect(scan?.with?.[input]).toBeUndefined();
+    }
+    expect(jobs()['image-scan'].strategy?.matrix?.platform).toEqual(['linux/amd64', 'linux/arm64']);
+  });
+
+  // Promotion re-points tags, and is safe only because every one of them is checked to resolve to the
+  // digest the build job produced and the gates tested. A comparison that no longer runs, or a digest
+  // taken from anywhere else, keeps the step green for content nobody tested.
+  it('promote tags only the digest the build produced, and finds both architectures on the release tag', () => {
+    const steps = jobs().promote.steps ?? [];
+    const tag = steps.find(step => step.name === 'Tag the smoke-tested image with the release tags');
+    expect(tag).toBeDefined();
+    expect(tag?.env?.EXPECTED_DIGEST).toBe('${{ needs.docker.outputs.digest }}');
+    const lines = executableLines(tag?.run ?? '');
+    expect(lines).toContain('if [ "$actual" != "$EXPECTED_DIGEST" ]; then');
+    expect(lines).toContain('if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then');
+    expect(lines).toContain('docker buildx imagetools create --tag "$tag" "$staging"');
+
+    const verify = steps.find(step => step.name === 'Verify the release tag resolves and is multi-arch');
+    expect(verify).toBeDefined();
+    const verifyLines = executableLines(verify?.run ?? '');
+    expect(verifyLines).toContain('for want in linux/amd64 linux/arm64; do');
+    expect(verifyLines).toContain('grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }');
   });
 
   it.each(['boot-smoke', 'image-scan', 'verify-published'])(

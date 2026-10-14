@@ -34,7 +34,7 @@ function commentStart(line: string): number {
       i++;
     } else if (char === '"' || char === "'") {
       quote = char;
-    } else if (char === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+    } else if (char === '#' && (i === 0 || /[\s;&|()]/.test(line[i - 1]))) {
       return i;
     }
   }
