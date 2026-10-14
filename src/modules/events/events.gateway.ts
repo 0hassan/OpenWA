@@ -661,8 +661,15 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     const chats = chatRestricted ? [...this.chatScope.scopeFor(subscriberKey)!.allowed] : undefined;
     // A socket holds every room it asks for, so events x chats rooms that exceed the cap can never fit.
     // Refused here, before the names are built: a large allowlist made each refused frame cost real time.
+    // No amount of unsubscribing makes that fit, so the reply names the cost per event, not the generic text.
     if (chats && permittedEvents.length * chats.length > MAX_ROOMS_PER_SOCKET) {
-      return this.createError('TOO_MANY_SUBSCRIPTIONS', TOO_MANY_SUBSCRIPTIONS_MESSAGE, requestId);
+      // Fewer events help only while one event fits: a list stored before allowedChats was bounded may not.
+      const remedy = chats.length <= MAX_ROOMS_PER_SOCKET ? 'name fewer events or use "*"' : 'shorten the allowlist';
+      return this.createError(
+        'TOO_MANY_SUBSCRIPTIONS',
+        `This key's chat allowlist makes every event ${chats.length} subscriptions and a connection may hold at most ${MAX_ROOMS_PER_SOCKET}; ${remedy}`,
+        requestId,
+      );
     }
     const rooms = permittedEvents.flatMap(event =>
       chats ? chats.map(chatId => chatRoom(sessionId, event, chatId)) : [buildRoomName(sessionId, event)],

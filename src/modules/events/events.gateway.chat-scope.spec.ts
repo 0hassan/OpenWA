@@ -187,8 +187,39 @@ describe('chat-scoped WebSocket rooms', () => {
       'group.update',
       'presence.update',
     ];
-    expect(await subscribe(restricted, chatEvents)).toMatchObject({ type: 'error', code: 'TOO_MANY_SUBSCRIPTIONS' });
+    const refused = await subscribe(restricted, chatEvents);
+    expect(refused).toMatchObject({ type: 'error', code: 'TOO_MANY_SUBSCRIPTIONS' });
     expect(reads).toBe(0);
+    // The socket holds nothing, so unsubscribing cannot make this fit: the reply names what each event
+    // costs this key and the way out.
+    const { message } = refused as { message: string };
+    expect(message).toContain('every event 900 subscriptions');
+    expect(message).toContain('name fewer events or use "*"');
+    expect(message).not.toContain('unsubscribe');
+  });
+
+  it('does not suggest "*" to a key whose allowlist alone is over the cap', async () => {
+    // A list stored before allowedChats was bounded: its address forms exceed what one socket may hold,
+    // so even one event never fits and only a shorter list helps.
+    const chats = Array.from({ length: 2100 }, (_, index) => `62811${String(index).padStart(7, '0')}@c.us`);
+    const restricted = await connect('restricted', chats);
+    const refused = await subscribe(restricted, ['*']);
+    expect(refused).toMatchObject({ type: 'error', code: 'TOO_MANY_SUBSCRIPTIONS' });
+    const { message } = refused as { message: string };
+    expect(message).toContain('every event 4200 subscriptions');
+    expect(message).toContain('shorten the allowlist');
+    expect(message).not.toContain('use "*"');
+    expect(message).not.toContain('unsubscribe');
+  });
+
+  it('tells a subscriber that is over the cap because of what it already holds to unsubscribe first', async () => {
+    const chats = Array.from({ length: 450 }, (_, index) => `62811${String(index).padStart(7, '0')}@c.us`);
+    const restricted = await connect('restricted', chats);
+    // The wildcard subscription holds 900 rooms; four more events add 3600, each frame within the cap alone.
+    const fourEvents = ['message.received', 'message.sent', 'message.ack', 'message.revoked'];
+    const refused = await subscribe(restricted, fourEvents, 's1');
+    expect(refused).toMatchObject({ type: 'error', code: 'TOO_MANY_SUBSCRIPTIONS' });
+    expect((refused as { message: string }).message).toContain('unsubscribe first');
   });
 
   it('performs no chat lookups for a local stream without restricted subscribers', async () => {
