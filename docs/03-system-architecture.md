@@ -917,16 +917,22 @@ export enum EngineStatus {
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
-  onMessage?: (message: IncomingMessage) => void;
-  onMessageCreate?: (message: IncomingMessage) => void; // outgoing (incl. linked-phone sends)
+  admitInbound?: (arrival: {
+    id: string;
+    chatId: string;
+    needsRoom: boolean;
+    status: boolean;
+  }) => InboundTicket | undefined; // PostgreSQL: reserves room for a download before the emit
+  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void;
+  onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
-  onMessageRevoked?: (message: RevokedMessage) => void;
+  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
   onEventResponse?: (event: EventResponseEvent) => void; // an RSVP to a WhatsApp event; Baileys only
   onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
-  onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
+  onHistoryMessages?: (messages: IncomingMessage[]) => void | Promise<IncomingMessage[] | void>; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
   onReconnecting?: (attempt: number, nextDelayMs: number) => void; // engines that retry internally (Baileys)
   onStateChanged?: (state: EngineStatus) => void;

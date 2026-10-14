@@ -264,6 +264,9 @@ version: '3.8'
 services:
   openwa:
     image: ghcr.io/rmyndharis/openwa:latest
+    # Teardown takes up to 63 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
+    # WEBHOOK_SHUTDOWN_DRAIN_MS exceeds its default, or the 10 s default kills the task mid-teardown.
+    stop_grace_period: 75s
     deploy:
       replicas: 1 # MUST stay 1 until multi-replica is supported — multiple replicas on one session volume corrupt WhatsApp auth
       update_config:

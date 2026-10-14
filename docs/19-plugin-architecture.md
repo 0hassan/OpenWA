@@ -598,7 +598,7 @@ its `ctx.storage` data dir (built-ins are protected and cannot be uninstalled). 
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).
 
-**Context.** `createPluginContext` builds the `PluginContext` (§19.4): a per-plugin logger,
+**Context.** `PluginCapabilityContext.createPluginContext` (`src/core/plugins/plugin-capability-context.ts`) builds the `PluginContext` (§19.4): a per-plugin logger,
 `registerHook` (wrapped with the per-session activation gate), `registerWebhook`, the live
 `config` getter, and the permission-checked `messages` / `engine` / `net` / `storage` / `conversations` /
 `handover` / `mappings` capabilities. The capability methods call `assertPermission` before doing any
@@ -739,12 +739,12 @@ export const PluginCapabilityPermission = {
 ```
 
 There is no `PermissionChecker` class and no `PermissionDeniedError`. Enforcement of the five
-capability-facade permissions lives in the loader: each capability method calls
+capability-facade permissions lives in `PluginCapabilityContext`: each capability method calls
 `assertPermission(manifest, permission)` before doing any work, and a plugin whose manifest does not
 declare the matching permission (or declares none) is rejected with a `PluginCapabilityError`:
 
 ```typescript
-// src/core/plugins/plugin-loader.service.ts (paraphrased)
+// src/core/plugins/plugin-capability-context.ts (paraphrased)
 
 private assertPermission(manifest: PluginManifest, permission: PluginCapabilityPermission): void {
   if (!(manifest.permissions ?? []).includes(permission)) {

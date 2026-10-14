@@ -9,16 +9,16 @@
 > default** and **purely additive**: when disabled, none of its code (or the MCP SDK)
 > is loaded and every REST route behaves exactly as before.
 
-| Component                                    | Status         | Location                                             |
-| -------------------------------------------- | -------------- | ---------------------------------------------------- |
-| **Tool registry (`ToolDescriptor`)**         | ✅ Implemented | `src/core/agent-tools/tool-descriptor.ts`            |
-| **Tool invoker (auth → validate → service)** | ✅ Implemented | `src/core/agent-tools/tool-invoker.ts`               |
-| **Registry service**                         | ✅ Implemented | `src/core/agent-tools/tool-registry.service.ts`      |
-| **Curated tool tables (51 tools)**           | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
-| **MCP transport adapter**                    | ✅ Implemented | `src/modules/mcp/mcp.server.ts`                      |
-| **Opt-in module gate**                       | ✅ Implemented | `src/modules/mcp/mcp.module.ts`, `src/app.module.ts` |
-| **Per-key rate limiter**                     | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |
-| **Result shaping (smart/json)**              | ✅ Implemented | `src/modules/mcp/tool-result.ts`                     |
+| Component                                                                 | Status         | Location                                             |
+| ------------------------------------------------------------------------- | -------------- | ---------------------------------------------------- |
+| **Tool registry (`ToolDescriptor`)**                                      | ✅ Implemented | `src/core/agent-tools/tool-descriptor.ts`            |
+| **Tool invoker (auth → chat gate → validate → chat arguments → service)** | ✅ Implemented | `src/core/agent-tools/tool-invoker.ts`               |
+| **Registry service**                                                      | ✅ Implemented | `src/core/agent-tools/tool-registry.service.ts`      |
+| **Curated tool tables (51 tools)**                                        | ✅ Implemented | `src/core/agent-tools/tools/*.tools.ts`              |
+| **MCP transport adapter**                                                 | ✅ Implemented | `src/modules/mcp/mcp.server.ts`                      |
+| **Opt-in module gate**                                                    | ✅ Implemented | `src/modules/mcp/mcp.module.ts`, `src/app.module.ts` |
+| **Per-key rate limiter**                                                  | ✅ Implemented | `src/modules/mcp/mcp-rate-limit.ts`                  |
+| **Result shaping (smart/json)**                                           | ✅ Implemented | `src/modules/mcp/tool-result.ts`                     |
 
 | Capability                        | Status         | Notes                                                                 |
 | --------------------------------- | -------------- | --------------------------------------------------------------------- |
@@ -86,7 +86,7 @@ flowchart LR
     Client[MCP client] -->|POST /mcp| Adapter
     subgraph Core["src/core/agent-tools (SDK-free)"]
         Registry[ToolRegistryService<br/>51 ToolDescriptors]
-        Invoker[invokeTool<br/>auth → validate → handler]
+        Invoker[invokeTool<br/>auth → chat gate → validate → chat arguments → handler]
     end
     subgraph Adapter["src/modules/mcp (SDK, opt-in)"]
         Server[StreamableHTTP transport]

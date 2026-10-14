@@ -1064,8 +1064,10 @@ curl -H "X-API-Key: $API_KEY" \
 ```sql
 -- Indexes ship with the schema (migrations) — there is nothing to add by hand. `messages`
 -- carries ("sessionId", "createdAt"), ("sessionId", "chatId", "createdAt"), ("chatId"),
--- ("status"), ("createdAt"), a partial ("mediaPath") where it is not null, a unique
--- ("sessionId", "waMessageId"), and on PostgreSQL a GIN index on the full-text "body_ts" column.
+-- ("status"), ("createdAt"), the message-time indexes ("sessionId", "timestamp", "id"),
+-- ("sessionId", "chatId", "timestamp", "id") and ("sessionId", "direction", "timestamp", "id"),
+-- a partial ("mediaPath") where it is not null, a unique ("sessionId", "waMessageId"), and on
+-- PostgreSQL a GIN index on the full-text "body_ts" column.
 
 -- PostgreSQL: refresh planner statistics on the hot tables
 ANALYZE sessions;
@@ -1509,22 +1511,24 @@ A media message also carries `media: { mimetype, filename?, data?, omitted?, siz
 
 ### HTTP Error Codes
 
-| Code | Meaning             | Common Cause                                                                               | Solution                                          |
-| ---- | ------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| 400  | Bad Request         | Invalid parameters, or the session is not started                                          | Check request body/params; start the session      |
-| 401  | Unauthorized        | Missing/invalid API key                                                                    | Add X-API-Key header                              |
-| 403  | Forbidden           | Insufficient permissions                                                                   | Check API key permissions                         |
-| 404  | Not Found           | Invalid session/endpoint                                                                   | Verify session exists                             |
-| 409  | Conflict            | Session name already exists, or the session is not ready (retryable)                       | Use a different session name, or wait for `ready` |
-| 413  | Payload Too Large   | File too large                                                                             | Reduce file size                                  |
-| 429  | Too Many Requests   | Rate limited                                                                               | Reduce request rate                               |
-| 500  | Internal Error      | Server error                                                                               | Check logs                                        |
-| 503  | Service Unavailable | The engine transport died during a read, or a media fetch through the session proxy failed | Retry; restart the session if it persists         |
+| Code | Meaning             | Common Cause                                                                                                                  | Solution                                                                                         |
+| ---- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 400  | Bad Request         | Invalid parameters, or the session is not started                                                                             | Check request body/params; start the session                                                     |
+| 401  | Unauthorized        | Missing/invalid API key                                                                                                       | Add X-API-Key header                                                                             |
+| 403  | Forbidden           | Insufficient permissions                                                                                                      | Check API key permissions                                                                        |
+| 404  | Not Found           | Invalid session/endpoint                                                                                                      | Verify session exists                                                                            |
+| 409  | Conflict            | Session name already exists, the session is not ready (retryable), or an idempotent send is in progress or of unknown outcome | Use a different session name, wait for `ready`, or follow the `code` (docs/06, idempotent sends) |
+| 422  | Unprocessable       | An `Idempotency-Key` reused with another route or body                                                                        | Use a new key for a different send                                                               |
+| 413  | Payload Too Large   | File too large                                                                                                                | Reduce file size                                                                                 |
+| 429  | Too Many Requests   | Rate limited                                                                                                                  | Reduce request rate                                                                              |
+| 500  | Internal Error      | Server error                                                                                                                  | Check logs                                                                                       |
+| 503  | Service Unavailable | The engine transport died during a read, or a media fetch through the session proxy failed                                    | Retry; restart the session if it persists                                                        |
 
 ### Error Body Shape
 
 There are no machine-readable WhatsApp error codes. Errors use the NestJS default shape, so match on
-`statusCode` (above) and read `message` for the human-readable cause:
+`statusCode` (above) and read `message` for the human-readable cause. A few refusals also carry a stable
+`code` (see the error response section of docs/06):
 
 ```json
 {

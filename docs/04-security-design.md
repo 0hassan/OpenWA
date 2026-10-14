@@ -283,13 +283,13 @@ flowchart TB
 
 ### Validation Examples
 
-| Field                        | Rules                                                                                                                                            |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `chatId`                     | Non-empty string — **no format pattern**; the engine resolves the id, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass |
-| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format                                                                                     |
-| `url`                        | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced               |
-| `text`                       | Max 4096 chars (`send-text`)                                                                                                                     |
-| `sessionName`                | Alphanumeric + hyphen, 3-50 chars                                                                                                                |
+| Field                        | Rules                                                                                                                                                                      |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `chatId`                     | Non-empty string of at most 255 characters — **no format pattern**; the engine resolves the id, so `@c.us`, `@g.us`, `@lid`, `@newsletter` and `status@broadcast` all pass |
+| `phoneNumber` (pairing code) | Pattern: `^[0-9]{6,15}$` — digits only, international format                                                                                                               |
+| `url`                        | Valid URL (`require_tld: false`, so single-label hosts like `http://localhost:3000` pass); HTTPS is a recommendation, not enforced                                         |
+| `text`                       | Max 4096 chars (`send-text`)                                                                                                                                               |
+| `sessionName`                | Alphanumeric + hyphen, 3-50 chars                                                                                                                                          |
 
 ### DTO Validation
 
@@ -298,6 +298,7 @@ flowchart TB
 export class SendTextMessageDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(CHAT_ID_MAX_LENGTH) // 255
   chatId: string;
 
   @IsString()
@@ -422,10 +423,10 @@ app.enableCors({
   },
   credentials: corsPolicy.credentials, // false whenever the allowlist is a wildcard
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID'],
+  allowedHeaders: ['Content-Type', 'X-API-Key', 'Authorization', 'X-Request-ID', 'Idempotency-Key'],
   // Throttlers are named, so rate-limit headers carry a per-window suffix
   // (see "Response on limit" above); there are no unsuffixed variants.
-  exposedHeaders: ['X-RateLimit-Limit-short', 'X-RateLimit-Remaining-short', '...'],
+  exposedHeaders: ['X-RateLimit-Limit-short', 'X-RateLimit-Remaining-short', '...', 'Idempotent-Replayed'],
   maxAge: 86400, // 24 hours
 });
 ```
