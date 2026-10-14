@@ -123,15 +123,18 @@ export function correctionForMediaGrowth(
 export const SCROLL_ANCHOR_ATTRIBUTE = 'data-scroll-anchor';
 
 /**
- * The first anchor element the reader can see, with its offset from the container's top edge: the
- * thing an older page landing above must hold still, whatever grew elsewhere in the thread meanwhile.
+ * The first anchor element the reader can see, with its offset inside the thread's content (from the
+ * top of what scrolls, not from the visible top edge): the thing an older page landing above must hold
+ * still, whatever grew elsewhere in the thread meanwhile. In content coordinates the element's offset
+ * changes only when something above it grew, so a reader who scrolls while the page is in flight is not
+ * counted as the content moving.
  */
 function firstVisibleAnchor(container: HTMLElement): { node: Element; top: number } | null {
   const containerTop = container.getBoundingClientRect().top;
   for (const child of Array.from(container.children)) {
     if (!child.hasAttribute(SCROLL_ANCHOR_ATTRIBUTE)) continue;
     const rect = child.getBoundingClientRect();
-    if (rect.bottom > containerTop) return { node: child, top: rect.top - containerTop };
+    if (rect.bottom > containerTop) return { node: child, top: rect.top - containerTop + container.scrollTop };
   }
   return null;
 }
@@ -273,7 +276,7 @@ export function useChatScrollPosition(
     olderAnchorRef.current = null;
     const grew =
       anchor && el.contains(anchor.node)
-        ? anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top
+        ? anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - anchor.top
         : el.scrollHeight - prevScrollHeightRef.current;
     if (grew > 0) {
       const corrected = el.scrollTop + grew;
