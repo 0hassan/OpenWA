@@ -35,6 +35,13 @@ export class PluginUninstaller {
     private readonly releaseTakeovers?: (pluginId: string) => Promise<void>,
   ) {}
 
+  /**
+   * Package folders of plugins whose uninstall stopped after the unload dropped their runtime record,
+   * until a repeat completes: without it the repeat only has the id to go by, and a package whose folder
+   * is not its manifest id would be left on disk to load again on the next boot.
+   */
+  private readonly unloadedDirs = new Map<string, string>();
+
   /** <root>/<id> for an id with no loaded package, or null if the id escapes that root. */
   private resolveUninstallDir(root: string, pluginId: string): string | null {
     const base = path.resolve(root);
@@ -56,7 +63,8 @@ export class PluginUninstaller {
     // it, and for a plugin loaded from the legacy directory the configured root is the wrong tree —
     // deleting there removes the ctx.storage directory and leaves the code, so the plugin comes
     // back on the next boot having reported a successful uninstall.
-    const recordedDir = this.plugins.get(pluginId)?.packageDir ?? null;
+    const recordedDir = this.plugins.get(pluginId)?.packageDir ?? this.unloadedDirs.get(pluginId) ?? null;
+    if (recordedDir) this.unloadedDirs.set(pluginId, recordedDir);
 
     if (this.plugins.has(pluginId)) {
       await this.unload(pluginId);
@@ -93,6 +101,7 @@ export class PluginUninstaller {
     // Best-effort, and strictly that one plugin's directory.
     this.pluginStorage.deletePluginData(pluginId);
 
+    this.unloadedDirs.delete(pluginId);
     this.logger.log(`Plugin uninstalled: ${pluginId}`, { pluginId, action: 'plugin_uninstalled' });
   }
 }

@@ -212,6 +212,30 @@ describe('PluginUninstaller — uninstall', () => {
     expect(fs.existsSync(dir)).toBe(false);
     expect(storage.getPluginEntry('relay')).toBeUndefined();
   });
+
+  // The boot scan loads a folder by its manifest id, whatever the folder is called. The repeat of a
+  // failed uninstall has no runtime record left to read the folder from.
+  it('removes the package folder on the repeat of a failed uninstall when the folder is not the plugin id', async () => {
+    const dir = path.join(pluginsDir, 'relay-v2-copy');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: 'relay' }));
+    seedEntry(storage, 'relay');
+    const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
+    let storeUp = false;
+    const flaky = makeUninstaller(config, storage, pluginsDir, () =>
+      storeUp ? Promise.resolve() : Promise.reject(new Error('mapping store unavailable')),
+    );
+    flaky.plugins.set('relay', loadedUserPlugin('relay', dir));
+
+    await expect(flaky.uninstaller.uninstallPlugin('relay')).rejects.toThrow('mapping store unavailable');
+    expect(fs.existsSync(dir)).toBe(true);
+
+    storeUp = true;
+    await flaky.uninstaller.uninstallPlugin('relay');
+
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(storage.getPluginEntry('relay')).toBeUndefined();
+  });
 });
 
 describe('PluginUninstaller — uninstall cleans up split-dir plugin storage', () => {
