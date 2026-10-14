@@ -17,6 +17,7 @@ import {
 } from './plugin.interfaces';
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
+import type { PluginConversationMappingPort } from './plugin-host-ports';
 import { PluginCapabilityContext } from './plugin-capability-context';
 import { PluginSandboxBridge } from './plugin-sandbox-bridge';
 import { PluginPackageScanner } from './plugin-package-scanner';
@@ -240,12 +241,23 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       this.pluginsDir,
       pluginId => this.lifecycle.unloadPlugin(pluginId),
       this.legacyPluginsDir,
-      pluginId => this.hostServices.getConversationMappingPort().releaseTakeovers(pluginId),
+      pluginId => this.releaseTakeovers(pluginId),
     );
   }
 
   onModuleInit(): void {
     this.scanner.scanAtBoot();
+  }
+
+  /** Hand back the chats a plugin took over. A host without the conversation store has none to hand back. */
+  private releaseTakeovers(pluginId: string): Promise<void> {
+    let port: PluginConversationMappingPort;
+    try {
+      port = this.hostServices.getConversationMappingPort();
+    } catch {
+      return Promise.resolve();
+    }
+    return port.releaseTakeovers(pluginId);
   }
 
   /**

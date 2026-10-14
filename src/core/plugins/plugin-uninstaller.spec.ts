@@ -168,28 +168,37 @@ describe('PluginUninstaller — uninstall', () => {
   });
 
   // A takeover the plugin held would keep every other plugin silent on that chat for good.
-  it('hands the takeovers of the plugin back once it is gone, and survives that failing', async () => {
+  it('hands the takeovers of the plugin back before it removes anything', async () => {
     const dir = writeUserPlugin('relay');
     seedEntry(storage, 'relay');
-    const release = jest.fn().mockResolvedValue(undefined);
     const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
-    const withRelease = makeUninstaller(config, storage, pluginsDir, release);
+    const onDisk: boolean[] = [];
+    const withRelease = makeUninstaller(config, storage, pluginsDir, () => {
+      onDisk.push(fs.existsSync(dir) && storage.getPluginEntry('relay') !== undefined);
+      return Promise.resolve();
+    });
     withRelease.plugins.set('relay', loadedUserPlugin('relay', dir));
 
     await withRelease.uninstaller.uninstallPlugin('relay');
 
-    expect(release).toHaveBeenCalledWith('relay');
+    expect(onDisk).toEqual([true]);
     expect(fs.existsSync(dir)).toBe(false);
+  });
 
-    const dir2 = writeUserPlugin('relay2');
-    seedEntry(storage, 'relay2');
-    const failing = makeUninstaller(config, storage, pluginsDir, () => {
-      throw new Error('mapping store unavailable');
-    });
-    failing.plugins.set('relay2', loadedUserPlugin('relay2', dir2));
+  it('keeps the plugin installed when its takeovers cannot be handed back, so the call can be repeated', async () => {
+    const dir = writeUserPlugin('relay');
+    seedEntry(storage, 'relay');
+    const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
+    const failing = makeUninstaller(config, storage, pluginsDir, () =>
+      Promise.reject(new Error('mapping store unavailable')),
+    );
+    failing.plugins.set('relay', loadedUserPlugin('relay', dir));
 
-    await expect(failing.uninstaller.uninstallPlugin('relay2')).resolves.toBeUndefined();
-    expect(fs.existsSync(dir2)).toBe(false);
+    await expect(failing.uninstaller.uninstallPlugin('relay')).rejects.toThrow('mapping store unavailable');
+
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(storage.getPluginEntry('relay')).toBeDefined();
+    expect(failing.plugins.has('relay')).toBe(true);
   });
 });
 

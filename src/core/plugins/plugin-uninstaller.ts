@@ -52,6 +52,11 @@ export class PluginUninstaller {
       throw new Error(`Cannot uninstall built-in plugin ${pluginId}`);
     }
 
+    // A takeover the plugin held keeps every other plugin silent on that chat, and nothing is left to
+    // hand it back once the plugin is gone. Done first, while the registry entry still exists: a store
+    // that cannot take it fails the uninstall, which the operator can then repeat.
+    await this.releaseTakeovers?.(pluginId);
+
     // Read the package location BEFORE unloading: unloadPlugin drops the runtime record that holds
     // it, and for a plugin loaded from the legacy directory the configured root is the wrong tree —
     // deleting there removes the ctx.storage directory and leaves the code, so the plugin comes
@@ -86,18 +91,6 @@ export class PluginUninstaller {
     // otherwise leak <dataDir>/plugins/<id> — persisted secrets included — on every uninstall.
     // Best-effort, and strictly that one plugin's directory.
     this.pluginStorage.deletePluginData(pluginId);
-
-    // A takeover the plugin held keeps every other plugin silent on that chat, and nothing is left to
-    // hand it back. Best-effort: the plugin is gone either way.
-    try {
-      await this.releaseTakeovers?.(pluginId);
-    } catch (error) {
-      this.logger.warn(`Could not release the takeovers of uninstalled plugin ${pluginId}`, {
-        pluginId,
-        action: 'plugin_takeover_release_failed',
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
 
     this.logger.log(`Plugin uninstalled: ${pluginId}`, { pluginId, action: 'plugin_uninstalled' });
   }
