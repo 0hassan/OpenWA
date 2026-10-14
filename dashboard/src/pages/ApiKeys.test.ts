@@ -554,3 +554,19 @@ test('an expiry Save cannot convert ends in an error toast, not a silent no-op',
   await screen.findByText('Invalid time value');
   assert.deepEqual(updateBodies, []);
 });
+
+// The name of a key is free text and is interpolated into the delete confirmation. A name carrying a
+// styled tag became a real element with a string `style`, which React throws on, so the page went down.
+test('deleting a key whose name carries markup shows the name as text', async () => {
+  const { screen, fireEvent } = rtl;
+  const name = '<strong style="font-size:50px">boom</strong>';
+  keyList = [{ ...billingBot, name }];
+  renderApiKeys();
+  await screen.findByText('owa_k1ab****');
+
+  fireEvent.click(screen.getByTitle('Delete'));
+
+  const dialog = await screen.findByRole('dialog');
+  assert.ok(dialog.textContent?.includes(name), 'the name was not shown as typed');
+  assert.equal(dialog.querySelector('strong[style]'), null, 'the name became an element');
+});
