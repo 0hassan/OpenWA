@@ -972,6 +972,15 @@
   object-fit: cover;
 }
 
+/* An archived preview swaps a 14px spinner (plus .25rem of margin) for an image that has no box until it
+   decodes. Holding that box at the difference to the image's own .5rem of margin keeps the swap from
+   shortening the thread: a shorter thread clamps a scroll position pinned to the bottom, and the clamp
+   reaches the scroll hook as the reader scrolling away. It also makes the box the hook seeds at mount
+   exactly what the thread gains once the image decodes. */
+.chats-page .chat-image-media-archived {
+  min-height: calc(14px - 0.25rem);
+}
+
 /* A button, not a label: the bytes are fetchable from the per-message media route, so this is the
    viewer's handle on media the list did not inline. Styled to keep the previous inert appearance
    apart from the affordance. */

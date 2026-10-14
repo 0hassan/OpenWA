@@ -285,3 +285,24 @@ test('an archived image is a named button that says it opens a dialog', async ()
   // The viewer is a dialog; without this a screen reader announces a bare "photo.jpg, button".
   assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
 });
+
+test('an archived image holds the height of the placeholder it replaces, so the swap never shortens the thread', async () => {
+  const { container } = rtl.render(
+    createElement(ArchivedMediaPreview, {
+      kind: 'image',
+      fallback,
+      load: async () => new Blob(['x'], { type: 'image/jpeg' }),
+    }),
+  );
+  const img = await rtl.waitFor(() => {
+    const found = container.querySelector('img.chat-image-media');
+    assert.ok(found, 'the archived image did not render');
+    return found;
+  });
+  assert.ok(img.classList.contains('chat-image-media-archived'));
+  // The placeholder is a 14px spinner plus .25rem of margin; an image has no box until it decodes and
+  // brings .5rem of its own. A shorter thread clamps a scroll position pinned to the bottom, and the
+  // browser reports the clamp as the reader scrolling away.
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  assert.match(css, /\.chat-image-media-archived\s*\{[^}]*min-height:\s*calc\(14px - 0\.25rem\)/);
+});

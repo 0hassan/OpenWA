@@ -150,7 +150,7 @@ function ArchivedMediaPreview({
             <img
               src={state.url}
               alt={alt ?? ''}
-              className="chat-image-media"
+              className="chat-image-media chat-image-media-archived"
               ref={measureMedia}
               onLoad={onMediaLoad}
               role="button"
