@@ -121,23 +121,35 @@ function ChatThread({
     target.focus();
   };
 
-  // The message control that holds keyboard focus, with the place of its bubble among the stops. When that
-  // control is the one that goes away (a deleted message's actions unmount, or its bubble loses its tab
-  // stop) focus falls to the page, and the next Tab would land in the composer: it moves to the stop that
-  // took the place of the bubble instead. React delivers no blur for an element it removes, so the element
-  // is checked after the commit, and only once: a later change of the list never moves focus, and the
-  // position of a reader who scrolled away is never touched (preventScroll). Focus a pointer brought in
-  // is not recorded, so a mouse click on Delete moves nothing.
-  const keyboardFocusRef = useRef<{ element: HTMLElement; at: number } | null>(null);
+  // The message control that holds keyboard focus, with its bubble and the stops on either side of it.
+  // When that control is the one that goes away (a deleted message's actions unmount, or its bubble loses
+  // its tab stop) focus falls to the page, and the next Tab would land in the composer: it moves to the stop
+  // that took the place of the bubble instead. React delivers no blur for an element it removes, so the
+  // element is checked after the commit, and only once: a later change of the list never moves focus, and
+  // the position of a reader who scrolled away is never touched (preventScroll). Focus a pointer brought
+  // in is not recorded, so a mouse click on Delete moves nothing. The place is found from the bubble in the
+  // document, not from an index taken at focus time, which an older page landing since would have moved.
+  const keyboardFocusRef = useRef<{ element: HTMLElement; bubble: HTMLElement; neighbors: HTMLElement[] } | null>(null);
   useEffect(() => {
     const held = keyboardFocusRef.current;
-    if (!held || document.activeElement !== document.body) return;
+    if (!held) return;
+    const stopOf = (element: HTMLElement) => element.isConnected && element.closest('[data-roving-message]') !== null;
+    const stillStop = stopOf(held.element);
+    // Lost: focus fell to the page, or it still sits on an element that has just stopped being a stop,
+    // which Firefox and WebKit only clear a frame later, in a focusout that would reset what is held here.
+    const active = document.activeElement;
+    if (active !== document.body && !(active === held.element && !stillStop)) return;
     keyboardFocusRef.current = null;
-    if (held.element.isConnected && held.element.tabIndex >= 0) return;
+    if (stillStop) return;
+    const { bubble } = held;
     const stops = Array.from(
       messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-roving-message]') ?? [],
     );
-    stops[Math.min(held.at, stops.length - 1)]?.focus({ preventScroll: true });
+    const target = bubble.isConnected
+      ? (stops.find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_FOLLOWING) ??
+        [...stops].reverse().find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_PRECEDING))
+      : held.neighbors.find(stop => stop.isConnected && stop.hasAttribute('data-roving-message'));
+    target?.focus({ preventScroll: true });
   }, [messages, hasActions, messagesContainerRef]);
 
   // "@<digits>" in a message body only ever means something once resolved against a participant
@@ -293,13 +305,18 @@ function ChatThread({
       onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
       onFocus={event => {
         const target = event.target;
-        const bubble = target.closest<HTMLElement>('.message-bubble-container');
+        const bubble = target.closest<HTMLElement>('[data-roving-message]');
         const keyboard = target.matches(':focus-visible');
         if (keyboard) event.currentTarget.removeAttribute('data-pointer');
         else event.currentTarget.setAttribute('data-pointer', '');
+        if (!keyboard || !bubble) {
+          keyboardFocusRef.current = null;
+          return;
+        }
         const stops = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-roving-message]'));
-        const at = bubble ? stops.indexOf(bubble) : -1;
-        keyboardFocusRef.current = keyboard && at >= 0 ? { element: target, at } : null;
+        const at = stops.indexOf(bubble);
+        const neighbors = [stops[at + 1], stops[at - 1]].filter((stop): stop is HTMLElement => Boolean(stop));
+        keyboardFocusRef.current = { element: target, bubble, neighbors };
       }}
       onBlur={event => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) keyboardFocusRef.current = null;

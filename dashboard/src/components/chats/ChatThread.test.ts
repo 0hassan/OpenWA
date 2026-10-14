@@ -547,13 +547,13 @@ test('keyboard focus stays in the thread when the focused message is deleted', (
 });
 
 test('keyboard focus returns without scrolling, and to the stop that took the place of the deleted message', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+  const [a, b, c, d]: ChatMessageView[] = ['1', '2', '3', '4'].map(n => ({
     ...PROMPT,
     id: `db-${n}`,
     waMessageId: `wamid.${n}`,
     metadata: undefined,
   }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const { container, rerenderWith } = renderThread('operator', [a, b, c, d]);
   const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
   assert.ok(del);
   del.focus();
@@ -564,18 +564,60 @@ test('keyboard focus returns without scrolling, and to the stop that took the pl
     original.call(this, options);
   };
   try {
-    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c, d]);
   } finally {
     HTMLElement.prototype.focus = original;
   }
 
-  // The message after the deleted one now holds its place among the stops, and nothing scrolls.
+  // The message after the deleted one now holds its place among the stops (not the newest one), and
+  // nothing scrolls.
   assert.deepEqual(calls, [{ id: 'wamid.3', options: { preventScroll: true } }]);
   assert.equal(focusedMessage(), 'wamid.3');
 });
 
-// What was remembered is used once. Here the stop is gone and nothing in the thread can take the focus, so
-// it stays on the page; a message that arrives later does not draw it in.
+// The place is the bubble's position in the document when it is lost, not an index taken at focus time: an
+// older page that landed in between would have made that index name a message far from it.
+test('the stop that takes the place is found after an older page landed since the focus', () => {
+  const [o1, o2, a, b, c]: ChatMessageView[] = ['o1', 'o2', 'a', 'b', 'c'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+
+  rerenderWith([o1, o2, a, b, c]);
+  assert.equal(document.activeElement, del);
+  rerenderWith([o1, o2, a, { ...b, type: 'revoked', body: '' }, c]);
+
+  assert.equal(focusedMessage(), 'wamid.c');
+});
+
+// Firefox and WebKit leave the focused element active for a frame after it stopped being focusable, so
+// the check after the commit finds focus still on the revoked bubble (jsdom never clears it): it has to be
+// moved to a stop then, not left for the focusout that follows, which only forgets it.
+test('a revoked bubble that still holds focus gives it to the stop that takes its place', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const bubble = bubblesOf(container)[1];
+  bubble.focus();
+  assert.equal(focusedMessage(), 'wamid.2');
+
+  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+
+  assert.equal(focusedMessage(), 'wamid.3');
+});
+
+// What was remembered is used once. Here the only stop is gone and nothing in the thread can take the
+// focus; a message that arrives later, after the place of the old bubble, does not draw it in.
 test('focus is given back once, not at every later change of the list', () => {
   const [a, b]: ChatMessageView[] = ['1', '2'].map(n => ({
     ...PROMPT,
@@ -588,9 +630,9 @@ test('focus is given back once, not at every later change of the list', () => {
   assert.ok(del);
   del.focus();
 
-  rerenderWith([]);
+  rerenderWith([{ ...a, type: 'revoked', body: '' }]);
   assert.equal(focusedMessage(), 'body');
-  rerenderWith([b]);
+  rerenderWith([{ ...a, type: 'revoked', body: '' }, b]);
 
   assert.equal(focusedMessage(), 'body');
 });
