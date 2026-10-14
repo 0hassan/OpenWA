@@ -192,7 +192,11 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
           });
           // Set aside only a row whose payload could not be read. A read that failed because the database
           // said "not now" (a lock, a dropped connection) is looked at again by the next sweep, as before.
-          if (!isTransientDbError(err)) this.rememberUnreadable(id, now);
+          // A payload that does not parse is told by its error class: the message of a SyntaxError quotes
+          // the start of the text, which may read like a connection error.
+          if ((err instanceof Error && err.name === 'SyntaxError') || !isTransientDbError(err)) {
+            this.rememberUnreadable(id, now);
+          }
           stats.skipped++;
           continue;
         }

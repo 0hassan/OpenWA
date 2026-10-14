@@ -172,6 +172,24 @@ describe('IngressReconcilerService.sweep', () => {
     expect(third.skipped).toBe(OPTS.batchSize);
   });
 
+  it('sets aside a row whose payload is text that reads like a connection error', async () => {
+    // The SyntaxError of JSON.parse quotes the start of the text, so by its message alone this row would
+    // be taken for a database that said "not now" and kept at the head of every sweep.
+    const unreadable: string[] = [];
+    for (let i = 0; i < OPTS.batchSize; i++) unreadable.push(await insertEvent({ createdAt: minutesAgo(30) }));
+    const healthy = await insertEvent();
+    for (const id of unreadable) {
+      await ds.query(`UPDATE ingress_events SET payload = 'connection reset by peer' WHERE id = ?`, [id]);
+    }
+
+    const first = await service.sweep(OPTS);
+    expect(first).toMatchObject({ replayed: 0, skipped: OPTS.batchSize });
+    const second = await service.sweep(OPTS);
+
+    expect(second).toMatchObject({ replayed: 1, failed: 0 });
+    expect((await stored(healthy)).dispatchState).toBe('dispatched');
+  });
+
   it('reads a row again on the next sweep when the read failed because the database was busy', async () => {
     // Not a row that cannot be read: a lock or a dropped connection says nothing about its payload, and the
     // delivery is one the reconciler exists to replay within minutes.
