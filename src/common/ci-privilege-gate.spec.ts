@@ -212,15 +212,18 @@ describe('a job that can mint a publish credential pins global npm installs and 
   const grantsIdToken = (perms: Permissions): boolean =>
     perms === 'write-all' || (typeof perms === 'object' && perms !== null && perms['id-token'] === 'write');
 
-  const oidcJobRuns = (source: string | OidcWorkflow): Array<{ job: string; run: string }> => {
+  const oidcJobSteps = (source: string | OidcWorkflow): Array<{ job: string; step: Step }> => {
     const workflow =
       typeof source === 'string'
         ? (yaml.load(fs.readFileSync(path.join(workflowDir, source), 'utf8')) as OidcWorkflow)
         : source;
     return Object.entries(workflow.jobs ?? {})
       .filter(([, def]) => grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions))
-      .flatMap(([job, def]) => (def.steps ?? []).map(step => ({ job, run: executableLines(step.run ?? '') })));
+      .flatMap(([job, def]) => (def.steps ?? []).map(step => ({ job, step })));
   };
+
+  const oidcJobRuns = (source: string | OidcWorkflow): Array<{ job: string; run: string }> =>
+    oidcJobSteps(source).map(({ job, step }) => ({ job, run: executableLines(step.run ?? '') }));
 
   const globalInstallsInOidcJobs = (source: string | OidcWorkflow): Array<{ job: string; spec: string }> =>
     oidcJobRuns(source).flatMap(({ job, run }) =>
@@ -361,15 +364,72 @@ describe('a job that can mint a publish credential pins global npm installs and 
 
   // The JavaScript SDK's toolchain (the install, the test runner, the compiler that builds dist/) is
   // third-party code as well. Its publish job uploads the tarball the build job made and tested, and
-  // runs nothing but the pinned npm that publishes it.
-  it('js-sdk-release.yml: the id-token job installs no project dependency and runs no project script', () => {
-    const runs = oidcJobRuns('js-sdk-release.yml')
-      .map(({ run }) => run)
-      .join('\n');
+  // runs nothing but the pinned npm that publishes it. An allow-list, not a list of what to avoid: the
+  // job's whole command set is three lines, and any other command (a local install, node, another
+  // package manager, a script of the repository) or action is new code running beside the credential.
+  const PUBLISH_COMMANDS = [
+    /^npm install -g npm@\d+\.\d+\.\d+$/,
+    /^npm --version$/,
+    /^npm publish "\$GITHUB_WORKSPACE"\/package\/\*\.tgz --access public --ignore-scripts$/,
+  ];
+  const PUBLISH_ACTIONS = /^actions\/(?:setup-node|download-artifact)@[0-9a-f]{40}$/;
+
+  const outsideAllowList = (source: string | OidcWorkflow): string[] =>
+    oidcJobSteps(source).flatMap(({ job, step }) => [
+      ...(step.uses && !PUBLISH_ACTIONS.test(step.uses) ? [`${job}: uses ${step.uses}`] : []),
+      ...executableLines(step.run ?? '')
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !PUBLISH_COMMANDS.some(allowed => allowed.test(line)))
+        .map(line => `${job}: ${line}`),
+    ]);
+
+  it('js-sdk-release.yml: the id-token job runs only the pinned npm and the publish', () => {
     // Non-vacuity: the finder sees the publish step.
-    expect(runs).toMatch(/\bnpm publish\b/);
-    expect(runs).not.toMatch(/\bnpm[ \t]+(?:ci|test|run|audit|pack|exec|x|rebuild)\b|\bnpx\b/);
+    expect(oidcJobRuns('js-sdk-release.yml').some(({ run }) => /^npm publish\b/m.test(run))).toBe(true);
+    expect(outsideAllowList('js-sdk-release.yml')).toEqual([]);
     expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
+  });
+
+  it('js-sdk-release.yml: names what the allow-list refuses in an id-token job', () => {
+    const run = (commands: string): OidcWorkflow => ({
+      jobs: { publish: { permissions: { 'id-token': 'write' }, steps: [{ run: commands }] } },
+    });
+    for (const command of [
+      'npm install',
+      'npm i left-pad',
+      'npm install --no-save foo',
+      'npm ci',
+      'npx foo',
+      'node scripts/release.js',
+      'yarn install',
+      'pnpm install',
+      'corepack enable',
+      'npm install -g npm@latest',
+      'npm install -g npm@12',
+      'npm publish ./package/x.tgz',
+      'npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public',
+      'curl -fsSL https://example.test/x.sh | sh',
+    ]) {
+      expect(outsideAllowList(run(command))).toEqual([`publish: ${command}`]);
+    }
+    expect(outsideAllowList(run('# npm install\nnpm --version\n'))).toEqual([]);
+    const withAction: OidcWorkflow = {
+      jobs: {
+        publish: {
+          permissions: { 'id-token': 'write' },
+          steps: [{ uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' }, { uses: 'actions/cache@v4' }],
+        },
+      },
+    };
+    expect(outsideAllowList(withAction)).toEqual([
+      'publish: uses actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+      'publish: uses actions/cache@v4',
+    ]);
+    // A job without the grant is not the publish job.
+    expect(
+      outsideAllowList({ jobs: { build: { permissions: { contents: 'read' }, steps: [{ run: 'npm ci' }] } } }),
+    ).toEqual([]);
   });
 
   // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
