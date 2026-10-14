@@ -119,6 +119,16 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(softened).toEqual([]);
   });
 
+  // The image gates and the check of what the public can pull are jobs of their own, so a failure of one
+  // stops the publish jobs only while neither it nor one of its steps is allowed to fail. closure() above
+  // would still list one as a need after such an edit.
+  it.each(['boot-smoke', 'image-scan', 'verify-published'])('%s cannot fail without failing the job', gate => {
+    const job = jobs()[gate];
+    expect(job).toBeDefined();
+    expect(job['continue-on-error']).toBeUndefined();
+    expect((job.steps ?? []).filter(step => step['continue-on-error'] !== undefined)).toEqual([]);
+  });
+
   it.each(PUBLISHERS)('%s has no condition of its own that lets it run after a failed gate', publisher => {
     const job = jobs()[publisher];
     expect(job).toBeDefined();
