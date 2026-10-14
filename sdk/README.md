@@ -274,8 +274,10 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   `WebhookDelivery`.
 - **Redirects are never followed.** A `3xx` surfaces to the caller rather than
   being followed, so the API key is never re-sent to a redirect target.
-- **Default timeout** is 30s (configurable; `0` turns it off). The JavaScript and PHP
-  clients bound the whole call. The Python client's is per network operation
+- **Default timeout** is 30s (configurable). `0` turns it off in the JavaScript,
+  Python and PHP clients; the Go client reads `0` as the 30s default and the Java
+  builder refuses it. The JavaScript, PHP, Go and Java clients bound the whole call,
+  response body included. The Python client's is per network operation
   (connect, read, write, pool), so a response that keeps trickling bytes is not
   cut off. Path segments (chat / message ids) are percent-encoded; a base-URL path
   prefix (e.g. behind a proxy at `/v1`) is preserved.
