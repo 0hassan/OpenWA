@@ -123,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read the duration of an outgoing Baileys audio file in a separate process and a voice note's waveform through ffmpeg, status voice notes included, so a crafted file can no longer abort or exhaust the gateway.
 - Bound `GET /api/search` to 1000 characters and 32 distinct words and run a repeated word once, so one request can no longer hold the event loop on SQLite for seconds.
 - Print the startup banner's API Docs URL only when Swagger is served, so a production boot no longer points at a `404`.
+- Decode numeric and common named character references in a Baileys link preview's title and description, so `&#8217;` and `&eacute;` no longer reach the recipient as written.
 
 ### Documentation
 
