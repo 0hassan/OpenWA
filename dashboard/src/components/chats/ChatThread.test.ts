@@ -596,6 +596,47 @@ test('the stop that takes the place is found after an older page landed since th
   assert.equal(focusedMessage(), 'wamid.c');
 });
 
+// A message that leaves the list takes its bubble out of the document with its controls: the stop after it
+// takes the focus, and the one before it when it was the last.
+test('focus goes to the next stop, then the previous one, when the focused message leaves the list', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const reply = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn');
+  assert.ok(reply);
+  reply.focus();
+
+  rerenderWith([a, c]);
+  assert.equal(focusedMessage(), 'wamid.3');
+
+  rerenderWith([a]);
+  assert.equal(focusedMessage(), 'wamid.1');
+});
+
+// Only the control went away: its message is still a stop, and it keeps the focus.
+test('focus stays on the bubble when a link inside it is the control that went away', () => {
+  const linked: ChatMessageView = {
+    ...PROMPT,
+    id: 'db-2',
+    waMessageId: 'wamid.2',
+    body: 'see https://example.org/a',
+    metadata: undefined,
+  };
+  const next: ChatMessageView = { ...PROMPT, id: 'db-3', waMessageId: 'wamid.3', body: 'Next', metadata: undefined };
+  const { container, rerenderWith } = renderThread('operator', [linked, next]);
+  const link = container.querySelector<HTMLElement>('[data-wa-message-id="wamid.2"] a[href]');
+  assert.ok(link, 'the body links its URL');
+  link.focus();
+
+  rerenderWith([{ ...linked, body: 'see no link now' }, next]);
+
+  assert.equal(focusedMessage(), 'wamid.2');
+});
+
 // A refetch after a reconnect replaces the live copy of a message with its stored row, whose id differs,
 // so React remounts the bubble: the message is the same, and focus belongs on it.
 test('focus goes to the same message when its bubble is remounted under another key', () => {

@@ -157,15 +157,24 @@ function ChatThread({
     // A bubble that left the document may be the same message under a new key (a refetch replaces the
     // live copy of a message with its stored row): the WhatsApp id on its wrapper says so.
     const byWa = (wa: string | null) => (wa ? stops.find(stop => waIdOf(stop) === wa) : undefined);
-    const target = bubble.isConnected
-      ? (stops.find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_FOLLOWING) ??
-        [...stops].reverse().find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_PRECEDING))
-      : (byWa(held.wa) ??
-        held.neighbors
-          .map(near =>
-            near.element.isConnected && near.element.hasAttribute('data-roving-message') ? near.element : byWa(near.wa),
-          )
-          .find(Boolean));
+    // The control alone may have gone (a link an edit removed, a media control swapped for its marker): the
+    // message it belonged to is still a stop, and keeps the focus.
+    const target =
+      bubble.isConnected && bubble.hasAttribute('data-roving-message')
+        ? bubble
+        : bubble.isConnected
+          ? (stops.find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_FOLLOWING) ??
+            [...stops]
+              .reverse()
+              .find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_PRECEDING))
+          : (byWa(held.wa) ??
+            held.neighbors
+              .map(near =>
+                near.element.isConnected && near.element.hasAttribute('data-roving-message')
+                  ? near.element
+                  : byWa(near.wa),
+              )
+              .find(Boolean));
     target?.focus({ preventScroll: true });
   }, [messages, hasActions, messagesContainerRef]);
 
