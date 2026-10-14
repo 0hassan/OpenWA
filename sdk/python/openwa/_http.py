@@ -106,13 +106,36 @@ def resolve_timeout(
 _HEADER_NAME_CHARS = frozenset("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
 
 
-def check_default_headers(default_headers: Mapping[str, str] | None) -> None:
-    """Refuse a default header the HTTP layer would refuse, naming the header and never its value.
+def clean_default_headers(default_headers: Any) -> httpx.Headers:
+    """The default headers as httpx will hold them, or a ``ValueError`` naming the header and never its value.
 
-    A credential for a proxy in front of the gateway is usually read from a file and keeps its newline;
-    the stack's own error quotes the value, which would put the credential in the application's log.
+    Whatever httpx takes (a mapping, a list of ``(name, value)`` pairs, text or bytes) is read the same way.
+    A value is trimmed of the spaces and tabs the HTTP stack would refuse at its ends, as the JDK and PSR-7
+    do, and refused when a control or non-ASCII character is left. A credential for a proxy in front of the
+    gateway is usually read from a file and keeps its newline; the stack's own error quotes the value, which
+    would put the credential in the application's log.
     """
-    for name, value in (default_headers or {}).items():
+    if default_headers is None:
+        return httpx.Headers()
+    if isinstance(default_headers, Mapping):
+        pairs: list[Any] = list(default_headers.items())
+    else:
+        try:
+            pairs = list(default_headers)
+        except TypeError:
+            raise ValueError(
+                "OpenWAClient: default_headers must be a mapping of header names to text, or (name, value) pairs"
+            ) from None
+    cleaned: list[tuple[str, str]] = []
+    for pair in pairs:
+        try:
+            name, value = pair
+        except (TypeError, ValueError):
+            raise ValueError("OpenWAClient: default_headers entries must be (name, value) pairs") from None
+        if isinstance(name, bytes):
+            name = name.decode("latin-1")
+        if isinstance(value, bytes):
+            value = value.decode("latin-1")
         if not isinstance(name, str) or not name or not all(char in _HEADER_NAME_CHARS for char in name):
             raise ValueError("OpenWAClient: default_headers has a header name that is not a valid HTTP token")
         if not isinstance(value, str) or any(char != "\t" and not " " <= char <= "~" for char in value):
@@ -120,6 +143,8 @@ def check_default_headers(default_headers: Mapping[str, str] | None) -> None:
                 f"OpenWAClient: default_headers value for {name!r} must be text without control or non-ASCII "
                 "characters; check for a stray newline"
             )
+        cleaned.append((name, value.strip(" \t")))
+    return httpx.Headers(cleaned)
 
 
 class HttpExecutor:
@@ -138,12 +163,11 @@ class HttpExecutor:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         timeout = resolve_timeout(timeout)
-        check_default_headers(default_headers)
         # Caller-supplied default headers are applied FIRST so the auth/JSON
         # headers below always win and can never be clobbered (mirrors the JS SDK).
         # httpx.Headers matches names case-insensitively, so a lowercase copy is
         # replaced instead of being sent alongside ours.
-        headers = httpx.Headers(default_headers)
+        headers = clean_default_headers(default_headers)
         headers["Content-Type"] = "application/json"
         headers["X-API-Key"] = api_key
         client_kwargs: dict[str, Any] = {

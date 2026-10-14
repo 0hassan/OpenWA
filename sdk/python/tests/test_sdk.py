@@ -308,6 +308,28 @@ class TestClientCore:
         client = OpenWAClient(base_url="https://x", api_key="k", default_headers={"X-Trace": "a\tb c"})
         assert client._http._client.headers["X-Trace"] == "a\tb c"
 
+    def test_a_default_header_value_is_trimmed_of_the_spaces_the_stack_would_refuse_at_its_ends(self):
+        client = OpenWAClient(
+            base_url="https://x", api_key="k", default_headers={"X-Proxy-Cred": "  token \t", "X-Other": "\tv"}
+        )
+        assert client._http._client.headers["X-Proxy-Cred"] == "token"
+        assert client._http._client.headers["X-Other"] == "v"
+
+    def test_default_headers_take_every_shape_httpx_takes_and_refuse_the_rest_by_name(self):
+        pairs = OpenWAClient(
+            base_url="https://x", api_key="k", default_headers=[("X-Trace", "abc"), ("X-Two", "2")]  # type: ignore[arg-type]
+        )
+        assert pairs._http._client.headers["X-Trace"] == "abc"
+        assert pairs._http._client.headers["X-Two"] == "2"
+        raw = OpenWAClient(base_url="https://x", api_key="k", default_headers={b"X-Trace": b"abc"})  # type: ignore[dict-item]
+        assert raw._http._client.headers["X-Trace"] == "abc"
+        with pytest.raises(ValueError, match="X-Trace") as raised:
+            OpenWAClient(base_url="https://x", api_key="k", default_headers={"X-Trace": b"s3cret\n"})  # type: ignore[dict-item]
+        assert "s3cret" not in str(raised.value)
+        for bad in (42, ["X-Trace"], [("X-Trace", "a", "b")]):
+            with pytest.raises(ValueError, match="default_headers"):
+                OpenWAClient(base_url="https://x", api_key="k", default_headers=bad)  # type: ignore[arg-type]
+
     def test_timeout_zero_none_and_inf_mean_none_and_a_bad_value_raises(self):
         for none in (0, None, float("inf")):
             client = OpenWAClient(base_url="https://x", api_key="k", timeout=none)
