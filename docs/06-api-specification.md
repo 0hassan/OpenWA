@@ -5726,11 +5726,12 @@ Merge-save infrastructure config to `data/.env.generated` (a `0600` secret file)
 }
 ```
 
-Write/IO errors are caught and returned as HTTP `200` with `{ "saved": false, "envPath": "", "profiles": [], "message": "Failed to save configuration: …" }`. DTO validation, an unknown engine type, an invalid `database.schema`, CR/LF injection, a value that cannot be stored so that it reads back unchanged, and a merged config the production boot guard would reject (an empty or default `DATABASE_PASSWORD` or S3 key on an external datastore, or a placeholder `REDIS_PASSWORD`; message starts `Refusing to save a configuration that would be rejected at production boot.`) are real HTTP `400` responses, and nothing is written. `profiles` lists newly-required Docker profiles.
+Write/IO errors are caught and returned as HTTP `200` with `{ "saved": false, "envPath": "", "profiles": [], "message": "Failed to save configuration: …" }`. DTO validation, an unknown engine type, an invalid `database.schema`, CR/LF injection, a value that cannot be stored so that it reads back unchanged, and a merged config the production boot guard would reject (an empty or default `DATABASE_PASSWORD` or S3 key on an external datastore, or a placeholder `REDIS_PASSWORD`; message starts `Refusing to save a configuration that would be rejected at production boot.`), and a local `storage.localPath` the app cannot create or write (message starts `Refusing to save the storage path`; the next start would refuse to boot on it, and a path pinned by the host environment or the project `.env` is not judged, as the boot never reads the submitted one) are real HTTP `400` responses, and nothing is written. `profiles` lists newly-required Docker profiles.
 
 **Errors:** `400` unknown/mistyped body field, missing nested `database.type`/`storage.type`, unknown
 `engine.type`, invalid `database.schema`, CR-LF in a value, a value that cannot round-trip through the
-env file, or a config the production boot secret guard would reject · `401` · `403`
+env file, a config the production boot secret guard would reject, or a local
+`storage.localPath` the app cannot create or write · `401` · `403`
 
 ---
 

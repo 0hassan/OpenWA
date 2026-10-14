@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Bound each webhook and ingress queue command at 2 s once Redis has connected, so a Redis that stops answering falls back to direct delivery and inline dispatch instead of holding every dispatch and ingress request.
+- Refuse to save a local `storage.localPath` the app cannot create or write, where the next start refused to boot and the dashboard that could undo the save was down.
 - Answer `400` for a send route's or a product send's `chatId`, or a bulk `batchId`, over 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
 - Answer `400` for a chat action's `chatId` over 255 characters, as the send routes do, instead of handing it to the engine.
 - Use the body hash as the delivery id of an ingress request whose dedup header is longer than 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
