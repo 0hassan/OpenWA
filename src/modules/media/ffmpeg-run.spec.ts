@@ -97,6 +97,26 @@ esac
     expect(env).toHaveProperty('PATH');
   });
 
+  // An FFMPEG_PATH wrapper script, or a Windows host, needs a home, a temp directory or the system root.
+  it('hands ffmpeg the variables a wrapper script and a Windows process load with', async () => {
+    const spawned = jest.mocked(spawn);
+    spawned.mockClear();
+    const names = ['HOME', 'TEMP', 'TMP', 'SystemRoot'];
+    const saved = names.map(name => process.env[name]);
+    names.forEach(name => (process.env[name] = `value-of-${name}`));
+    try {
+      await runFfmpeg(Buffer.from('input'), 'bin', 'ogg', [], options());
+    } finally {
+      names.forEach((name, i) => {
+        if (saved[i] === undefined) delete process.env[name];
+        else process.env[name] = saved[i];
+      });
+    }
+
+    const env = (spawned.mock.calls[0][2] as { env?: Record<string, string> }).env;
+    for (const name of names) expect(env?.[name]).toBe(`value-of-${name}`);
+  });
+
   it('returns the bytes the process produced', async () => {
     const output = await runFfmpeg(Buffer.from('input'), 'bin', 'ogg', [], options());
 

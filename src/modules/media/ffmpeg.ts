@@ -236,11 +236,23 @@ process.on('exit', killRunningConversions);
 /**
  * What ffmpeg sees of the gateway's environment. It parses bytes a caller chose and needs no secret, so
  * the database and Redis passwords and the API key pepper stay out of it. What remains is what finding
- * a binary, its libraries and a temp directory take.
+ * a binary, its libraries, a home and a temp directory take, and the system root a Windows process
+ * cannot load its libraries without.
  */
 function ffmpegEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const name of ['PATH', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'TMPDIR', 'LANG', 'LC_ALL']) {
+  for (const name of [
+    'PATH',
+    'LD_LIBRARY_PATH',
+    'DYLD_LIBRARY_PATH',
+    'HOME',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'LANG',
+    'LC_ALL',
+    'SystemRoot',
+  ]) {
     const value = process.env[name];
     if (value !== undefined) env[name] = value;
   }
