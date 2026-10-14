@@ -1154,8 +1154,10 @@ export class MessageProjector {
     };
     // An engine that applies no validation to a revoke says who made it, and the stored row says whose
     // message it names: a revoke the row proves foreign is dropped, announcement included. whatsapp-web.js
-    // reports only what WhatsApp Web itself accepted, so it passes no actor and is applied at once.
-    if (!actor) {
+    // reports only what WhatsApp Web itself accepted, so it passes no actor and is applied at once. So is
+    // the revoke of a message still arriving: it has no row to be checked against, and waiting for a read
+    // would let its emit run, and announce the deleted content, first.
+    if (!actor || this.inboundInFlight.has(`${id}:${revokedWaMessageId}`)) {
       apply();
       return;
     }

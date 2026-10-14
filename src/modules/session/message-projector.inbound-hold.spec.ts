@@ -194,6 +194,46 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(eventsGateway.emitMessage).not.toHaveBeenCalled();
   });
 
+  it('stores a message cleared when an actor-bearing revoke reaches it while the row read is still out', async () => {
+    const t = admit(arrival('A', 'chat1', true));
+    const gate = deferred<void>();
+    const read = repo.findOne as jest.Mock;
+    const unrestricted = read.getMockImplementation() as (arg: unknown) => Promise<unknown>;
+    read.mockImplementation(async (arg: unknown) => {
+      await gate.promise;
+      return unrestricted(arg);
+    });
+    projector.handleMessageRevoked(
+      's1',
+      engine,
+      {
+        id: 'A',
+        revokedId: 'A',
+        chatId: 'chat1',
+        from: 'chat1',
+        to: 'me@c.us',
+        type: 'revoked',
+        body: '',
+        timestamp: 1,
+      },
+      { fromMe: false },
+    );
+    projector.handleInboundMessage(
+      's1',
+      engine,
+      message('A', 'chat1', { type: 'image', body: 'secret', media: { mimetype: 'image/png', data: 'QUJD' } }),
+      t,
+    );
+    await flush();
+    gate.resolve();
+    await flush();
+
+    expect(hookStarts).toEqual([]);
+    expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: '', type: 'revoked', metadata: null })]);
+    expect(dispatched('message.received')).toEqual([]);
+    expect(eventsGateway.emitMessage).not.toHaveBeenCalled();
+  });
+
   it('runs the hook, stores and announces a message edited before its emit with the edit', async () => {
     const t = admit(arrival('A', 'chat1'));
     projector.applyMessageEditQueued('s1', { messageId: 'A', body: 'edited' } as never);
