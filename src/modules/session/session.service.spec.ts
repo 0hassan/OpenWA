@@ -1687,6 +1687,51 @@ describe('SessionService', () => {
       expect(desired()).toBe('stopped');
     });
 
+    // Two overlapping starts of one session: the first fails before launching while the second has already
+    // written its claim, and handing the claim back then left the second's engine on a row no node held.
+    it('start() leaves the claim to a second start in flight when the first one fails', async () => {
+      const ownership = withOwnership();
+      let finishFirstClaim: () => void = () => undefined;
+      ownership.claim
+        .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishFirstClaim = () => resolve(true))))
+        .mockResolvedValue(true);
+      let launchSecond: () => void = () => undefined;
+      // The second start's claim resolves at once, so it reaches the engine launch before the first.
+      jest
+        .spyOn(lifecycle, 'start')
+        .mockImplementationOnce(
+          () => new Promise<Session>(resolve => (launchSecond = () => resolve(createMockSession()))),
+        )
+        .mockRejectedValueOnce(new BadRequestException('refused'));
+      jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(false);
+
+      const first = service.start('sess-uuid-1').catch((error: unknown) => error);
+      const second = service.start('sess-uuid-1');
+      await new Promise(resolve => setImmediate(resolve));
+      finishFirstClaim();
+      expect(await first).toBeInstanceOf(BadRequestException);
+
+      expect(ownership.release).not.toHaveBeenCalled();
+      launchSecond();
+      await second;
+      // Nothing runs here once the last start is out, so the claim is handed back then, once.
+      expect(ownership.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('start() hands the claim back once when two overlapping starts both fail', async () => {
+      const ownership = withOwnership();
+      jest.spyOn(lifecycle, 'start').mockRejectedValue(new BadRequestException('refused'));
+      jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(false);
+
+      const outcomes = await Promise.all([
+        service.start('sess-uuid-1').catch((error: unknown) => error),
+        service.start('sess-uuid-1').catch((error: unknown) => error),
+      ]);
+
+      expect(outcomes.every(outcome => outcome instanceof BadRequestException)).toBe(true);
+      expect(ownership.release).toHaveBeenCalledTimes(1);
+    });
+
     it('start() releases the claim when the launch fails and nothing stays alive here', async () => {
       const ownership = withOwnership();
       jest.spyOn(lifecycle, 'start').mockRejectedValue(new Error('engine init failed'));

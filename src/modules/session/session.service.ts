@@ -150,6 +150,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
    * or not.
    */
   private readonly startReservations = new Map<string, number>();
+  /** Ids whose claim a failed start left to another start in flight; the last start out hands it back. */
+  private readonly releaseOwed = new Set<string>();
 
   constructor(
     @InjectRepository(Session, 'data')
@@ -694,8 +696,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return await this.claimAndStart(id, explicit);
     } finally {
       const left = (this.startReservations.get(id) ?? 1) - 1;
-      if (left > 0) this.startReservations.set(id, left);
-      else this.startReservations.delete(id);
+      if (left > 0) {
+        this.startReservations.set(id, left);
+      } else {
+        this.startReservations.delete(id);
+        if (this.releaseOwed.delete(id)) await this.releaseUnlessEngineActive(id);
+      }
     }
   }
 
@@ -962,6 +968,13 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (!this.ownership || this.engineLifecycle.isEngineActive(id)) {
       return;
     }
+    // Another start of the id is in flight and may have written the claim since: clearing it now would
+    // leave the engine that start launches on a row no node holds. The start that leaves last decides.
+    if ((this.startReservations.get(id) ?? 0) > 1) {
+      this.releaseOwed.add(id);
+      return;
+    }
+    this.releaseOwed.delete(id);
     await this.ownership.release(id);
   }
 
