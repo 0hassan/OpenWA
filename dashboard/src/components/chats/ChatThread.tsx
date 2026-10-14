@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type RefObject,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertCircle, ChevronDown, CornerUpLeft, Loader2, MessageSquare, Smile, Trash2 } from 'lucide-react';
 import { useRole } from '../../hooks/useRole';
@@ -76,8 +85,9 @@ function ChatThread({
   const { canWrite } = useRole();
 
   // The message actions sit behind hover, so a keyboard user reaches them through the bubble that carries
-  // them: the thread is one tab stop (the focused message, else the newest), the arrow keys move between
-  // messages, and the actions show while focus is inside the bubble (Chats.css).
+  // them: the bubbles are one tab stop (the focused message, else the newest), the arrow keys move between
+  // them, and the actions show while keyboard focus is inside a bubble (Chats.css). Links, previews and
+  // buttons inside a message stay stops of their own.
   const hasActions = useCallback(
     (message: ChatMessageView) => canWrite && message.type !== 'revoked' && Boolean(message.waMessageId),
     [canWrite],
@@ -110,6 +120,15 @@ function ChatThread({
     event.preventDefault();
     target.focus();
   };
+
+  // Whether focus was last inside the thread. When the focused message turns revoked its bubble loses its
+  // tab stop and its action buttons unmount, which drops focus to the page; no blur event is fired for a
+  // removed element, so this stays true and tells that case from a click elsewhere.
+  const focusInThreadRef = useRef(false);
+  useEffect(() => {
+    if (!focusInThreadRef.current || document.activeElement !== document.body) return;
+    messagesContainerRef.current?.querySelector<HTMLElement>('[data-roving-message][tabindex="0"]')?.focus();
+  }, [messages, hasActions, messagesContainerRef]);
 
   // "@<digits>" in a message body only ever means something once resolved against a participant
   // this thread has already seen post (see buildMentionNameMap) — recomputed only when the message
@@ -250,7 +269,21 @@ function ChatThread({
 
   // position:relative so the scroll-to-bottom button can float inside.
   return (
-    <div className="room-messages" ref={messagesContainerRef}>
+    <div
+      className="room-messages"
+      ref={messagesContainerRef}
+      // The actions show while focus is inside a bubble, but only for keyboard focus: a click also focuses
+      // the bubble, and its menu would stay drawn over the message after the pointer left. The marker is
+      // read by Chats.css.
+      onPointerDown={event => event.currentTarget.setAttribute('data-pointer', '')}
+      onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
+      onFocus={() => {
+        focusInThreadRef.current = true;
+      }}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusInThreadRef.current = false;
+      }}
+    >
       {/* Floating scroll-to-bottom button. Hidden while loading (no height to measure yet)
           and when the user is already at/near the bottom. */}
       {showJumpToBottom && !loadingMessages && (
@@ -478,7 +511,11 @@ function ChatThread({
                   ? {
                       'data-roving-message': '',
                       tabIndex: tabStopId === msg.id ? 0 : -1,
-                      onFocus: () => setFocusedMessageId(msg.id),
+                      // Only focus on the bubble itself: a link or a button inside it is a stop of its own and
+                      // must not turn the bubble into the thread's tab stop as well.
+                      onFocus: (event: FocusEvent<HTMLDivElement>) => {
+                        if (event.target === event.currentTarget) setFocusedMessageId(msg.id);
+                      },
                       onKeyDown: onBubbleKeyDown,
                     }
                   : {})}

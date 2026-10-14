@@ -1114,7 +1114,7 @@
 }
 
 .chats-page .message-bubble-container:hover .message-actions-menu,
-.chats-page .message-bubble-container:focus-within .message-actions-menu {
+.chats-page .room-messages:not([data-pointer]) .message-bubble-container:focus-within .message-actions-menu {
   display: flex;
 }
 
@@ -1180,7 +1180,7 @@
 }
 
 .chats-page .reaction-trigger-wrapper:hover .reaction-quick-popover,
-.chats-page .reaction-trigger-wrapper:focus-within .reaction-quick-popover {
+.chats-page .room-messages:not([data-pointer]) .reaction-trigger-wrapper:focus-within .reaction-quick-popover {
   display: flex;
 }
 

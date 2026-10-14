@@ -4,6 +4,7 @@
 import '../../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createElement, createRef } from 'react';
 import type { Chat } from '../../services/api.ts';
 import type { ChatMessageView } from '../../utils/chatMessages.ts';
@@ -60,21 +61,22 @@ function renderThread(
   role: string,
   messages: ChatMessageView[] = [PROMPT],
   activeChat: Chat = CHAT,
-): { clicks: string[]; container: HTMLElement } {
+): { clicks: string[]; container: HTMLElement; rerenderWith: (next: ChatMessageView[]) => void } {
   window.sessionStorage.setItem('openwa_user_role', role);
   const clicks: string[] = [];
   const noop = () => {};
-  const { container } = rtl.render(
+  const containerRef = createRef<HTMLDivElement>();
+  const tree = (list: ChatMessageView[]) =>
     createElement(
       RoleProvider,
       null,
       createElement(ChatThread, {
         sessionId: 's1',
         activeChat,
-        messages,
+        messages: list,
         loadingMessages: false,
         messagesError: false,
-        messagesContainerRef: createRef<HTMLDivElement>(),
+        messagesContainerRef: containerRef,
         hasMoreMessages: false,
         loadingOlderMessages: false,
         onLoadOlderMessages: noop,
@@ -88,9 +90,9 @@ function renderThread(
           clicks.push(button.id);
         },
       }),
-    ),
-  );
-  return { clicks, container };
+    );
+  const { container, rerender } = rtl.render(tree(messages));
+  return { clicks, container, rerenderWith: next => rerender(tree(next)) };
 }
 
 test('a read-only key sees prompt choices disabled and no reply, react or delete actions', () => {
@@ -447,4 +449,116 @@ test('a key pressed inside a message action keeps its own meaning', () => {
   reply.focus();
   rtl.fireEvent.keyDown(reply, { key: 'ArrowUp' });
   assert.equal(document.activeElement, reply);
+});
+
+const bubblesOf = (container: HTMLElement): HTMLElement[] => [
+  ...container.querySelectorAll<HTMLElement>('[data-roving-message]'),
+];
+
+// A bubble is the one tab stop of the thread; what is inside it (a link, a preview, a button) is a stop
+// of its own, and landing on it must not make its bubble the stop as well, or Shift+Tab visits both.
+test('focus on a link inside a message does not move the thread tab stop', () => {
+  const linked: ChatMessageView = { ...PROMPT, id: 'db-0', waMessageId: 'wamid.0', body: 'see https://example.org/a' };
+  const newest: ChatMessageView = {
+    ...PROMPT,
+    id: 'db-9',
+    waMessageId: 'wamid.9',
+    body: 'Newest',
+    metadata: undefined,
+  };
+  const { container } = renderThread('operator', [linked, newest]);
+  const stops = (): Array<string | null> => bubblesOf(container).map(el => el.getAttribute('tabindex'));
+  assert.deepEqual(stops(), ['-1', '0']);
+
+  const link = container.querySelector<HTMLElement>('[data-wa-message-id="wamid.0"] a[href]');
+  assert.ok(link, 'the body links its URL');
+  rtl.act(() => link.focus());
+
+  assert.deepEqual(stops(), ['-1', '0']);
+});
+
+test('arrow keys, Home and End are consumed and reach the stops from the middle of three', () => {
+  const messages = ['a', 'b', 'c'].map((id): ChatMessageView => ({
+    ...PROMPT,
+    id: `db-${id}`,
+    waMessageId: `wamid.${id}`,
+    metadata: undefined,
+  }));
+  const { container } = renderThread('operator', messages);
+  const bubbles = bubblesOf(container);
+  bubbles[1].focus();
+
+  // fireEvent returns false when the handler called preventDefault.
+  assert.equal(rtl.fireEvent.keyDown(bubbles[1], { key: 'Home' }), false);
+  assert.equal(document.activeElement, bubbles[0]);
+  bubbles[1].focus();
+  assert.equal(rtl.fireEvent.keyDown(bubbles[1], { key: 'End' }), false);
+  assert.equal(document.activeElement, bubbles[2]);
+  bubbles[1].focus();
+  assert.equal(rtl.fireEvent.keyDown(bubbles[1], { key: 'ArrowUp' }), false);
+  assert.equal(document.activeElement, bubbles[0]);
+  bubbles[1].focus();
+  assert.equal(rtl.fireEvent.keyDown(bubbles[1], { key: 'ArrowDown' }), false);
+  assert.equal(document.activeElement, bubbles[2]);
+  // A key the thread does not use is left alone.
+  assert.equal(rtl.fireEvent.keyDown(bubbles[1], { key: 'a' }), true);
+});
+
+// Deleting removes the buttons that hold focus, so focus would fall to the page and the next Tab would
+// land in the composer.
+test('keyboard focus stays in the thread when the focused message is deleted', () => {
+  const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
+  const second: ChatMessageView = { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', metadata: undefined };
+  const { container, rerenderWith } = renderThread('operator', [first, second]);
+  const bubbles = bubblesOf(container);
+  const del = bubbles[1].querySelector<HTMLElement>('[aria-label][class*="action"], .action-btn:last-of-type');
+  assert.ok(del, 'the newest message offers its actions');
+  del.focus();
+  assert.equal(document.activeElement, del);
+
+  rerenderWith([first, { ...second, type: 'revoked', body: '' }]);
+
+  const active = document.activeElement;
+  assert.ok(active && active !== document.body, 'focus fell to the page');
+  assert.ok(container.contains(active), 'focus left the thread');
+});
+
+test('focus does not return to the thread when it was moved elsewhere before a message was deleted', () => {
+  const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
+  const second: ChatMessageView = { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2', metadata: undefined };
+  const { container, rerenderWith } = renderThread('operator', [first, second]);
+  const outside = document.createElement('input');
+  document.body.appendChild(outside);
+  try {
+    bubblesOf(container)[1].focus();
+    outside.focus();
+    rerenderWith([first, { ...second, type: 'revoked', body: '' }]);
+    assert.equal(document.activeElement, outside);
+  } finally {
+    outside.remove();
+  }
+});
+
+// Chats.css shows the actions while focus is inside a bubble, but a click focuses the bubble too, and
+// its menu would stay drawn over the message after the pointer left. The thread marks pointer use and the
+// stylesheet reveals on focus only without the mark. jsdom has no layout, so the selectors are pinned.
+test('a click marks pointer use, a key press clears it, and the stylesheet reveals on keyboard focus only', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  assert.equal(thread.hasAttribute('data-pointer'), false);
+  rtl.fireEvent.pointerDown(bubblesOf(container)[0]);
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+  rtl.fireEvent.keyDown(bubblesOf(container)[0], { key: 'Tab' });
+  assert.equal(thread.hasAttribute('data-pointer'), false);
+
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  for (const target of [
+    '.message-bubble-container:focus-within .message-actions-menu',
+    '.reaction-trigger-wrapper:focus-within .reaction-quick-popover',
+  ]) {
+    const rule = css.split('\n').find(line => line.includes(target));
+    assert.ok(rule, `${target} reveals the menu on focus`);
+    assert.ok(rule.includes('.room-messages:not([data-pointer])'), `${target} is gated on keyboard modality`);
+  }
 });
