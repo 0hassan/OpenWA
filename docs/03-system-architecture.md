@@ -922,7 +922,9 @@ export interface EngineEventCallbacks {
     chatId: string;
     needsRoom: boolean;
     status: boolean;
-  }) => InboundTicket | undefined; // PostgreSQL: reserves room for a download before the emit
+    fromMe?: boolean;
+    author?: string;
+  }) => InboundTicket | undefined; // PostgreSQL: reserves room for a download before the emit, and holds a change to the chat, direction and author it names
   onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void;
   onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
