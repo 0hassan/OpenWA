@@ -449,7 +449,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
     onSearchProviderRegister?: () => void,
-    onWorkerExit?: (code: number, intentional: boolean) => void,
+    onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
     onUnresponsive?: () => void,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');

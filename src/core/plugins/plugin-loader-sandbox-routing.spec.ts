@@ -20,7 +20,7 @@ class TestableLoader extends PluginLoaderService {
   readonly hosts: FakeHost[] = [];
   capturedOnHookSubscribe?: (event: string, priority?: number) => void;
   capturedOnLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void;
-  capturedOnWorkerExit?: (code: number, intentional: boolean) => void;
+  capturedOnWorkerExit?: (code: number, intentional: boolean, reason?: string) => void;
   capturedOnUnresponsive?: () => void;
   protected createSandboxHost(
     _capDispatcher?: (verb: string, args: unknown[]) => Promise<unknown>,
@@ -29,7 +29,7 @@ class TestableLoader extends PluginLoaderService {
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     _runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
     _onSearchProviderRegister?: () => void,
-    onWorkerExit?: (code: number, intentional: boolean) => void,
+    onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
     onUnresponsive?: () => void,
   ): PluginWorkerHost {
     this.capturedOnHookSubscribe = onHookSubscribe;
@@ -270,6 +270,19 @@ describe('PluginLoaderService — sandbox tier routing', () => {
       healthy: false,
       message: 'plugin is not running (status disabled)',
     });
+  });
+
+  it('shows why a sandboxed worker died when it reported a reason before exiting', async () => {
+    const loader = makeLoader();
+    seed(loader, { builtIn: false, instance: null });
+    await loader.enablePlugin('p1');
+    jest
+      .spyOn((loader as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    loader.capturedOnWorkerExit!(1, false, 'boom: relay answered 500');
+
+    expect(pluginOf(loader).error).toBe('worker exited unexpectedly (code 1): boom: relay answered 500');
   });
 
   it('enables a built-in plugin in-process (no sandbox worker spawned)', async () => {

@@ -126,6 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Decode numeric and common named character references in a Baileys link preview's title and description, so `&#8217;` and `&eacute;` no longer reach the recipient as written.
 - Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach.
 - Handle an engine disconnect again when the session row read fails, so the session reconnects instead of staying registered with no reconnect armed.
+- Show the error a sandboxed plugin's worker threw before it died in the plugin's status and the log, instead of only its exit code.
 
 ### Documentation
 
