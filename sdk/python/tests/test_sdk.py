@@ -275,7 +275,7 @@ class TestClientCore:
 
 
 class TestMessages:
-    @pytest.mark.parametrize("key", [None, "!", "a" * 255])
+    @pytest.mark.parametrize("key", [None, "!", "~", "a", "a" * 255])
     def test_send_methods_forward_keys_without_changing_json(self, key: str | None) -> None:
         backend = MockBackend().on("POST", "/messages/", body={"messageId": "m", "timestamp": 1})
         client = make_client(backend)
@@ -343,7 +343,7 @@ class TestMessages:
         assert backend.last_call.headers["idempotency-key"] == "default-key"
         assert defaults == {"iDeMpOtEnCy-KeY": "default-key", "X-Trace": "trace"}
 
-    @pytest.mark.parametrize("key", ["", " ", "contains space", "key\n", "\u00e9", "a" * 256])
+    @pytest.mark.parametrize("key", ["", " ", "contains space", "key\n", "\u00e9", "a\x7fb", "a" * 256])
     def test_invalid_send_keys_are_refused_before_transport(self, key: str) -> None:
         backend = MockBackend()
         client = make_client(backend)
