@@ -18,8 +18,9 @@ import { IsChatIdConstraint } from './is-chat-id.validator';
 
 /**
  * The most chats one key may be restricted to. A chat-restricted WebSocket holds a room per allowed id, two
- * address forms per phone, within the 4096 a socket may hold, and search binds one SQL parameter per
- * expanded id; past this bound a key could neither subscribe nor search without an opaque failure.
+ * address forms per phone, within the 4096 a socket may hold; past this bound a key subscribed to every event
+ * could not subscribe at all. Search binds one SQL parameter per expanded id and reaches its own limit far
+ * later, so it does not set this bound.
  */
 export const ALLOWED_CHATS_MAX = 2000;
 
