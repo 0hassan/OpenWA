@@ -241,6 +241,15 @@ dispatch when Redis is unreachable. Before Redis has ever connected, queue calls
 connects. Providers already deliver over unordered, at-least-once HTTP, so plugin handlers must be
 idempotent and treat ingress as a reconciliation trigger.
 
+A plugin's webhook handler has **5 s** (`INGRESS_DISPATCH_TIMEOUT_MS`) to finish. The host cannot cancel a
+handler that overruns it: the attempt is recorded as failed, the conversation lock is released and the
+delivery is retried (queued) or dead-lettered (inline), while the first run goes on and its work still
+lands. A handler that calls a slow upstream, or sends media, can therefore run twice for one delivery.
+Key every side effect on the delivery id (`req.deliveryId`) and hand work that can outlast the budget to
+a background task instead of awaiting it in the handler. The budget is short because a queue-disabled
+deployment answers the provider only after the inline dispatch, and providers abandon a request within a
+few seconds.
+
 A job waiting on that lock still holds one of the `INGRESS_WORKER_CONCURRENCY` worker slots (default
 10). A burst on one lane larger than that fills every slot with same-lane waiters, and events for other
 conversations and instances queue behind the burst until it drains. Size `INGRESS_WORKER_CONCURRENCY`
