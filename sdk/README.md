@@ -1,6 +1,6 @@
 # OpenWA SDKs
 
-This document describes `main`. Send idempotency, webhook failure redrive, message-window filters, poll choices, and last-message types are unreleased additions after SDK 0.5.1 and require the corresponding server changes after OpenWA 0.24.0.
+This document describes `main`. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name are unreleased additions after SDK 0.5.1 and require the corresponding server changes after OpenWA 0.24.0.
 
 Official client libraries for [OpenWA](https://github.com/rmyndharis/OpenWA), the
 open-source WhatsApp API Gateway. OpenWA is an independent project, not
@@ -105,7 +105,7 @@ try {
   await client.messages.sendText(/* … */);
 } catch (e) {
   if (e instanceof OpenWAConflictError) {
-    /* engine not ready (409) */
+    /* session not ready, or a keyed send pending or unconfirmed (409) */
   }
 }
 ```
@@ -274,9 +274,11 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   `WebhookDelivery`.
 - **Redirects are never followed.** A `3xx` surfaces to the caller rather than
   being followed, so the API key is never re-sent to a redirect target.
-- **Default per-request timeout** is 30s (configurable). Path segments (chat /
-  message ids) are percent-encoded; a base-URL path prefix (e.g. behind a proxy
-  at `/v1`) is preserved.
+- **Default timeout** is 30s (configurable; `0` turns it off). The JavaScript and PHP
+  clients bound the whole call. The Python client's is per network operation
+  (connect, read, write, pool), so a response that keeps trickling bytes is not
+  cut off. Path segments (chat / message ids) are percent-encoded; a base-URL path
+  prefix (e.g. behind a proxy at `/v1`) is preserved.
 
 ## Development
 

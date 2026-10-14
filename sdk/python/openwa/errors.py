@@ -106,7 +106,7 @@ class OpenWANotFoundError(OpenWAApiError):
 
 
 class OpenWAConflictError(OpenWAApiError):
-    """409 Conflict — typically an engine-not-ready condition."""
+    """409 Conflict: the session is not ready for the operation, or a keyed send is pending or may already have been sent (see ``code``)."""
 
 
 class OpenWARateLimitError(OpenWAApiError):
