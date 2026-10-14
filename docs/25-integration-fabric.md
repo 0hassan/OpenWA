@@ -222,8 +222,11 @@ Four tables live on the data connection, each created by a hand-authored dual-di
 - **Egress.** The only sanctioned outbound path remains the SSRF-guarded `ctx.net.fetch`, scoped to the
   manifest's allowed hosts; a direct Node socket opened by the worker is not covered (see [30 - Plugin
   Sandboxing](./30-plugin-sandboxing.md)).
-- **Re-entrancy.** A reply issued _inside_ an ingress handler seeds the in-flight hook set, so an adapter's
-  own outbound message hook cannot echo-loop the reply back out to the external system.
+- **Re-entrancy.** A send issued from inside a hook handler is short-circuited for the event that handler
+  is running, so a hook cannot re-fire itself. A reply issued from an ingress handler carries no hook
+  context: it runs every plugin's `message:sending` hooks, the adapter's own included, so an adapter that
+  mirrors outbound messages to its provider must recognise and skip the replies it sent itself, for example
+  by the message id the send returned.
 
 ## 25.7 Scale and durability
 
