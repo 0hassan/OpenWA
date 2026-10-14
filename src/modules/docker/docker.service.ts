@@ -43,20 +43,35 @@ export class DockerService implements OnModuleInit {
    * dockerode sets no timeout, so a daemon or socket proxy that accepts the connection and never
    * answers (a dropped SYN, a wedged upstream) would hold the caller, boot included, until the OS or
    * the proxy gave up. Short calls are bounded here; image pulls and container starts are not.
+   *
+   * The call is aborted when the deadline passes, not only raced: a call left running keeps its request
+   * and its socket open, and every later availability check would add one more.
    */
-  private async answered<T>(call: Promise<T>, what: string): Promise<T> {
+  private async answered<T>(call: (signal: AbortSignal) => Promise<T>, what: string): Promise<T> {
+    const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
     const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Docker did not answer ${what} within ${this.callTimeoutMs}ms`)),
-        this.callTimeoutMs,
-      );
+      timer = setTimeout(() => {
+        reject(new Error(`Docker did not answer ${what} within ${this.callTimeoutMs}ms`));
+        controller.abort();
+      }, this.callTimeoutMs);
     });
     try {
-      return await Promise.race([call, deadline]);
+      return await Promise.race([call(controller.signal), deadline]);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /**
+   * dockerode's runtime takes an options object with `abortSignal` on every call, which its typings
+   * declare only for some of them.
+   */
+  private abortable<T>(method: 'ping' | 'info', abortSignal: AbortSignal): Promise<T> {
+    const call = this.docker![method].bind(this.docker) as unknown as (options: {
+      abortSignal: AbortSignal;
+    }) => Promise<T>;
+    return call({ abortSignal });
   }
 
   async onModuleInit() {
@@ -115,7 +130,7 @@ export class DockerService implements OnModuleInit {
   private async initializeDocker(): Promise<void> {
     try {
       this.docker = new Docker(this.buildDockerOptions());
-      await this.answered(this.docker.ping(), 'a ping');
+      await this.answered(abortSignal => this.abortable<unknown>('ping', abortSignal), 'a ping');
       this.isAvailable = true;
       this.logger.log('Docker API connected successfully');
     } catch (error) {
@@ -167,7 +182,10 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const containers = await this.answered(this.docker.listContainers({ all: true }), 'a container list');
+      const containers = await this.answered(
+        abortSignal => this.docker!.listContainers({ all: true, abortSignal }),
+        'a container list',
+      );
       return containers
         .filter(c => {
           // Filter by OpenWA labels or name prefix
@@ -212,12 +230,14 @@ export class DockerService implements OnModuleInit {
 
     try {
       const containers = await this.answered(
-        this.docker.listContainers({
-          all: true,
-          filters: {
-            label: [`com.openwa.service=${service}`],
-          },
-        }),
+        abortSignal =>
+          this.docker!.listContainers({
+            all: true,
+            filters: {
+              label: [`com.openwa.service=${service}`],
+            },
+            abortSignal,
+          }),
         'a container list',
       );
 
@@ -228,7 +248,10 @@ export class DockerService implements OnModuleInit {
       // Fallback: try by EXACT name (never a substring — a substring, and especially the empty
       // string, would resolve an arbitrary container). OpenWA-managed containers are `openwa-<service>`.
       const target = `openwa-${service}`;
-      const allContainers = await this.answered(this.docker.listContainers({ all: true }), 'a container list');
+      const allContainers = await this.answered(
+        abortSignal => this.docker!.listContainers({ all: true, abortSignal }),
+        'a container list',
+      );
       const match = allContainers.find(c => c.Names?.some(n => n === target || n === `/${target}`));
 
       if (match) {
@@ -652,7 +675,10 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const info = (await this.answered(this.docker.info(), 'the daemon info')) as {
+      const info = (await this.answered(
+        abortSignal => this.abortable<unknown>('info', abortSignal),
+        'the daemon info',
+      )) as {
         Containers: number;
         ContainersRunning: number;
         ContainersPaused: number;

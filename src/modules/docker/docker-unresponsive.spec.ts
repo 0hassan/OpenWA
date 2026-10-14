@@ -40,4 +40,20 @@ describe('DockerService against a daemon that never answers', () => {
     expect(Date.now() - started).toBeLessThan(2000);
     expect(service.isDockerAvailable()).toBe(false);
   }, 10_000);
+
+  // A call that is only raced against its deadline keeps its request and its socket, and every later
+  // availability check starts another one, until the process runs out of descriptors.
+  it('closes the connection of every call it gave up on', async () => {
+    const service = new DockerService();
+    service.callTimeoutMs = 100;
+    await service.onModuleInit();
+
+    for (let i = 0; i < 6; i++) {
+      service.isDockerAvailable();
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect(sockets.size).toBeLessThanOrEqual(1);
+  }, 15_000);
 });
