@@ -18,7 +18,7 @@ import { SEARCH_OFFSET_MAX, SEARCH_QUERY_MAX_LENGTH, SEARCH_TERMS_MAX } from '..
  */
 export class SearchQueryDto {
   @ApiProperty({
-    description: `Search term (required, non-empty, at most ${SEARCH_QUERY_MAX_LENGTH} characters and ${SEARCH_TERMS_MAX} distinct words)`,
+    description: `Search term (required, non-empty, at most ${SEARCH_QUERY_MAX_LENGTH} characters and ${SEARCH_TERMS_MAX} words)`,
     maxLength: SEARCH_QUERY_MAX_LENGTH,
   })
   @IsString()

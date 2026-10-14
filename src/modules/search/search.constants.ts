@@ -23,8 +23,9 @@ export const SEARCH_DEFAULT_LIMIT = 50;
 export const SEARCH_QUERY_MAX_LENGTH = 1000;
 
 /**
- * Most distinct whitespace-separated words in `q`. Each one costs a pass over every message that
- * matches, and the built-in provider runs on the event loop, so a query of hundreds of words froze every
- * session for seconds. A word repeated is still one word: the provider collapses repeats.
+ * Most words in `q`, counted as the index counts them (see search-terms.ts). Each one costs a pass over
+ * every message that matches, and the built-in provider runs on the event loop, so a query of hundreds
+ * of words froze every session for seconds. A whitespace-separated word repeated is one word: the
+ * provider collapses repeats.
  */
 export const SEARCH_TERMS_MAX = 32;

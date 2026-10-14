@@ -51,7 +51,7 @@ describe('SearchService', () => {
     expect(search).toHaveBeenCalledWith(expect.objectContaining({ chatIds: ['111@c.us', '111@lid'] }));
   });
 
-  it('refuses a query of more than SEARCH_TERMS_MAX distinct words before any provider runs it', async () => {
+  it('refuses a query of more than SEARCH_TERMS_MAX words before any provider runs it', async () => {
     const reg = new SearchProviderRegistry();
     const search = jest.fn().mockResolvedValue(emptyResults);
     reg.register(mkProvider('builtin-fts', search));
@@ -65,6 +65,22 @@ describe('SearchService', () => {
     // A word said many times is one word.
     await svc.search({ q: Array.from({ length: 300 }, () => 'hello').join(' ') });
     expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it('counts the words inside a token the way the index does, so punctuation cannot hide them', async () => {
+    const reg = new SearchProviderRegistry();
+    const search = jest.fn().mockResolvedValue(emptyResults);
+    reg.register(mkProvider('builtin-fts', search));
+    const svc = new SearchService(reg);
+    const joined = (n: number, sep: string): string => Array.from({ length: n }, () => 'a').join(sep);
+
+    for (const sep of ['.', '-', '_', '@', '\u1CF2']) {
+      await expect(svc.search({ q: joined(SEARCH_TERMS_MAX + 1, sep) })).rejects.toBeInstanceOf(BadRequestException);
+    }
+    expect(search).not.toHaveBeenCalled();
+
+    await svc.search({ q: joined(SEARCH_TERMS_MAX, '.') });
+    expect(search).toHaveBeenCalledTimes(1);
   });
 
   it('clamps an excessive limit to SEARCH_LIMIT_MAX before it reaches any provider', async () => {

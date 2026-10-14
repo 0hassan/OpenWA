@@ -24,7 +24,7 @@ export class SearchController {
   @ApiResponse({ status: 200, description: 'Search results from the active provider', type: SearchResultsResponseDto })
   @ApiResponse({
     status: 400,
-    description: 'Empty or whitespace-only "q", or one over 1000 characters or 32 distinct words',
+    description: 'Empty or whitespace-only "q", or one over 1000 characters or 32 words',
   })
   @ApiResponse({ status: 403, description: 'Chat scope denied or chat-restricted search uses a plugin provider' })
   @ApiResponse({ status: 501, description: 'No search provider configured' })
@@ -43,7 +43,7 @@ export class SearchController {
   @ApiQuery({
     name: 'q',
     required: true,
-    description: 'Search term (required, non-empty, at most 1000 characters and 32 distinct words)',
+    description: 'Search term (required, non-empty, at most 1000 characters and 32 words)',
   })
   @ApiQuery({ name: 'sessionId', required: false, description: 'Restrict to a single session' })
   @ApiQuery({ name: 'chatId', required: false, description: 'Restrict to a single chat id' })
