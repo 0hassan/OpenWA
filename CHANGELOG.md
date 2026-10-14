@@ -48,7 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Bound each webhook and ingress queue command at 2 s once Redis has connected, so a Redis that stops answering falls back to direct delivery and inline dispatch instead of holding every dispatch and ingress request.
-- Answer `400` for a send route's `chatId` or a bulk `batchId` over 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
+- Answer `400` for a send route's, a chat action's or a product send's `chatId`, or a bulk `batchId`, over 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
+- Use the body hash as the delivery id of an ingress request whose dedup header is longer than 255 characters, where PostgreSQL answered `500`.
 - MCP tools refuse a `chatId`, `fromChatId` or `toChatId` over 255 characters, as the send routes do, where PostgreSQL answered an internal tool error.
 - A start that fails while another start of the same session is in flight leaves the claim to that start, so its engine is no longer left on a row no node holds.
 - Uninstalling a plugin hands the chats it had taken over back to the bot, so other plugins are no longer silent there.

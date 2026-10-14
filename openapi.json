@@ -18975,6 +18975,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890@c.us on whatsapp-web.js)",
             "example": "1234567890@c.us"
           },
@@ -19014,6 +19015,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890@c.us on whatsapp-web.js)",
             "example": "1234567890@c.us"
           }
@@ -19102,6 +19104,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890@c.us on whatsapp-web.js)",
             "example": "1234567890@c.us"
           }
@@ -19115,6 +19118,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
             "example": "1234567890-123@g.us"
           },
@@ -19133,6 +19137,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
             "example": "1234567890-123@g.us"
           },
@@ -19154,6 +19159,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
             "example": "1234567890-123@g.us"
           },
@@ -19172,6 +19178,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID in the active engine's native format (e.g. 1234567890-123@g.us on whatsapp-web.js)",
             "example": "1234567890-123@g.us"
           }
@@ -19185,6 +19192,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat ID, in the active engine's native format (e.g. 1234567890@c.us)",
             "example": "1234567890@c.us"
           },
@@ -25022,6 +25030,7 @@
         "properties": {
           "chatId": {
             "type": "string",
+            "maxLength": 255,
             "description": "Chat to send the product card to (@c.us or @g.us).",
             "example": "628123456789@c.us"
           },
