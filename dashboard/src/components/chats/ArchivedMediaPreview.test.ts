@@ -271,3 +271,17 @@ test('an archived placeholder is announced as loading, not left as an unnamed el
   );
   assert.ok(rtl.screen.getByRole('status', { name: 'Loading...' }));
 });
+
+test('an archived image is a named button that says it opens a dialog', async () => {
+  rtl.render(
+    createElement(ArchivedMediaPreview, {
+      kind: 'image',
+      alt: 'photo.jpg',
+      fallback,
+      load: async () => new Blob(['x'], { type: 'image/jpeg' }),
+    }),
+  );
+  const button = await rtl.screen.findByRole('button', { name: 'photo.jpg' });
+  // The viewer is a dialog; without this a screen reader announces a bare "photo.jpg, button".
+  assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
+});

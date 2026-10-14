@@ -154,6 +154,7 @@ function ArchivedMediaPreview({
               ref={measureMedia}
               onLoad={onMediaLoad}
               role="button"
+              aria-haspopup="dialog"
               tabIndex={0}
               onClick={() => setImageOpen(true)}
               onKeyDown={event => {
