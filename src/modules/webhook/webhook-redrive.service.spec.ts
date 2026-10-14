@@ -167,6 +167,31 @@ describe('WebhookRedriveService', () => {
     expect(delivery.redeliver).toHaveBeenCalledTimes(6);
   });
 
+  it('skips a row that lost its copy between the batch and its replay, without sending an empty event', async () => {
+    const rows: WebhookDeliveryFailure[] = [];
+    for (let i = 0; i < 5; i++) {
+      rows.push(await addFailure({ createdAt: new Date(Date.now() - 120_000 + i * 1000), payload: { id: `m${i}` } }));
+    }
+    // Four replays run at once, so the fifth row's body is read only after one of them ends. Remove it from
+    // inside the first replay, the way a second node or the payload retention sweep would.
+    delivery.redeliver.mockImplementationOnce(async (webhook, _sessionId, _event, key) => {
+      await failures.delete({ id: rows[4].id });
+      await failures.delete({ webhookId: webhook.id, idempotencyKey: key });
+      return 'delivered';
+    });
+
+    expect(await service.redrive({})).toEqual({
+      redriven: 4,
+      delivered: 4,
+      enqueued: 0,
+      failed: 0,
+      skipped: 1,
+      remaining: 0,
+    });
+    expect(delivery.redeliver).toHaveBeenCalledTimes(4);
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).not.toContain(rows[4].idempotencyKey);
+  });
+
   it('selects eligible subscriptions before the batch limit, past more than 100 old unavailable rows', async () => {
     const disabled = await webhooks.save(webhooks.create({ ...primary, id: randomUUID(), active: false }));
     const unsubscribed = await webhooks.save(
