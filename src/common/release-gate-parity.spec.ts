@@ -95,9 +95,13 @@ describe('release gate jobs can stop the publish jobs', () => {
     needs?: string | string[];
     if?: unknown;
     'continue-on-error'?: unknown;
+    env?: Record<string, unknown>;
     strategy?: { matrix?: { platform?: string[] } };
     steps?: GateStep[];
   };
+  const workflowEnv = (): Record<string, unknown> =>
+    (yaml.load(fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8')) as { env?: Record<string, unknown> })
+      .env ?? {};
   const jobs = (): Record<string, GateJob> =>
     (yaml.load(fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8')) as { jobs?: Record<string, GateJob> })
       .jobs ?? {};
@@ -168,6 +172,23 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(jobs()['image-scan'].strategy?.matrix?.platform).toEqual(['linux/amd64', 'linux/arm64']);
   });
 
+  // trivy-action leaves a TRIVY_* variable the caller set in force whenever the matching input is empty or
+  // the action's default, so an environment value can skip a path, a scanner or a package type, retarget the
+  // architecture or the image, while every input above still reads right.
+  it('image-scan sets no scanner variable but the architecture, and scans the image the build staged', () => {
+    const scanJob = jobs()['image-scan'];
+    const scan = (scanJob.steps ?? []).find(step => (step.uses ?? '').startsWith('aquasecurity/'));
+    expect(scan?.env).toEqual({ TRIVY_PLATFORM: '${{ matrix.platform }}' });
+    expect(Object.keys({ ...workflowEnv(), ...(scanJob.env ?? {}) }).filter(key => key.startsWith('TRIVY_'))).toEqual(
+      [],
+    );
+    expect(scan?.with?.['image-ref']).toBe('${{ steps.image.outputs.ref }}');
+    const resolve = (scanJob.steps ?? []).find(step => step.name === 'Resolve staging image ref');
+    expect(executableLines(resolve?.run ?? '')).toContain(
+      'echo "ref=ghcr.io/${REPO,,}:smoke-${{ github.run_id }}" >> "$GITHUB_OUTPUT"',
+    );
+  });
+
   // Promotion re-points tags, and is safe only because every one of them is checked to resolve to the
   // digest the build job produced and the gates tested. A comparison that no longer runs, or a digest
   // taken from anywhere else, keeps the step green for content nobody tested.
@@ -186,6 +207,25 @@ describe('release gate jobs can stop the publish jobs', () => {
     const verifyLines = executableLines(verify?.run ?? '');
     expect(verifyLines).toContain('for want in linux/amd64 linux/arm64; do');
     expect(verifyLines).toContain('grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }');
+
+    // The comparisons end the step when they fail, the steps cannot fail softly, and the digest they
+    // compare against is assigned once, from the build job.
+    const body = (text: string, start: string): string => {
+      const lines = text.split('\n').map(line => line.trim());
+      const from = lines.indexOf(start);
+      const to = lines.indexOf('fi', from);
+      return from === -1 || to === -1 ? '' : lines.slice(from, to).join('\n');
+    };
+    expect(body(lines, 'if [ "$actual" != "$EXPECTED_DIGEST" ]; then')).toContain('exit 1');
+    expect(body(lines, 'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then')).toContain('exit 1');
+    expect(lines.match(/\bEXPECTED_DIGEST=/g) ?? []).toEqual([]);
+    expect(lines.match(/^\s*actual=/gm) ?? []).toHaveLength(1);
+    for (const step of [tag, verify]) {
+      expect(step?.['continue-on-error']).toBeUndefined();
+      expect(step?.if).toBeUndefined();
+    }
+    expect(verifyLines).toContain('ref="ghcr.io/${REPO,,}:${GITHUB_REF#refs/tags/v}"');
+    expect(verifyLines).not.toMatch(/\|\|\s*true|;\s*true\b/);
   });
 
   it.each(['boot-smoke', 'image-scan', 'verify-published'])(

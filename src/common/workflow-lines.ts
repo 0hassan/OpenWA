@@ -18,10 +18,11 @@ export function executableLines(run: string): string {
 }
 
 /**
- * Where a shell comment starts in `line`, or -1. A `#` begins one only at the start of the line or after
- * whitespace, and outside quotes: in `npm --version#; curl x | sh` the shell runs the curl, and `$#` and
- * `${#list[@]}` are not comments either. Cutting the line at such a `#` would hide the command behind it
- * from every check that reads these lines.
+ * Where a shell comment starts in `line`, or -1. A `#` begins one at the start of the line, after
+ * whitespace, or after `;`, `&`, `|` or `(`, which end a word, and outside quotes: in
+ * `npm --version#; curl x | sh` the shell runs the curl, `x=$(true)#; curl y` continues the word its `)`
+ * closed, and `$#` and `${#list[@]}` are not comments either. Cutting the line at such a `#` would hide
+ * the command behind it from every check that reads these lines.
  */
 function commentStart(line: string): number {
   let quote: '"' | "'" | null = null;
@@ -34,7 +35,7 @@ function commentStart(line: string): number {
       i++;
     } else if (char === '"' || char === "'") {
       quote = char;
-    } else if (char === '#' && (i === 0 || /[\s;&|()]/.test(line[i - 1]))) {
+    } else if (char === '#' && (i === 0 || /[\s;&|(]/.test(line[i - 1]))) {
       return i;
     }
   }

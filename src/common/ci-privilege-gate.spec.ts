@@ -791,44 +791,55 @@ describe.each([
   // Any secret but the run's own token: `secrets['X']` and `toJSON(secrets)` hand the job the mirror token as well.
   const ANY_SECRET = /\bsecrets(?:\.(?!GITHUB_TOKEN\b)|\s*\[|\s*\))/;
   const holdsSecret = (job: PhpJob): boolean => ANY_SECRET.test(JSON.stringify([workflowEnv(), job]));
-  // The command each segment of a line starts with, after env assignments and the usual wrappers, so that
-  // `cd sdk/php && composer install` and `(cd sdk/php; phpunit)` are read as the commands they run, and
-  // a word inside an echoed message is not.
-  const WRAPPERS = new Set([
-    ...['sudo', 'exec', 'command', 'time', 'env', 'nohup', 'xargs', 'nice', 'timeout', 'stdbuf', 'setsid', 'eval'],
-    ...['!', '{', 'if', 'then', 'do', 'else', 'elif', 'while', 'until'],
-  ]);
-  const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh']);
-  const unquote = (word: string): string => word.replace(/^[\\"']+|["']+$/g, '');
-  const startsWith = (run: string): string[] =>
-    run
-      .split('\n')
-      .flatMap(line => line.split(/&&|\|\||[;|&()`]|\$\(/))
-      .flatMap(segment => {
+  // What the job that holds the token may run: git, echo, `exit` and the shell's own words for an `if` or a
+  // `case`. A wrapper (`timeout`, `sudo`), a shell (`sh -c`), an interpreter or a path puts its own word in
+  // the list, so it is refused whatever it launches: this is a list of what is allowed, not of what is
+  // known to be bad.
+  const ALLOWED = new Set(['set', '[', '[[', 'echo', 'exit', 'fi', 'esac', 'git']);
+  const FLOW = new Set(['if', 'then', 'else', 'elif', '!', '{', '}', 'case', 'in']);
+  const unquote = (word: string): string => word.replace(/^[\\"'$]+|["']+$/g, '');
+  // Every command of a run, at every position of a line: after `&&`, `;`, `|`, `&` or a parenthesis,
+  // behind assignments and the flow words of an `if`, with a continued line joined and a redirection such as
+  // `2>&1` not read as a `&`. A command substitution is a command of its own wherever it sits, quoted or
+  // not; what is left of a quoted string is no command, so a `;` inside an echoed message splits nothing.
+  const commands = (run: string): string[] => {
+    let text = run.replace(/\\\n/g, ' ');
+    const nested: string[] = [];
+    for (let found = true; found;) {
+      found = false;
+      text = text.replace(
+        /\$\(([^()]*)\)|`([^`]*)`/g,
+        (_whole, parens: string | undefined, ticks: string | undefined) => {
+          nested.push(parens ?? ticks ?? '');
+          found = true;
+          return ' ';
+        },
+      );
+    }
+    return [text, ...nested]
+      .flatMap(part => part.split('\n'))
+      .map(line =>
+        line
+          .replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, ' ')
+          .replace(/\d*[<>]&\d*-?/g, ' ')
+          .replace(/&>>?/g, '>')
+          .replace(/^\s*[^\s()]+\)/, ' '),
+      )
+      .flatMap(line => line.split(/&&|\|\||[;|&()]/))
+      .map(segment => {
         const words = segment.trim().split(/\s+/).filter(Boolean);
-        let wrapped = false;
-        for (;;) {
-          const word = words[0] ?? '';
-          if (WRAPPERS.has(word)) wrapped = true;
-          else if (!/^[A-Za-z_]\w*=/.test(word) && !(wrapped && (word.startsWith('-') || /^\d+[smhd]?$/.test(word))))
-            break;
-          words.shift();
-        }
-        const word = unquote(words[0] ?? '');
-        // `sh -c "composer install"`: the string is a command line of its own.
-        if (SHELLS.has(word) && words[1] === '-c') return [word, ...startsWith(unquote(words.slice(2).join(' ')))];
-        return word ? [word] : [];
-      });
-  const isProjectCommand = (word: string): boolean =>
-    /(?:^|\/)(?:composer\d*|php[\d.]*(?:-[a-z]+)?|phpunit)(?:\.phar)?$/.test(word) ||
-    /vendor\/bin|scripts\//.test(word);
-  // A repository script or a vendored binary handed to an interpreter (`bash ./scripts/x.sh`) is no command word.
-  const SCRIPT_WORD = /vendor\/bin|(?:^|[\s'"=])(?:\.\/)?scripts\//;
+        while (words.length > 0 && (/^[A-Za-z_]\w*=/.test(words[0]) || FLOW.has(words[0]))) words.shift();
+        return unquote(words[0] ?? '');
+      })
+      .filter(Boolean);
+  };
+  const refused = (run: string): string[] => commands(run).filter(word => !ALLOWED.has(word));
 
   it('runs the tests in a job that holds no token, and the push in a job that needs it', () => {
     const entries = Object.entries(jobs());
     const testers = entries.filter(([, job]) => /\bphpunit\b/.test(runsOf(job)));
-    const pushers = entries.filter(([, job]) => usesToken(job));
+    // A job that receives any secret (`secrets['X']`, `toJSON(secrets)`) holds the mirror token as well.
+    const pushers = entries.filter(([, job]) => usesToken(job) || holdsSecret(job));
     expect(testers.map(([name]) => name)).toEqual(['test']);
     expect(pushers.map(([name]) => name)).toEqual([pusher]);
     expect(usesToken(jobs().test)).toBe(false);
@@ -836,9 +847,11 @@ describe.each([
     expect([jobs()[pusher].needs].flat()).toContain('test');
   });
 
-  it('runs no PHP, Composer or project script, at any command position, in the job that holds the token', () => {
-    expect(startsWith(runsOf(jobs()[pusher])).filter(isProjectCommand)).toEqual([]);
-    expect(runsOf(jobs()[pusher])).not.toMatch(SCRIPT_WORD);
+  it('runs nothing but git and echo, at any command position, in the job that holds the token', () => {
+    const run = runsOf(jobs()[pusher]);
+    // Non-vacuity: the job does run commands, and the reader finds them.
+    expect(commands(run)).toContain('git');
+    expect(refused(run)).toEqual([]);
   });
 
   it('uses no action but the checkout in the job that holds the token', () => {
@@ -856,7 +869,7 @@ describe.each([
     for (const line of pushes) expect(line).toContain('core.hooksPath=/dev/null');
   });
 
-  it('finds Composer, PHP and the token in the shapes the pins read', () => {
+  it('refuses every shape that runs Composer, PHP or a project script, and allows what the job runs', () => {
     for (const line of [
       'cd sdk/php && composer install --no-interaction',
       'php -v',
@@ -865,7 +878,14 @@ describe.each([
       'sudo -n composer.phar update',
       './scripts/anything.sh',
       'timeout 60 composer install',
+      'timeout -s KILL 60 composer install',
+      'sudo -u runner composer install',
       'sh -c "composer install"',
+      'bash -lc "composer install"',
+      "sh -ec 'composer install'",
+      '/bin/sh -c "composer install"',
+      'bash --noprofile -c "composer install"',
+      'echo composer install | sh',
       'if true; then composer install; fi',
       '{ php -v; }',
       'sleep 1 & composer install',
@@ -873,16 +893,17 @@ describe.each([
       '! composer install',
       '"composer" install',
       'php8.2 -v',
-    ]) {
-      expect(startsWith(line).some(isProjectCommand)).toBe(true);
-    }
-    for (const line of [
       'bash ./scripts/anything.sh',
+      'bash "$GITHUB_WORKSPACE/scripts/x.sh"',
       'source ./scripts/x.sh',
       '. ./scripts/x.sh',
-      'sh vendor/bin/phpunit',
+      'node sdk/javascript/scripts/smoke.mjs',
+      'make -C sdk/php test',
+      '$(which composer) install',
+      'x=$(true)#; composer install',
+      'ionice -c3 composer install',
     ]) {
-      expect(SCRIPT_WORD.test(line)).toBe(true);
+      expect(refused(line)).not.toEqual([]);
     }
     for (const line of [
       'git push origin main',
@@ -891,13 +912,18 @@ describe.each([
       'git -c core.hooksPath=/dev/null push',
       'SPLIT_SHA="$(git subtree split --prefix=sdk/php HEAD)"',
       'echo "Mirrored sdk/php -> rmyndharis/openwa-php@main"',
+      'if git ls-remote --tags --exit-code "$MIRROR" "refs/tags/${VERSION}" >/dev/null 2>&1; then',
+      'git -c core.hooksPath=/dev/null push --force \\\n  "https://x@github.com/o/r.git" \\\n  "${SHA}:refs/heads/main"',
     ]) {
-      expect(startsWith(line).some(isProjectCommand)).toBe(false);
-      expect(SCRIPT_WORD.test(line)).toBe(false);
+      expect(refused(line)).toEqual([]);
     }
     expect(usesToken({ env: { SPLIT: `\${{ secrets.${TOKEN} }}` }, steps: [] })).toBe(true);
     expect(usesToken({ steps: [{ run: 'x', env: { SPLIT: `\${{ secrets.${TOKEN} }}` } }] })).toBe(true);
     expect(usesToken({ steps: [{ run: 'x', with: { token: `\${{ secrets.${TOKEN} }}` } }] })).toBe(true);
     expect(usesToken({ steps: [{ run: 'x' }] })).toBe(false);
+    // A job that is handed every secret holds the mirror token, though its text never names it.
+    expect(holdsSecret({ env: { ALL: '${{ toJSON(secrets) }}' }, steps: [{ run: 'composer install' }] })).toBe(true);
+    expect(holdsSecret({ steps: [{ run: 'x', env: { T: "${{ secrets['X'] }}" } }] })).toBe(true);
+    expect(holdsSecret({ steps: [{ run: 'x', env: { T: '${{ secrets.GITHUB_TOKEN }}' } }] })).toBe(false);
   });
 });
