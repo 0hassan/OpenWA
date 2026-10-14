@@ -255,7 +255,12 @@ public final class OpenWAClient {
         } catch (IllegalArgumentException e) {
             // e.g. a JDK-restricted header name in defaultHeaders, or a URI-illegal char — keep it
             // inside the OpenWAError contract instead of leaking a raw JDK exception to the caller.
-            throw new OpenWAError("Invalid request — " + method + " " + path + ": " + reason(e));
+            // The JDK words a refused header as: invalid header value: "<the value>". Never repeat that.
+            String why = reason(e);
+            if (why.toLowerCase(java.util.Locale.ROOT).contains("header")) {
+                why = "a header was refused by the HTTP stack (check defaultHeaders for control or non-ASCII characters)";
+            }
+            throw new OpenWAError("Invalid request — " + method + " " + path + ": " + why);
         }
         if (res.status() < 200 || res.status() >= 300) {
             throw OpenWAApiError.fromResponse(res.status(), "", utf8(res.body()), method + " " + path, res.headers());

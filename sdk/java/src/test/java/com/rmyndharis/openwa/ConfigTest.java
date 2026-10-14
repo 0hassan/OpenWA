@@ -52,6 +52,20 @@ class ConfigTest {
     }
 
     @Test
+    void aDefaultHeaderValueWithAStrayNewlineIsRefusedWithoutBeingQuoted() {
+        Map<String, String> h = new HashMap<>();
+        h.put("CF-Access-Client-Secret", "s3cret-token\n");
+        IllegalArgumentException e =
+            assertThrows(IllegalArgumentException.class, () -> base().defaultHeaders(h).build());
+        assertTrue(e.getMessage().contains("CF-Access-Client-Secret"));
+        assertFalse(e.getMessage().contains("s3cret-token"));
+        Map<String, String> badName = Map.of("X Bad Name", "v");
+        assertThrows(IllegalArgumentException.class, () -> base().defaultHeaders(badName).build());
+        // A tab and plain printable ASCII are fine.
+        base().defaultHeaders(Map.of("X-Trace", "a\tb c")).build();
+    }
+
+    @Test
     void defaultHeadersAreCopiedAtBuildTime() {
         Map<String, String> h = new HashMap<>(Map.of("X-Tenant", "a"));
         MockTransport tx = new MockTransport().respond(200, "{\"valid\":true}");
