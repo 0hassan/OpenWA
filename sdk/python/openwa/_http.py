@@ -9,6 +9,7 @@ consumers intercept/observability-wrap outbound calls.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Mapping
 from urllib.parse import quote
 
@@ -64,6 +65,22 @@ def build_url(base_url: str, path: str, query: Mapping[str, Any] | None = None) 
     return str(httpx.URL(url).copy_merge_params(params))
 
 
+def resolve_timeout(timeout: float | None) -> float | None:
+    """The timeout httpx is given: seconds per network operation, or ``None`` for none.
+
+    ``None``, ``0`` and ``math.inf`` mean no timeout, as ``0`` does in the JavaScript and PHP clients;
+    httpx would otherwise take ``0`` literally and fail every connect. Anything that is not a
+    non-negative number raises at construction rather than at the first request.
+    """
+    if timeout is None:
+        return None
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or math.isnan(timeout) or timeout < 0:
+        raise ValueError(
+            f"OpenWAClient: timeout must be a non-negative number of seconds, or None for none (got {timeout!r})"
+        )
+    return None if timeout == 0 or math.isinf(timeout) else float(timeout)
+
+
 class HttpExecutor:
     """Owns the :class:`httpx.Client` and performs JSON requests.
 
@@ -75,10 +92,11 @@ class HttpExecutor:
         self,
         base_url: str,
         api_key: str,
-        timeout: float = 30.0,
+        timeout: float | None = 30.0,
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
+        timeout = resolve_timeout(timeout)
         # Caller-supplied default headers are applied FIRST so the auth/JSON
         # headers below always win and can never be clobbered (mirrors the JS SDK).
         # httpx.Headers matches names case-insensitively, so a lowercase copy is
@@ -155,11 +173,13 @@ class HttpExecutor:
         try:
             res = self._client.request(method, url, json=body if body is not None else None, headers=headers)
         except httpx.TimeoutException as e:
-            raise OpenWATimeoutError(self._timeout) from e
+            raise OpenWATimeoutError(self._timeout or 0) from e
         # Treat any non-2xx as an error, including 3xx: redirects are deliberately not followed
         # (so the API key is never re-sent to the target), which makes an unfollowed 3xx unusable
         # rather than a success. Matches the JS transport's `!res.ok`.
         if res.status_code >= 300:
             context = f"{method} {path}"
-            raise OpenWAApiError.from_response(res.status_code, res.text, context, headers=res.headers)
+            raise OpenWAApiError.from_response(
+                res.status_code, res.text, context, headers=res.headers, reason=res.reason_phrase
+            )
         return res

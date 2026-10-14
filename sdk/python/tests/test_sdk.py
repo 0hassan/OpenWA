@@ -254,6 +254,25 @@ class TestClientCore:
         plain = fail(500, text="oops")
         assert plain.code is None and plain.retry_after_seconds is None
 
+    def test_an_error_with_no_body_names_the_status_text_not_none(self):
+        # A proxy in front of the gateway answers 502 and 504 with nothing.
+        transport = httpx.MockTransport(lambda _: httpx.Response(502, content=b""))
+        client = OpenWAClient(base_url="https://x", api_key="k", transport=transport)
+        with pytest.raises(OpenWAApiError) as caught:
+            client.health.live()
+        assert "Bad Gateway" in str(caught.value)
+        assert "None" not in str(caught.value)
+
+    def test_timeout_zero_none_and_inf_mean_none_and_a_bad_value_raises(self):
+        for none in (0, None, float("inf")):
+            client = OpenWAClient(base_url="https://x", api_key="k", timeout=none)
+            assert client._http._client.timeout == httpx.Timeout(None)
+        client = OpenWAClient(base_url="https://x", api_key="k", timeout=2.5)
+        assert client._http._client.timeout == httpx.Timeout(2.5)
+        for bad in (-1, float("nan"), "30", True):
+            with pytest.raises(ValueError, match="timeout"):
+                OpenWAClient(base_url="https://x", api_key="k", timeout=bad)  # type: ignore[arg-type]
+
     def test_maps_503_to_service_unavailable(self):
         # The gateway answers 503 when the engine never confirmed an operation: a transport failure,
         # which is worth retrying, as a 429 is. It used to fall through to the base class while the

@@ -85,7 +85,9 @@ class OpenWAClient:
         base_url: str,
         api_key: str,
         *,
-        timeout: float = 30.0,
+        # Seconds per network operation (connect, read, write, pool), not for the whole call: a response
+        # that keeps trickling bytes is not cut off. 0 or None means no timeout.
+        timeout: float | None = 30.0,
         default_headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
