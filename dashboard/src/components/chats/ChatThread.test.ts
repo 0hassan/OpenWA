@@ -757,6 +757,17 @@ test('the scroll-to-bottom button is sticky inside the scroller, not absolute, a
   assert.ok(level(rule) < level(menu), 'the jump button paints over the actions menu');
 });
 
+// An own bubble is at the end of the pane, and the react icon of its pill is a few pixels from that end: a
+// popover centred on it runs past the pane, so the last emoji is clipped and the thread scrolls sideways.
+test('the reaction popover of an own message grows from the end of its icon, not from its centre', () => {
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  const rule =
+    /\.chats-page \.message-bubble-wrapper\.outgoing \.reaction-quick-popover \{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert.match(rule, /inset-inline-end:\s*0;/);
+  assert.match(rule, /left:\s*auto;/);
+  assert.doesNotMatch(rule, /translateX/);
+});
+
 test('the scroll-to-bottom button is the last child of the scroller and jumps without animating', async () => {
   const messages: ChatMessageView[] = ['1', '2'].map(n => ({
     ...PROMPT,

@@ -1176,6 +1176,15 @@
   white-space: nowrap;
 }
 
+/* The pill sits at the end of its bubble and an own bubble is at the end of the pane, so a popover centred
+   on the react icon runs past the pane and clips the last emoji, which cannot then be picked. Anchored to
+   the end of the icon it grows toward the middle of the pane, in either text direction. */
+.chats-page .message-bubble-wrapper.outgoing .reaction-quick-popover {
+  left: auto;
+  inset-inline-end: 0;
+  transform: translateY(-6px);
+}
+
 .chats-page .reaction-quick-popover::after {
   content: '';
   position: absolute;
