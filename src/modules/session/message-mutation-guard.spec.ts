@@ -49,10 +49,26 @@ describe('mutationTargetsForeignRow', () => {
       expect(mutationTargetsForeignRow({ chatId: list, direction: OUT }, { kind: 'edit', chatId: direct })).toBe(
         'chat',
       );
-      expect(mutationTargetsForeignRow({ chatId: list, direction: IN }, { kind: 'reaction', chatId: direct })).toBe(
-        'chat',
-      );
+      expect(
+        mutationTargetsForeignRow(
+          { chatId: list, direction: IN, author: '628999@c.us' },
+          { kind: 'reaction', chatId: direct },
+        ),
+      ).toBe('chat');
     }
+  });
+
+  // Earlier versions filed a message received through a contact's list under the list id, with its sender as
+  // the author, and it is shown in the chat with that sender: the sender's change names that chat.
+  it('lets the sender of a received list message change it from their own chat', () => {
+    const row = { chatId: '1700000009@broadcast', direction: IN, author: direct };
+    for (const kind of ['edit', 'revoke', 'reaction'] as const) {
+      expect(mutationTargetsForeignRow(row, { kind, chatId: direct, fromMe: false })).toBeNull();
+    }
+    // The account's own phone reacting to it names the sender's chat too, and another person's chat is foreign.
+    expect(mutationTargetsForeignRow(row, { kind: 'reaction', chatId: direct, fromMe: true })).toBeNull();
+    expect(mutationTargetsForeignRow(row, { kind: 'reaction', chatId: '628222@c.us' })).toBe('chat');
+    expect(mutationTargetsForeignRow(row, { kind: 'edit', chatId: group, fromMe: false })).toBe('chat');
   });
 
   // A REST send keeps the number as its caller wrote it ('+', spaces, with or without the mobile marker

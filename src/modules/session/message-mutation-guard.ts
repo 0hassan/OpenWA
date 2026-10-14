@@ -57,6 +57,20 @@ function isOwnBroadcast(row: StoredMessageRef): boolean {
 }
 
 /**
+ * A message received through a contact's broadcast list was filed under the list id by earlier versions
+ * (its row says `<id>@broadcast`, incoming), though the dashboard and the engines show it in the one-to-one
+ * chat with its sender. A change to it names the sender's chat, which is the chat of that message as well,
+ * for as long as the row keeps the list id.
+ */
+function receivedThroughList(row: StoredMessageRef, chatId: string): boolean {
+  return (
+    row.direction === MessageDirection.INCOMING &&
+    entityOf(row.chatId)?.kind === 'broadcast' &&
+    !provablyDifferent(row.author, chatId)
+  );
+}
+
+/**
  * Whether two ids provably name different chats or people, compared by the entity they name rather than
  * by dialect or spelling. A lid against a phone number may be one person.
  */
@@ -79,7 +93,8 @@ export function provablyDifferent(a?: string | null, b?: string | null): boolean
  * author, so applying it would make the gateway's record say what no client shows.
  *
  *  - `chat`: a message id belongs to one chat. A reaction to a message the account sent to a broadcast
- *    list or posted as a status is the exception: its recipients react from their own chats.
+ *    list or posted as a status is the exception: its recipients react from their own chats. So is any
+ *    change to a received list message that an earlier version filed under the list, from its sender's chat.
  *  - `direction`: an edit, and a revoke in a one-to-one chat, come from the author only, so a change
  *    made by the counterparty cannot name a message the account sent, nor the reverse. Group revokes are
  *    exempt, since an admin may delete anyone's message.
@@ -89,9 +104,8 @@ export function mutationTargetsForeignRow(
   row: StoredMessageRef,
   source: MutationSource,
 ): 'chat' | 'direction' | 'author' | null {
-  if (!(source.kind === 'reaction' && isOwnBroadcast(row)) && provablyDifferent(row.chatId, source.chatId)) {
-    return 'chat';
-  }
+  const listed = (source.kind === 'reaction' && isOwnBroadcast(row)) || receivedThroughList(row, source.chatId);
+  if (!listed && provablyDifferent(row.chatId, source.chatId)) return 'chat';
   const group = source.chatId.endsWith('@g.us') || row.chatId.endsWith('@g.us');
   const authorOnly = source.kind === 'edit' || (source.kind === 'revoke' && !group);
   if (authorOnly && source.fromMe !== undefined) {
