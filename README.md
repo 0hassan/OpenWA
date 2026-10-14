@@ -68,7 +68,7 @@ This lets you point an **AI agent or third-party integration at a shared account
 
 Identity is matched through the lid mapping table: a contact allowlisted by phone number also matches the same person's `@lid` privacy id once the table maps the two, and an unmapped `@lid` is refused rather than guessed. A lid's digits are never mistaken for a phone number, so `555000111@lid` does not admit `555000111@c.us`.
 
-The default covers REST routes only. Surfaces that authenticate outside the REST guard do not inherit it, so each one that can return chat data applies the fence with its own check: the `/events` WebSocket delivers only events inside the key's chats, the MCP mount authorizes each tool call against them, and the Bull Board queue dashboard refuses the key. Four list routes are usable, each filtered to the key's chats before paging: `GET /sessions/{sessionId}/chats`, `GET /sessions/{sessionId}/groups` (id, name and community parent id only), `GET /sessions/{sessionId}/contacts` and `GET /sessions/{sessionId}/labels/{labelId}/chats`.
+The default covers REST routes only. Surfaces that authenticate outside the REST guard do not inherit it, so each one that can return chat data applies the fence with its own check: the `/events` WebSocket delivers only events inside the key's chats, the MCP mount authorizes each tool call against them, and the Bull Board queue dashboard refuses the key. Five list routes are usable, each filtered to the key's chats before paging: `GET /sessions/{sessionId}/chats`, `GET /sessions/{sessionId}/groups` (id, name and community parent id only), `GET /sessions/{sessionId}/contacts`, `GET /sessions/{sessionId}/labels/{labelId}/chats` and `GET /api/search` (the built-in provider; a search plugin answers `403`).
 
 The API also accepts `allowedChats` on an admin key, but no admin-only route is open to a chat-scoped key, and the last usable admin key cannot be scoped this way.
 
@@ -225,7 +225,7 @@ npm run dev
 # Swagger: http://localhost:2785/api/docs
 ```
 
-The first boot writes the admin API key to `data/.api-key` (read it with `cat data/.api-key`).
+The first boot writes the admin API key to `data/.api-key` (read it with `cat data/.api-key`; the file has no trailing newline, so copy only the key).
 
 Use `npm install` instead when intentionally changing dependencies. OpenWA's committed lockfile uses
 registry artifacts only, so npm 12 works with its secure default that blocks Git dependencies; do not
