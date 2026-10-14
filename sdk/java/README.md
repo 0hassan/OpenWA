@@ -108,7 +108,8 @@ import com.rmyndharis.openwa.errors.OpenWANotFoundError;
 try {
     client.messages.sendText(sessionId, body);
 } catch (OpenWAConflictError e) {
-    // 409 — engine not ready
+    // 409 — engine not ready, or a keyed send that is pending or uncertain:
+    // e.code() tells them apart (see Send idempotency)
 } catch (OpenWANotFoundError e) {
     // 404 — session or chat not found
 }
@@ -119,7 +120,7 @@ try {
 | `OpenWAAuthError`               | 401  | Missing or invalid API key                                  |
 | `OpenWAForbiddenError`          | 403  | API key role or scope, or WhatsApp itself, refuses the call |
 | `OpenWANotFoundError`           | 404  | Resource not found                                          |
-| `OpenWAConflictError`           | 409  | Engine not ready                                            |
+| `OpenWAConflictError`           | 409  | Engine not ready, or an idempotency outcome (see `code()`)  |
 | `OpenWARateLimitError`          | 429  | Rate limited                                                |
 | `OpenWANotImplementedError`     | 501  | Active engine does not support the call                     |
 | `OpenWAServiceUnavailableError` | 503  | Engine did not confirm in time                              |
