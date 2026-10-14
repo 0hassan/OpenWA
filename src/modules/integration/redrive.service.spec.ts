@@ -15,6 +15,7 @@ describe('RedriveService', () => {
       find: jest.fn(),
       findOneBy: jest.fn(),
       update: jest.fn().mockResolvedValue(undefined),
+      increment: jest.fn().mockResolvedValue(undefined),
       count: jest.fn().mockResolvedValue(0),
     };
     events = { update: jest.fn().mockResolvedValue(undefined) };
@@ -43,6 +44,8 @@ describe('RedriveService', () => {
     expect(res.redriven).toBe(1);
     expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
     expect(repo.update).toHaveBeenCalledWith({ id: 'f2' }, { redriven: true });
+    // The unreadable row goes behind the readable ones, so a batch of them cannot starve the rest.
+    expect(repo.increment).toHaveBeenCalledWith({ id: 'f1' }, 'attempts', 1);
   });
 
   it('re-enqueues non-redriven inbound failures for an instance and marks them redriven', async () => {

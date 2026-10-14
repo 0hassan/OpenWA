@@ -108,11 +108,14 @@ export class RedriveService implements OnModuleDestroy {
           const row = await this.repo.findOneBy({ id });
           if (row) rows.push(row);
         } catch (rowError) {
-          this.logger.error('A dead letter could not be read and is skipped', {
-            id,
-            error: rowError instanceof Error ? rowError.message : String(rowError),
-            action: 'ingress_redrive_row_unreadable',
-          });
+          this.logger.error(
+            'A dead letter could not be read and is skipped',
+            rowError instanceof Error ? rowError.message : String(rowError),
+            { id, action: 'ingress_redrive_row_unreadable' },
+          );
+          // Counted as a failed replay, by id and so without reading the payload: left at attempts 0 it
+          // heads every window for good, and a batch of them would starve the rows behind it.
+          await this.repo.increment({ id }, 'attempts', 1).catch(() => undefined);
         }
       }
     }

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { LoggerService } from '../../common/services/logger.service';
 import { DataSource } from 'typeorm';
 import { Session } from '../session/entities/session.entity';
 import { Webhook } from './entities/webhook.entity';
@@ -91,5 +92,25 @@ describe('WebhookOutboxService.findStale() past an unreadable payload (SQLite)',
     expect(rows[0].payload).toEqual({ a: 1 });
     // The cursor passes the unreadable row at the end of the page, or a page of them would be read again forever.
     expect(scannedThrough).toBe('00000000-0000-4000-8000-000000000003');
+  });
+
+  it('logs each unreadable row with its id and action as fields, not as the trace', async () => {
+    const error = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      await insertRaw('00000000-0000-4000-8000-000000000001', 'k1', '{oops', '2026-01-01 00:00:00');
+
+      await outbox.findStale(new Date('2026-02-01T00:00:00Z'), 10);
+
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('could not be read'),
+        expect.any(String),
+        expect.objectContaining({
+          id: '00000000-0000-4000-8000-000000000001',
+          action: 'webhook_outbox_row_unreadable',
+        }),
+      );
+    } finally {
+      error.mockRestore();
+    }
   });
 });

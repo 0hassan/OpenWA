@@ -183,11 +183,11 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
           const row = await this.outbox.findOneBy({ id });
           if (row) rows.push(row);
         } catch (rowError) {
-          this.logger.error('A stranded delivery could not be read and is skipped', {
-            id,
-            error: rowError instanceof Error ? rowError.message : String(rowError),
-            action: 'webhook_outbox_row_unreadable',
-          });
+          this.logger.error(
+            'A stranded delivery could not be read and is skipped',
+            rowError instanceof Error ? rowError.message : String(rowError),
+            { id, action: 'webhook_outbox_row_unreadable' },
+          );
         }
       }
       const last = ids.at(-1);
