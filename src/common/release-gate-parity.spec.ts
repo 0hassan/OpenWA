@@ -77,8 +77,9 @@ describe('release gate parity (the tag path runs every branch gate)', () => {
 
 /**
  * Running the same commands is not enough: a gate stops a release only when its failure does. A step
- * that carries `continue-on-error` or an `if`, or a publishing job that no longer waits for a gate job,
- * keeps every command above in place and still lets a tag publish with the suite red.
+ * that carries `continue-on-error` or an `if`, a publishing job that no longer waits for a gate job, or
+ * a job of its own with a condition such as `always()` (which runs past a failed need) keeps every
+ * command above in place and still lets a tag publish with the suite red.
  */
 describe('release gate jobs can stop the publish jobs', () => {
   type GateStep = { if?: unknown; 'continue-on-error'?: unknown };
@@ -86,16 +87,23 @@ describe('release gate jobs can stop the publish jobs', () => {
   const jobs = (): Record<string, GateJob> =>
     (yaml.load(fs.readFileSync(path.join(workflowDir, 'release.yml'), 'utf8')) as { jobs?: Record<string, GateJob> })
       .jobs ?? {};
-  const GATES = ['lint', 'test', 'test-postgres', 'dashboard', 'scripts-smoke', 'chart'];
+  const GATES = ['lint', 'test', 'test-postgres', 'dashboard', 'scripts-smoke', 'chart', 'build'];
+  // The jobs that put the image on the registries and the Release on GitHub.
+  const PUBLISHERS = ['docker', 'promote', 'release'];
   const needsOf = (job: GateJob): string[] => (typeof job.needs === 'string' ? [job.needs] : (job.needs ?? []));
+  // A job with a condition of its own (always(), failure(), ...) or continue-on-error can run, and
+  // succeed, after one of its needs failed, so its needs say nothing about whether it ran on a green tree.
+  const isSoft = (job: GateJob | undefined): boolean =>
+    job?.if !== undefined || job?.['continue-on-error'] !== undefined;
+  // What a job can only run after: its needs, and theirs wherever the job in between is not soft.
   const closure = (start: string): Set<string> => {
     const seen = new Set<string>();
-    const queue = [start];
+    const queue = isSoft(jobs()[start]) ? [] : [start];
     for (let name = queue.pop(); name !== undefined; name = queue.pop()) {
       for (const need of needsOf(jobs()[name] ?? {})) {
         if (!seen.has(need)) {
           seen.add(need);
-          queue.push(need);
+          if (!isSoft(jobs()[need])) queue.push(need);
         }
       }
     }
@@ -111,7 +119,14 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(softened).toEqual([]);
   });
 
-  it.each(['docker', 'release'])('%s waits, directly or through another job, for every gate job', publisher => {
+  it.each(PUBLISHERS)('%s has no condition of its own that lets it run after a failed gate', publisher => {
+    const job = jobs()[publisher];
+    expect(job).toBeDefined();
+    expect(job.if).toBeUndefined();
+    expect(job['continue-on-error']).toBeUndefined();
+  });
+
+  it.each(PUBLISHERS)('%s waits, directly or through unconditional jobs, for every gate job', publisher => {
     expect(jobs()[publisher]).toBeDefined();
     expect(GATES.filter(gate => !closure(publisher).has(gate))).toEqual([]);
   });
