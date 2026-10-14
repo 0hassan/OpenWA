@@ -130,6 +130,14 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(jobs()[publisher]).toBeDefined();
     expect(GATES.filter(gate => !closure(publisher).has(gate))).toEqual([]);
   });
+
+  // The image gates and the check of what the public can pull are jobs of their own. Dropping them from a
+  // needs list leaves every command above in place, so a tag would move the release tags without the boot
+  // check on both architectures or the vulnerability scan, or publish the Release without either.
+  it('promote waits for the image gates, and the Release for promote and the anonymous pull check', () => {
+    expect(['docker', 'boot-smoke', 'image-scan'].filter(gate => !closure('promote').has(gate))).toEqual([]);
+    expect(['promote', 'verify-published'].filter(job => !needsOf(jobs().release).includes(job))).toEqual([]);
+  });
 });
 
 /**
