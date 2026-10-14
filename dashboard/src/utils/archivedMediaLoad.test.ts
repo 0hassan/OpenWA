@@ -97,3 +97,39 @@ test('any other failure is not retried', async () => {
   );
   assert.equal(calls, 1);
 });
+
+test('a load whose signal is already aborted rejects without starting', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let ran = false;
+  await assert.rejects(
+    loadArchivedMedia(controller.signal, async () => {
+      ran = true;
+      return 'x';
+    }),
+  );
+  assert.equal(ran, false);
+});
+
+test('a load that leaves the queue takes only its own turn with it', async () => {
+  const ran: number[] = [];
+  const controllers = Array.from({ length: 4 }, () => new AbortController());
+  const loads = controllers.map((controller, i) =>
+    loadArchivedMedia(controller.signal, async () => {
+      ran.push(i);
+      return i;
+    }).catch(() => -1),
+  );
+  controllers[2].abort();
+  // A turn dropped with it would leave the fourth load pending for good.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outcome = await Promise.race([
+    Promise.all(loads),
+    new Promise(resolve => {
+      timer = setTimeout(() => resolve('timeout'), 3000);
+    }),
+  ]);
+  clearTimeout(timer);
+  assert.notEqual(outcome, 'timeout');
+  assert.deepEqual(ran, [0, 1, 3]);
+});

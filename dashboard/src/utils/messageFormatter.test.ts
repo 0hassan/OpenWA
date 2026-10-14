@@ -181,3 +181,11 @@ test('a mention that fills a *bold* span on its own resolves and keeps the bold'
     { type: 'bold', children: [{ type: 'mention', value: '@Ravi' }] },
   ]);
 });
+
+test('text right after a closing triple backtick is kept', () => {
+  assert.deepEqual(parseMessageBody('```a```b'), [{ type: 'codeblock', value: 'a' }, text('b')]);
+});
+
+test('a space right after the opening marker keeps the span literal even when a closer follows', () => {
+  assert.deepEqual(parseMessageBody('* a*'), [text('* a*')]);
+});

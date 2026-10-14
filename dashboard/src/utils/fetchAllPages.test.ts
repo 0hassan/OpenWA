@@ -1,6 +1,6 @@
 import { test, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchAllPages } from './fetchAllPages.ts';
+import { fetchAllPages, retryThrottled } from './fetchAllPages.ts';
 
 before(async () => {
   const { installJsdomGlobals } = await import('../test-helpers/jsdom.ts');
@@ -251,4 +251,24 @@ test('a walk does not send its retry when the key is signed out during the throt
     /Signed out/,
   );
   assert.deepEqual(sentWith, ['key-a', 'key-a'], 'the retry went out after the sign-out');
+});
+
+test('the throttle backoff doubles on each retry', async () => {
+  const delays: number[] = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+    delays.push(ms ?? 0);
+    return realSetTimeout(fn, 0);
+  }) as typeof setTimeout;
+  try {
+    await assert.rejects(
+      retryThrottled(async () => {
+        throw httpError(429);
+      }, 40),
+      { status: 429 },
+    );
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+  assert.deepEqual(delays, [40, 80]);
 });
