@@ -38,8 +38,8 @@ describe('mutationTargetsForeignRow', () => {
     }
   });
 
-  // A REST send keeps the number as its caller wrote it ('+', spaces, no mobile marker digit) while the
-  // engine reports the canonical one.
+  // A REST send keeps the number as its caller wrote it ('+', spaces, with or without the mobile marker
+  // digit) while the engine reports its own spelling, which can differ either way.
   it('reads the spellings of one phone number as one chat', () => {
     const spellings: Array<[string, string]> = [
       ['+628111@c.us', '628111@c.us'],

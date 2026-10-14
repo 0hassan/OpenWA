@@ -20,8 +20,9 @@ export interface MutationSource {
 
 /**
  * What two spellings of one phone number share: its digits, without a '+', spaces or dashes, and without
- * the mobile marker digit that the id WhatsApp reports for a Brazilian, Mexican or Argentine number
- * drops, which a REST caller usually types (a send stores the chat id as its caller wrote it).
+ * the mobile marker digit that a Brazilian (`55` + area + `9`), Mexican (`521`) or Argentine (`549`) number
+ * is written with in one spelling and without in the other. A send stores the chat id as its caller wrote
+ * it, so the stored form and the one the engine reports can differ in either direction.
  */
 function phoneKey(local: string): string {
   return local
