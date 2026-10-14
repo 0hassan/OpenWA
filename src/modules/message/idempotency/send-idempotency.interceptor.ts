@@ -20,6 +20,8 @@ import { hashSendRequest, isValidIdempotencyKey, SendIdempotencyService } from '
 export const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
 /** Response header set on an answer replayed from an earlier request with the same key. */
 export const IDEMPOTENT_REPLAYED_HEADER = 'idempotent-replayed';
+/** The most characters of a session id worth a claim: session ids are UUIDs, and the handler refuses a longer segment. */
+const CLAIMABLE_SESSION_ID_MAX_LENGTH = 255;
 
 /**
  * Whether a failed send proves nothing reached WhatsApp, so the key can be freed for a retry.
@@ -76,6 +78,9 @@ export class SendIdempotencyInterceptor implements NestInterceptor {
     }
 
     const sessionId = String((request.params as Record<string, string | undefined>).sessionId ?? '');
+    // Not claimed: the handler answers such a segment itself, where the claim would insert a value
+    // PostgreSQL cannot index and answer 500.
+    if (sessionId.length > CLAIMABLE_SESSION_ID_MAX_LENGTH) return next.handle();
     const route = context.getHandler().name;
     const claim = await this.store.claim({
       sessionId,

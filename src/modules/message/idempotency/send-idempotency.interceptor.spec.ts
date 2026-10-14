@@ -24,13 +24,14 @@ describe('SendIdempotencyInterceptor', () => {
     headers: Record<string, string | string[]>,
     body: unknown = { chatId: 'c', text: 't' },
     rawHeaders?: string[],
+    sessionId = 's1',
   ) => {
     setHeader = jest.fn();
     return {
       getType: () => 'http',
       getHandler: () => ({ name: 'sendText' }),
       switchToHttp: () => ({
-        getRequest: () => ({ headers, params: { sessionId: 's1' }, body, rawHeaders }),
+        getRequest: () => ({ headers, params: { sessionId }, body, rawHeaders }),
         getResponse: () => ({ setHeader }),
       }),
     } as unknown as ExecutionContext;
@@ -77,6 +78,19 @@ describe('SendIdempotencyInterceptor', () => {
       requestHash: hashSendRequest('sendText', body),
     });
     expect(store.complete).toHaveBeenCalledWith('row-1', { messageId: 'm1' });
+  });
+
+  it('leaves a path segment no session id can be to the handler, claiming nothing', async () => {
+    const headers = { 'idempotency-key': 'k-1' };
+
+    const out = await run(contextFor(headers, undefined, undefined, 'x'.repeat(256)), () =>
+      of({ answered: 'by handler' }),
+    );
+    expect(out).toEqual({ answered: 'by handler' });
+    expect(store.claim).not.toHaveBeenCalled();
+
+    await run(contextFor(headers, undefined, undefined, 'x'.repeat(255)), () => of({}));
+    expect(store.claim).toHaveBeenCalledTimes(1);
   });
 
   it('replays a completed key without running the send, marking the response', async () => {
