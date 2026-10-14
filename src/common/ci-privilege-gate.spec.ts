@@ -405,6 +405,22 @@ describe('a job that can mint a publish credential pins global npm installs and 
     },
   );
 
+  // -DskipTests only skips running the tests: the test sources are still compiled against every test
+  // dependency, and javac runs the annotation processors it finds on that classpath beside the credentials.
+  it('java-sdk-release.yml: the deploy compiles no test sources', () => {
+    const workflow = workflowOf('java-sdk-release.yml');
+    const runs = Object.values(workflow.jobs ?? {})
+      .flatMap(job => job.steps ?? [])
+      .map(step => executableLines(step.run ?? ''))
+      .join('\n');
+    const deploy = runs.split('\n').filter(line => /\bmvn\b.*\bdeploy\b/.test(line));
+    expect(deploy.length).toBeGreaterThan(0);
+    for (const line of deploy) {
+      expect(line).toContain('-Dmaven.test.skip=true');
+      expect(line).not.toContain('-DskipTests');
+    }
+  });
+
   it('finds a cache restored beside a publish credential', () => {
     const workflow: OidcWorkflow = {
       jobs: {
@@ -620,11 +636,37 @@ describe('the dashboard unit tests are bounded', () => {
 });
 
 /**
- * The PHP release runs the SDK tests and then pushes to the mirror with a personal access token in the
- * environment, in one job. A git hook that a dev dependency of those tests left behind would run in that
- * push with the token, so the push runs with hooks switched off.
+ * The PHP release pushes to the mirror with a personal access token in the environment. The SDK's tests,
+ * and the dev dependencies they run, execute in a job of their own that holds no secret, and the job that
+ * pushes takes a fresh checkout, installs nothing and runs only git, with hooks switched off.
  */
-describe('the PHP SDK release pushes to the mirror with hooks disabled', () => {
+describe('the PHP SDK release keeps the mirror token away from the SDK test run', () => {
+  type PhpJob = { needs?: string | string[]; steps?: Step[] };
+  const jobs = (): Record<string, PhpJob> =>
+    (workflowOf('php-sdk-release.yml') as unknown as { jobs: Record<string, PhpJob> }).jobs;
+  const runsOf = (job: PhpJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
+  const usesToken = (job: PhpJob): boolean =>
+    (job.steps ?? []).some(step =>
+      JSON.stringify((step as { env?: unknown }).env ?? {}).includes('PHP_SDK_SPLIT_TOKEN'),
+    );
+
+  it('runs the tests in a job that holds no token, and the push in a job that needs it', () => {
+    const entries = Object.entries(jobs());
+    const testers = entries.filter(([, job]) => /\bphpunit\b/.test(runsOf(job)));
+    const pushers = entries.filter(([, job]) => usesToken(job));
+    expect(testers.map(([name]) => name)).toEqual(['test']);
+    expect(pushers.map(([name]) => name)).toEqual(['release']);
+    expect(usesToken(jobs().test)).toBe(false);
+    expect([jobs().release.needs].flat()).toContain('test');
+  });
+
+  it('runs no PHP, Composer or project script in the job that holds the token', () => {
+    const run = runsOf(jobs().release);
+    const commands = run.split('\n').map(line => line.trim().split(/\s+/)[0]);
+    expect(commands.filter(command => ['composer', 'php', 'phpunit'].includes(command))).toEqual([]);
+    expect(run).not.toMatch(/vendor\/bin|\.\/scripts\//);
+  });
+
   it('names core.hooksPath on the push that carries the token', () => {
     const pushes = runCommandsOf('php-sdk-release.yml')
       .flatMap(run => run.split('\n'))
