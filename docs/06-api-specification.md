@@ -6546,7 +6546,7 @@ Search messages across sessions (active search provider).
   id, so it changes when a plugin backend is selected via `SEARCH_PROVIDER`.
 - `score` is optional and provider-specific (rank ordering is stable within a provider; cross-provider
   scores are not comparable). The built-in provider on SQLite leaves it out for a key restricted to
-  selected chats, since it is computed over the whole index.
+  selected sessions or chats, since it is computed over the whole index.
 
 **Errors:** `400` empty/whitespace `q`, a non-numeric `dateFrom`/`dateTo`/`limit`/`offset`, an `offset` above `100000`, or a malformed
 SQLite FTS5 query (unbalanced quote/paren, bare operator) — Postgres's `websearch_to_tsquery` is

@@ -162,18 +162,20 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     expect((await provider.search({ q: 'hello', chatIds: ['c2'], sessionIds: ['s1'] })).total).toBe(0);
   });
 
-  // bm25 weighs a term by how many messages the whole index holds, so the rank of a hit a chat-scoped
-  // caller may read still reflects chats it may not. The hits stay ordered by it; the value is withheld.
-  it('returns no score to a chat-scoped caller, and still returns one to the others', async () => {
+  // bm25 weighs a term by how many messages the whole index holds, so the rank of a hit a session- or
+  // chat-scoped caller may read still reflects sessions and chats it may not. The hits stay ordered by it;
+  // the value is withheld.
+  it('returns no score to a session- or chat-scoped caller, and still returns one to an unscoped key', async () => {
     const unscoped = await provider.search({ q: 'hello' });
     expect(unscoped.hits.map(hit => typeof hit.score)).toEqual(['number', 'number']);
 
-    const scoped = await provider.search({ q: 'hello', chatIds: ['c2'] });
-    expect(scoped.hits.map(hit => hit.chatId)).toEqual(['c2']);
-    expect(scoped.hits[0].score).toBeUndefined();
+    const chats = await provider.search({ q: 'hello', chatIds: ['c2'] });
+    expect(chats.hits.map(hit => hit.chatId)).toEqual(['c2']);
+    expect(chats.hits[0].score).toBeUndefined();
 
     const sessions = await provider.search({ q: 'hello', sessionIds: ['s1'] });
-    expect(sessions.hits.map(hit => typeof hit.score)).toEqual(['number']);
+    expect(sessions.hits.map(hit => hit.sessionId)).toEqual(['s1']);
+    expect(sessions.hits[0].score).toBeUndefined();
   });
 
   it.each([0, 1])('returns no hits or count for an empty compiled chat scope at offset %s', async offset => {
