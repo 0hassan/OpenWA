@@ -916,8 +916,8 @@ export const sessionApi = {
   getChannelMessages: (id: string, channelId: string, limit = 50) =>
     request<ChannelMessage[]>(`/sessions/${id}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}`),
   getContactStatuses: (id: string) => request<{ statuses: StatusUpdate[] }>(`/sessions/${id}/status`),
-  getStatusMediaBlob: (id: string, statusId: string) =>
-    requestBlob(`/sessions/${id}/status/${encodeURIComponent(statusId)}/media`),
+  getStatusMediaBlob: (id: string, statusId: string, signal?: AbortSignal) =>
+    requestBlob(`/sessions/${id}/status/${encodeURIComponent(statusId)}/media`, signal),
   postTextStatus: (
     id: string,
     text: string,
