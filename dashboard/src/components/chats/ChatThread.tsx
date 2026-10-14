@@ -133,13 +133,20 @@ function ChatThread({
   // element is checked after the commit, and only once: a later change of the list never moves focus, and
   // the position of a reader who scrolled away is never touched (preventScroll). Focus a pointer brought
   // in is not recorded, so a mouse click on Delete moves nothing. The place is found from the bubble in the
-  // document, not from an index taken at focus time, which an older page landing since would have moved.
+  // document, not from an index taken at focus time, which an older page landing since would have moved. The
+  // page itself losing focus (the delete confirmation, another window) ends nothing: see deactivatedRef.
   const keyboardFocusRef = useRef<{
     element: HTMLElement;
     bubble: HTMLElement;
     wa: string | null;
     neighbors: Array<{ element: HTMLElement; wa: string | null }>;
   } | null>(null);
+  // The element that lost focus because the page did: another window took over, or a native dialog (the
+  // delete confirmation) opened. It stays the active element and is given focus back with the page, with no
+  // relatedTarget and, in some engines, without :focus-visible, so the round trip neither drops what is held
+  // above nor re-classifies the focus that comes back. The blur arrives after confirm() has returned, so the
+  // handler that opened the dialog cannot put the place back itself.
+  const deactivatedRef = useRef<EventTarget | null>(null);
   useEffect(() => {
     const held = keyboardFocusRef.current;
     if (!held) return;
@@ -353,6 +360,11 @@ function ChatThread({
       onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
       onFocus={event => {
         const target = event.target;
+        // The page gave focus back to the element it took it from: pointer mode and the held place stand as
+        // they were left.
+        const resumed = deactivatedRef.current === target;
+        deactivatedRef.current = null;
+        if (resumed) return;
         const bubble = target.closest<HTMLElement>('[data-roving-message]');
         const keyboard = target.matches(':focus-visible');
         if (keyboard) event.currentTarget.removeAttribute('data-pointer');
@@ -369,7 +381,11 @@ function ChatThread({
         keyboardFocusRef.current = { element: target, bubble, wa: waIdOf(bubble), neighbors };
       }}
       onBlur={event => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) keyboardFocusRef.current = null;
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        // The page lost focus, not the element: it is still the active one and what it held is still true.
+        const pageLostFocus = event.relatedTarget === null && !document.hasFocus();
+        deactivatedRef.current = pageLostFocus ? event.target : null;
+        if (!pageLostFocus) keyboardFocusRef.current = null;
       }}
     >
       {/* Older-page spinner, or the failure in its place. An in-flow sibling before the thread, not
