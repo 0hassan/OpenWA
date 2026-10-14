@@ -230,7 +230,7 @@ describe('Baileys inbound messages held for storage', () => {
     it('lets another chat text through while media waits for room, its limiter slot given up', async () => {
       const h = heldProjector();
       const { events, emitted } = build(k, h.callbacks);
-      await fillRoom(h, events);
+      const release = await fillRoom(h, events);
 
       // K media waiting for room would hold every limiter slot if they did not give theirs up.
       upsert(events, ...Array.from({ length: k }, (_, i) => media(`W${i}`, `wait${i}@s.whatsapp.net`)));
@@ -240,6 +240,11 @@ describe('Baileys inbound messages held for storage', () => {
       expect(emitted).toContain('T');
       expect(h.inserted()).toEqual(['T']);
       expect(downloadMediaMessage).toHaveBeenCalledTimes(k);
+
+      // Room frees: the media that waited is stored here, not by its wait timer after the file is done.
+      release();
+      await flush();
+      expect(h.inserted()).toEqual(expect.arrayContaining(Array.from({ length: k }, (_, i) => `W${i}`)));
     });
 
     it('commits a same-chat text after the media it arrived behind', async () => {
