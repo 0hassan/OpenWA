@@ -176,6 +176,10 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     const sessions = await provider.search({ q: 'hello', sessionIds: ['s1'] });
     expect(sessions.hits.map(hit => hit.sessionId)).toEqual(['s1']);
     expect(sessions.hits[0].score).toBeUndefined();
+
+    // A key stored with an empty session list is unrestricted: it searches every session and keeps its score.
+    const everySession = await provider.search({ q: 'hello', sessionIds: [] });
+    expect(everySession.hits.map(hit => typeof hit.score)).toEqual(['number', 'number']);
   });
 
   it.each([0, 1])('returns no hits or count for an empty compiled chat scope at offset %s', async offset => {

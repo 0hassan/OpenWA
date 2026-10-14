@@ -338,8 +338,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
     this.applyFilters(where, params, q, 'm.', ph);
     // bm25 weighs a term by how many messages the whole index holds, so the value of a hit a caller
     // scoped to some sessions or chats may read still reflects the ones it may not. It keeps ordering the
-    // hits; only the value is withheld.
-    const score = q.chatIds === undefined && q.sessionIds === undefined ? 'rank' : 'NULL';
+    // hits; only the value is withheld. An empty session list is no restriction (applyFilters), an empty
+    // chat list is a restriction to nothing.
+    const scoped = q.chatIds !== undefined || (q.sessionIds?.length ?? 0) > 0;
+    const score = scoped ? 'NULL' : 'rank';
     const cols = `m."id", m."waMessageId" AS wa_message_id, m."sessionId" AS session_id, m."chatId" AS chat_id, m."from" AS "from", m."body", m."timestamp", m."type", m."direction", snippet(messages_fts, 0, '<mark>', '</mark>', '…', ${MAX_SNIPPET_WORDS}) AS snippet, ${score} AS score`;
     const sql = `SELECT ${cols} FROM messages_fts JOIN messages m ON m."rowid" = messages_fts."rowid" WHERE ${where.join(' AND ')} ORDER BY rank, m."timestamp" DESC, m."id" DESC LIMIT ${ph()} OFFSET ${ph()}`;
     params.push(limit, offset);
