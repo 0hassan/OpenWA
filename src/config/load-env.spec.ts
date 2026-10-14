@@ -48,6 +48,18 @@ describe('loadEnvironment', () => {
     }
   });
 
+  it('lets a dashboard-saved engine apply over the blank value a stock compose forwards', () => {
+    process.env.ENGINE_TYPE = '';
+    makeTempCwd({ 'data/.env.generated': 'ENGINE_TYPE=baileys\n' });
+
+    runLoader();
+
+    expect(process.env.ENGINE_TYPE).toBe('baileys');
+    // Not pinned: the host supplied nothing, so the Infrastructure page offers the setting for edit.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    expect((require('./env-precedence') as typeof import('./env-precedence')).isEnvPinned('ENGINE_TYPE')).toBe(false);
+  });
+
   it('loads REDIS_HOST from a .env file so it reaches the webhook worker connection', () => {
     delete process.env.REDIS_HOST;
     makeTempCwd({ '.env': 'REDIS_HOST=redis.internal\n', 'data/.env.generated': '' });

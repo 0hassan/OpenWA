@@ -146,6 +146,16 @@ describe('StorageService put/getFile containment is backend-agnostic', () => {
 
     fs.rmSync(baseDir, { recursive: true, force: true });
   });
+
+  it('deleteFile rejects an unsafe key before reaching the S3 backend', async () => {
+    const { service, baseDir } = makeLocalService();
+    const sendMock = s3Stub(service);
+
+    await expect(service.deleteFile('../evil')).rejects.toThrow(/unsafe storage key/);
+    expect(sendMock).not.toHaveBeenCalled();
+
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  });
 });
 
 describe('StorageService.openFile (the export read path)', () => {
