@@ -794,4 +794,128 @@ describe('BaileysEvents event RSVPs (event.response)', () => {
     expect(onMessageAck).toHaveBeenCalledTimes(1);
     expect(onEventResponse).not.toHaveBeenCalled();
   });
+
+  describe('which chat an RSVP may answer for', () => {
+    const otherGroup = '120363000000000002@g.us';
+    const storedIn =
+      (remoteJid: string, extra: Record<string, unknown> = {}) =>
+      () =>
+        Promise.resolve({
+          key: { id: 'EVT1', remoteJid, fromMe: false, ...extra },
+          message: { eventMessage: { name: 'Game night' } },
+        } as unknown as WAMessage);
+
+    it("drops an RSVP sent in another chat than its event's, which Baileys decrypts without comparing chats", async () => {
+      const onEventResponse = jest.fn();
+      const logger = createLogger('BaileysEventsSpec');
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => undefined);
+      const events = new BaileysEvents(
+        makeHost({ getOnEventResponse: () => onEventResponse, getStoredMessage: storedIn(otherGroup), logger }),
+      );
+
+      // The event lives in otherGroup; the default RSVP envelope arrived in `group`.
+      events.handleMessagesUpdate([
+        { key: { id: 'EVT1', remoteJid: otherGroup }, update: { eventResponses: [rsvp()] } },
+      ] as never);
+      await flush();
+
+      expect(onEventResponse).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports an RSVP whose stored event sits in the chat the answer arrived in', async () => {
+      const onEventResponse = jest.fn();
+      const events = new BaileysEvents(
+        makeHost({ getOnEventResponse: () => onEventResponse, getStoredMessage: storedIn(group) }),
+      );
+
+      events.handleMessagesUpdate([{ key: eventKey, update: { eventResponses: [rsvp()] } }] as never);
+      await flush();
+
+      expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ chatId: group, eventName: 'Game night' }));
+    });
+
+    it("reports a guest's 1:1 answer to the account's own event, kept in the guest's chat", async () => {
+      const onEventResponse = jest.fn();
+      const guest = '6282222222222@s.whatsapp.net';
+      const events = new BaileysEvents(
+        makeHost({ getOnEventResponse: () => onEventResponse, getStoredMessage: storedIn(guest, { fromMe: true }) }),
+      );
+
+      events.handleMessagesUpdate([
+        {
+          key: { id: 'EVT1', remoteJid: '6280000000000@s.whatsapp.net', fromMe: false },
+          update: {
+            eventResponses: [rsvp({ eventResponseMessageKey: { id: 'RSVP6', remoteJid: guest, fromMe: false } })],
+          },
+        },
+      ] as never);
+      await flush();
+
+      expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ chatId: guest, responderId: guest }));
+    });
+
+    it("compares a lid chat with its phone number once the key's pair is known", async () => {
+      const onEventResponse = jest.fn();
+      const lid = '99887766@lid';
+      const phone = '6282222222222@s.whatsapp.net';
+      let paired = false;
+      const events = new BaileysEvents(
+        makeHost({
+          getOnEventResponse: () => onEventResponse,
+          getStoredMessage: storedIn(phone, { fromMe: true }),
+          recordKeyLidMappings: () => {
+            paired = true;
+          },
+          toNeutralJid: jid => (paired && jid === lid ? phone : jid),
+        }),
+      );
+
+      events.handleMessagesUpdate([
+        {
+          key: { id: 'EVT1', remoteJid: '6280000000000@s.whatsapp.net', fromMe: false },
+          update: {
+            eventResponses: [
+              rsvp({ eventResponseMessageKey: { id: 'RSVP7', remoteJid: lid, remoteJidAlt: phone, fromMe: false } }),
+            ],
+          },
+        },
+      ] as never);
+      await flush();
+
+      expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ chatId: phone, responderId: phone }));
+    });
+  });
+
+  it("learns the RSVP key's lid and phone pair before naming the responder", async () => {
+    const onEventResponse = jest.fn();
+    const lid = '99887766@lid';
+    const phone = '6281111111111@s.whatsapp.net';
+    let paired = false;
+    const events = new BaileysEvents(
+      makeHost({
+        getOnEventResponse: () => onEventResponse,
+        recordKeyLidMappings: () => {
+          paired = true;
+        },
+        toNeutralJid: jid => (paired && jid === lid ? phone : jid),
+      }),
+    );
+
+    events.handleMessagesUpdate([
+      {
+        key: eventKey,
+        update: {
+          eventResponses: [
+            rsvp({
+              eventResponseMessageKey: { id: 'RSVP8', remoteJid: group, participant: lid, participantAlt: phone },
+            }),
+          ],
+        },
+      },
+    ] as never);
+    await flush();
+
+    expect(onEventResponse).toHaveBeenCalledWith(expect.objectContaining({ responderId: phone }));
+  });
 });

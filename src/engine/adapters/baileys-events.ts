@@ -933,6 +933,30 @@ export class BaileysEvents {
     const callback = this.host.getOnEventResponse();
     const envelope = rsvp.eventResponseMessageKey;
     if (!callback || !eventKey?.id || !eventKey.remoteJid || !envelope?.id) return;
+    // Learned before any id below is canonicalized, as an inbound message does, so a guest answering
+    // for the first time is not reported by lid once and by phone number afterwards.
+    this.host.recordKeyLidMappings(envelope);
+    // Baileys decrypts an RSVP against whichever stored event its creation key names and compares no
+    // chats, so a member of two groups can answer in one an event posted in the other. The answer is
+    // reported for the chat it arrived in, so one sent outside its event's chat is dropped, as an edit,
+    // revoke or reaction aimed at a message of another chat is. Fails open like those: a store that
+    // cannot be read, or ids that cannot be compared, report the RSVP as before.
+    const stored = await this.readStoredMessage(eventKey.id, 'reading the event an RSVP answers');
+    if (
+      stored &&
+      differentWaIds(
+        [stored.key.remoteJid, stored.key.remoteJidAlt],
+        [envelope.remoteJid, envelope.remoteJidAlt],
+        jid => this.host.toNeutralJid(jid),
+      )
+    ) {
+      this.host.logger.warn('Dropping an event response sent in a chat other than its event', {
+        msgId: eventKey.id,
+        responseMessageId: envelope.id,
+        remoteJid: envelope.remoteJid,
+      });
+      return;
+    }
     const fromMe = envelope.fromMe === true;
     // The creation key is the guest's view of the event (in a 1:1 chat its remoteJid is this
     // account), so the chat comes from the RSVP's own key, which Baileys has put on our side.
@@ -964,7 +988,6 @@ export class BaileysEvents {
         ...(known.pushName ? { pushName: known.pushName } : {}),
       };
     }
-    const stored = await this.readStoredMessage(eventKey.id, 'reading the event an RSVP answers');
     if (stored?.message) {
       const b = await this.host.loadLib();
       const name = b.normalizeMessageContent(stored.message)?.eventMessage?.name;
