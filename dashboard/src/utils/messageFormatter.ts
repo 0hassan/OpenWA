@@ -66,9 +66,12 @@ export function parseMessageBody(input: string): MessageNode[] {
     cursor = end;
   };
 
+  // The next triple backtick is searched for again only once the cursor has passed it: looking from
+  // the cursor on every turn scans the whole remainder each time when none follows.
+  let tripleStart = input.indexOf('```');
   while (cursor < input.length) {
     // Look for next ``` first (longer marker wins).
-    const tripleStart = input.indexOf('```', cursor);
+    if (tripleStart !== -1 && tripleStart < cursor) tripleStart = input.indexOf('```', cursor);
     const singleStart = findSingleBacktick(input, cursor);
 
     let nextCode: 'triple' | 'single' | null = null;
