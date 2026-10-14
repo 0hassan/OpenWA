@@ -1165,7 +1165,8 @@
   position: absolute;
   bottom: 100%;
   left: 50%;
-  transform: translateX(-50%) translateY(-6px);
+  /* --popover-shift is set when it opens, by the amount it would run past the pane (ChatThread). */
+  transform: translateX(calc(-50% + var(--popover-shift, 0px))) translateY(-6px);
   background: var(--bg-white);
   border: 1px solid var(--border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -1182,7 +1183,7 @@
 .chats-page .message-bubble-wrapper.outgoing .reaction-quick-popover {
   left: auto;
   inset-inline-end: 0;
-  transform: translateY(-6px);
+  transform: translateX(var(--popover-shift, 0px)) translateY(-6px);
 }
 
 .chats-page .reaction-quick-popover::after {

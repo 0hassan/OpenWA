@@ -6,6 +6,7 @@ import {
   useState,
   type FocusEvent,
   type KeyboardEvent,
+  type SyntheticEvent,
   type RefObject,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -293,6 +294,23 @@ function ChatThread({
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => el.removeEventListener('scroll', onScroll);
   });
+
+  // The reaction popover is centred on its icon, and the icon of a short bubble is a few pixels from the pane's
+  // edge, so the emoji nearest the edge would be clipped and out of the pointer's reach. When it opens it is
+  // measured against the pane and shifted back inside by the amount it runs over (see Chats.css).
+  const fitReactionPopover = useCallback(
+    (event: SyntheticEvent<HTMLDivElement>) => {
+      const popover = event.currentTarget.querySelector<HTMLElement>('.reaction-quick-popover');
+      const pane = messagesContainerRef.current;
+      if (!popover || !pane) return;
+      popover.style.removeProperty('--popover-shift');
+      const at = popover.getBoundingClientRect();
+      const edge = pane.getBoundingClientRect();
+      const shift = at.left < edge.left ? edge.left - at.left : at.right > edge.right ? edge.right - at.right : 0;
+      if (shift !== 0) popover.style.setProperty('--popover-shift', `${Math.round(shift)}px`);
+    },
+    [messagesContainerRef],
+  );
 
   const handleJumpToBottom = useCallback(() => {
     const el = messagesContainerRef.current;
@@ -698,7 +716,11 @@ function ChatThread({
                       <CornerUpLeft size={14} />
                     </button>
 
-                    <div className="reaction-trigger-wrapper">
+                    <div
+                      className="reaction-trigger-wrapper"
+                      onMouseEnter={fitReactionPopover}
+                      onFocus={fitReactionPopover}
+                    >
                       <button type="button" className="action-btn reaction-btn" title={t('chats.actions.react')}>
                         <Smile size={14} />
                       </button>

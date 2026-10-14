@@ -868,7 +868,34 @@ test('the reaction popover of an own message grows from the end of its icon, not
     /\.chats-page \.message-bubble-wrapper\.outgoing \.reaction-quick-popover \{([^}]*)\}/.exec(css)?.[1] ?? '';
   assert.match(rule, /inset-inline-end:\s*0;/);
   assert.match(rule, /left:\s*auto;/);
-  assert.doesNotMatch(rule, /translateX/);
+  // No centring on the icon: whatever shift it carries is the one set when it opens.
+  assert.doesNotMatch(rule, /-50%/);
+});
+
+// jsdom has no layout, so the rectangles are given: a popover that opens 30 px past the start edge of the
+// thread is shifted back by 30 px, one inside it is left alone, and the shift is measured again each time.
+test('the reaction popover is shifted back inside the thread when it opens past an edge', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const wrapper = bubblesOf(container)[0].querySelector<HTMLElement>('.reaction-trigger-wrapper');
+  const popover = wrapper?.querySelector<HTMLElement>('.reaction-quick-popover');
+  assert.ok(wrapper && popover);
+  const rect = (left: number, right: number) => () =>
+    ({ left, right, top: 0, bottom: 0, width: right - left }) as DOMRect;
+  thread.getBoundingClientRect = rect(100, 700);
+
+  popover.getBoundingClientRect = rect(70, 278);
+  rtl.fireEvent.mouseEnter(wrapper);
+  assert.equal(popover.style.getPropertyValue('--popover-shift'), '30px');
+
+  popover.getBoundingClientRect = rect(500, 708);
+  rtl.fireEvent.mouseEnter(wrapper);
+  assert.equal(popover.style.getPropertyValue('--popover-shift'), '-8px');
+
+  popover.getBoundingClientRect = rect(300, 508);
+  rtl.fireEvent.mouseEnter(wrapper);
+  assert.equal(popover.style.getPropertyValue('--popover-shift'), '');
 });
 
 test('the scroll-to-bottom button is the last child of the scroller and jumps without animating', async () => {
