@@ -66,7 +66,7 @@ updates:
       # The NestJS 12 line cannot be adopted yet. The peers no longer block it (the current
       # @bull-board/nestjs and @nestjs/throttler both admit ^12.0.0), but two in-repo blockers remain:
       # @nestjs/common@12 is ESM-only and neither jest lane can load it under the current transform
-      # config (271 @nestjs/common and 35 @nestjs/testing import sites), and @nestjs/swagger 12
+      # config (many source and spec files import @nestjs/common or @nestjs/testing), and @nestjs/swagger 12
       # spells nullability per document version, which moves the committed openapi.json snapshot
       # and cascades into check:contract-shapes across five SDK clients.
       #
