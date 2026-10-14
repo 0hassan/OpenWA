@@ -174,6 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `vitest` 2.1 to 5 in the JavaScript SDK tree, closing its dev-only advisories, and `typescript` 5.9 to 7. Its unit tests now need Node 22.12+; the published package still supports Node 18.
 - `@modelcontextprotocol/sdk` 1.30.0 to 1.32.1, closing a high-severity advisory in its OAuth client (GHSA-6qxp-vccf-f47h). It ships in the runtime tree, which uses only the server side.
 - `sharp` ^0.35.4 to ^0.35.5, closing a high-severity advisory in its bundled librsvg (GHSA-wq5f-xc86-pv6w). It ships in the runtime tree.
+- `@nestjs/*` 11.2.5 to 11.2.7: the WebSocket adapter logs a reply it cannot serialize instead of ending the process, and a plugin upload under an unexpected field name answers `400` instead of `500`.
 - `shell-quote` override raised from ^1.10.0 to ^1.11.0, closing a critical command-injection advisory in `quote()` (GHSA-pqg4-j6r4-53mv). It reaches the root tree only through `concurrently`, so it is dev-only.
 - `music-metadata` 11.13.0 to 11.16.1, the parser Baileys uses to read an outgoing audio file's duration. It closes two advisories in which a crafted audio file could abort the process or exhaust memory (GHSA-5gfj-9q3v-qfp3, GHSA-8j4c-6x6g-rq3j).
 - `proxy-addr` 2.0.7 to 2.0.8, closing a critical advisory in IPv4-mapped IPv6 trust-subnet matching (GHSA-jqcg-44mw-7w3h). It ships through `express`, which OpenWA runs with `trust proxy` off, so no OpenWA behavior changes.
