@@ -36,10 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A status post the engine refuses is logged with its session and type, as a failed chat send already is.
 - Storage import abort messages name the `STORAGE_IMPORT_MAX_BYTES` or `STORAGE_IMPORT_MAX_ENTRIES` setting that stopped them.
 - CI and the weekly security scan run `npm audit` over the JavaScript SDK, and Dependabot watches its lockfile.
-- The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, because some accounts reject a non-standard name on phone-number pairing (#1857, thanks @yoosufhaffejee).
+- The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, because some accounts reject a non-standard name on phone-number pairing (#1857, thanks @yoosufhaffejee; reported in #1471 and #1666, thanks @ImPabl0 and @Muhammad-Suban).
 - The `/events` WebSocket echoes a `requestId` only when it is a string of at most 128 characters; any other value is dropped from the reply.
 - A `/events` WebSocket `unsubscribe` whose `sessionId` is neither `*` nor a session id of at most 128 letters, digits and hyphens answers `INVALID_SESSION`, as `subscribe` does.
 - The Baileys engine refuses SVG input to its image decoder, so a sticker, profile picture or group picture sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
+- ffmpeg runs with only `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` from the gateway's environment, so no secret reaches it or a wrapper script behind `FFMPEG_PATH`.
+- The release workflow keeps its staging image when a gate fails on a good build, so a re-run of the failed jobs finds it; an abandoned release leaves one stray tag.
+- The PHP SDK release pushes its tag with git hooks disabled.
+- Dependabot watches the Python, Java, PHP and Go SDK manifests.
 
 ### Fixed
 
@@ -87,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse bulk batches once shutdown begins, and answer `503` for a batch saved during shutdown instead of sending it.
 - Stop in-flight webhook replay, ingress replay and pending-message sweeps at shutdown, waiting a bounded time for a replay in hand.
 - Close queue workers before plugins shut down, waiting up to 10 s for running jobs and then abandoning a close still pending, so no new job is taken against stopped plugins and a stalled close cannot hold up the database close.
-- Answer new HTTP requests other than health probes with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`; a Socket.IO handshake is still admitted until the server closes.
+- Answer new requests with `503` once teardown begins after SIGTERM, SIGINT or `POST /api/infra/restart`, except health probes, the dashboard's HTML pages and CORS preflights; a Socket.IO handshake is still admitted until the server closes.
 - Disable plugins in parallel at shutdown, capping the whole plugin phase, including waits for enables in progress, at 10 s.
 - Exit with status 1 when teardown runs 67 s past the shutdown delay, so a stalled close no longer runs into the kill deadline or hangs `POST /api/infra/restart`.
 - Destroy open HTTP connections and WebSocket clients when the server closes at shutdown, so an open request cannot hold up the database close.
@@ -111,8 +115,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clear revoked Baileys history messages from storage, previews, quoted replies, and plugin indexes.
 - Preserve pending message mutations when REST storage wins an own-send echo.
 - Refresh Baileys pairing secrets and prevent stale QR renders during linking.
-- Upgrade proxy-addr to 2.0.8 (GHSA-jqcg-44mw-7w3h, critical) to correct IPv4-mapped IPv6 proxy trust matching.
-- Upgrade source-map-js to 1.2.2 to validate indexed source-map offsets.
 - Fix Baileys first-contact addresses and reject phone numbers reported as unregistered before sending.
 - Stop a reaction from overwriting metadata written to the same message concurrently.
 - Keep sent media when merging onto an echo row fails.
@@ -125,12 +127,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drop a Baileys edit, revoke or reaction that the stored message proves foreign (another chat, or a one-to-one change by the other party), also when the engine's own message store no longer holds the original.
 - Name who reacted in a Baileys 1:1 reaction, whose sender id came out empty so the two parties overwrote each other's reaction, and flag a 1:1 message from a lid-only sender as `isLidSender`.
 - Read the duration of an outgoing Baileys audio file in a separate process and a voice note's waveform through ffmpeg, status voice notes included, so a crafted file can no longer abort or exhaust the gateway.
-- Bound `GET /api/search` to 1000 characters and 32 words, punctuation counted as a separator and each symbol or emoji as a word, and run a repeated word once, so one request can no longer hold the event loop on SQLite for seconds.
+- Bound `GET /api/search` to 1000 characters and 32 words, punctuation counted as a separator and each symbol or emoji as a word, and run a whitespace-separated word said again once, so one request can no longer hold the event loop on SQLite for seconds.
 - Print the startup banner's API Docs URL only when Swagger is served, so a production boot no longer points at a `404`.
 - Decode numeric and common named character references in a Baileys link preview's title and description, so `&#8217;` and `&eacute;` no longer reach the recipient as written.
 - Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach, and have the patcher refuse such a tree, whichever file the interrupted install stopped at, instead of reporting version skew and leaving `.rej` files.
 - Handle an engine disconnect again when the session row read fails, so the session reconnects instead of staying registered with no reconnect armed.
 - Show the error a sandboxed plugin's worker threw before it died in the plugin's status and the log, instead of only its exit code.
+- Exit with status 1 when a failed boot's teardown stalls, where the process exited 0 once nothing else held the event loop open.
+- Fail the Docker availability calls after 10 s, so a daemon or socket proxy that accepts the connection and never answers no longer holds boot and every status poll.
+- Answer `400` from `PUT /api/infra/config` for a database or Redis port outside 1-65535 or a negative or fractional pool size, which the next boot refused, and store a blank host or user as its default.
+- Load a media conversion's input inside the ffmpeg concurrency gate, so parallel conversions by URL no longer hold every download in memory before the surplus is refused with `503`.
+- Keep a failed release of the session claims at shutdown from skipping the remaining shutdown steps; the claims lapse with their lease.
+- Stop a unique-constraint conflict on a webhook outbox, conversation mapping, status, template, bulk batch or message insert from rolling back other writes on SQLite's shared connection.
+- Show the media of a contact's statuses in turns and retry a rate refusal, so the newest items no longer read "Media unavailable".
+- Show an API key's name as text in its delete and revoke confirmation, where a name with a styled tag took the dashboard to its error screen.
+- Keep the dashboard's QR and pairing dialog open when its status read fails transiently, instead of closing it mid-scan.
+- Stop a dashboard backup export or media download answered after sign-out from saving its file.
+- Parse a dashboard message made of many code spans in linear time and render a body over 4096 characters without links, so one long message no longer freezes the tab for seconds.
+- Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`, a `timeout` of 0 or infinity means no timeout, and a negative, NaN or non-number raises `ValueError`.
+- Python SDK (next SDK release after 0.5.1): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
+- JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key.
+- Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`, a key outside visible ASCII is refused when the client is built without being repeated, and a logged `HttpRequestData` shows neither the key nor the body.
+- Go SDK (next SDK release after 0.5.1): `WithIdempotencyKey` sends the header only on the twelve routes that honor it, so `net/http` no longer sends another request again after a dropped connection, and an error answer from a proxy reads its own `message` or the status text.
+- Every SDK package ships the MIT license text from the next SDK release after 0.5.1.
 
 ### Documentation
 
@@ -150,6 +169,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sharp` ^0.35.4 to ^0.35.5, closing a high-severity advisory in its bundled librsvg (GHSA-wq5f-xc86-pv6w). It ships in the runtime tree.
 - `shell-quote` override raised from ^1.10.0 to ^1.11.0, closing a critical command-injection advisory in `quote()` (GHSA-pqg4-j6r4-53mv). It reaches the root tree only through `concurrently`, so it is dev-only.
 - `music-metadata` 11.13.0 to 11.16.1, the parser Baileys uses to read an outgoing audio file's duration. It closes two advisories in which a crafted audio file could abort the process or exhaust memory (GHSA-5gfj-9q3v-qfp3, GHSA-8j4c-6x6g-rq3j).
+- `proxy-addr` 2.0.7 to 2.0.8, closing a critical advisory in IPv4-mapped IPv6 trust-subnet matching (GHSA-jqcg-44mw-7w3h). It ships through `express`, which OpenWA runs with `trust proxy` off, so no OpenWA behavior changes.
+- `source-map-js` 1.2.1 to 1.2.2 in the dashboard tree, validating indexed source-map offsets. It is dev-only.
 
 ### Upgrade notes (behavior changes)
 
@@ -164,22 +185,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
 - With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
-- Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working on the REST routes, but over `/events` a subscribe that would hold more than 4096 rooms (the subscribed events times the key's chat ids, two per phone number) is refused with `TOO_MANY_SUBSCRIPTIONS`, so shorten it.
-- `GET /api/search` answers `400` for a `q` over 1000 characters or with more than 32 words (punctuation separates words and each symbol or emoji is a word); a repeated word counts once.
+- ⚠️ **Breaking (API).** Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working on the REST routes, but over `/events` a subscribe that would hold more than 4096 rooms (the subscribed events times the key's chat ids, two per phone number) is refused with `TOO_MANY_SUBSCRIPTIONS`, so shorten it.
+- ⚠️ **Breaking (API).** `GET /api/search` answers `400` for a `q` over 1000 characters or with more than 32 words (punctuation separates words and each symbol or emoji is a word); a whitespace-separated word said again counts once.
 - On SQLite, `GET /api/search` leaves `score` out of the hits of a key restricted to sessions or chats, because it is computed over the whole index; the hits stay in relevance order.
 - Without an ffmpeg binary (`FFMPEG_PATH`), a Baileys voice note goes out with flat waveform bars instead of its real ones; the official image ships ffmpeg.
 - With `DATABASE_SSL=true`, the PostgreSQL certificate is now verified against `DATABASE_HOST` even when it is an IP address (`pg` 8.23.1). A certificate that names only `localhost` stops matching a connection by IP: use the certificate's DNS name as the host or add the IP to its subject alternative names. `DATABASE_SSL_REJECT_UNAUTHORIZED=false` remains the escape hatch.
 - The first boot builds three indexes on `messages` (`IDX_messages_session_timestamp_id`, `IDX_messages_session_chat_timestamp_id` and `IDX_messages_session_direction_timestamp_id`) not concurrently, and the table with its indexes grows by about 240 MB per million messages. On PostgreSQL writes to that table wait until the boot migrations commit, after all three builds, and the Helm chart's startup probe (about 295 s) restarts a pod whose boot outlasts it, so on a large table run the migrations first (migration guide, section 14.5).
-- Baileys answers `400` for an animated image of more than 500 frames that it has to convert to WebP; an animated WebP is sent unchanged.
-- Baileys answers `400` for an `image/svg+xml` sticker, profile picture or group picture, which 0.24.0 accepted; convert it to PNG or WebP before sending.
+- ⚠️ **Breaking (API).** Baileys answers `400` for an animated image of more than 500 frames that it has to convert to WebP; an animated WebP is sent unchanged.
+- ⚠️ **Breaking (API).** Baileys answers `400` for an `image/svg+xml` sticker, profile picture or group picture, which 0.24.0 accepted; convert it to PNG or WebP before sending.
 - New Baileys pairings show `Ubuntu` instead of `OpenWA` as the device name in Linked Devices; set `BAILEYS_BROWSER_NAME=OpenWA` to keep the old name. Linked sessions are unaffected.
 - `backup.sh` and `restore.sh` exit with status 2 when `./.env` or `.env.generated` sets a key in a form they cannot parse, or exists and the running user cannot read it; fix the line or the permissions, or pass the key in the environment.
 - With `DATABASE_SSL=true`, `backup.sh` now fails against a PostgreSQL server whose certificate the app would reject; trust a private CA through `NODE_EXTRA_CA_CERTS` or `PGSSLROOTCERT`, and give `DATABASE_URL` the host name the certificate carries or set `PGSSLMODE`.
-- Baileys answers `400` for a phone number WhatsApp reports as unregistered, where it answered `201`, and `503` when the recipient lookup gets no answer; every send to a phone number without a known LID now makes one lookup first.
-- `vote-poll` on whatsapp-web.js answers `400` `POLL_OPTION_NOT_FOUND` when none of the option texts match, where it answered `200` and cleared the vote; an empty `options` list still clears it.
-- Once teardown begins, every HTTP request except `/api/health` and `/api/health/*` answers `503` with `Connection: close`, `GET /api/infra/health` included, while a new `/events` handshake is still admitted until the server closes; probe `/api/health/live` for a check that survives teardown.
+- ⚠️ **Breaking (API).** Baileys answers `400` for a phone number WhatsApp reports as unregistered, where it answered `201`, and `503` when the recipient lookup gets no answer; every send to a phone number without a known LID now makes one lookup first.
+- ⚠️ **Breaking (API).** `vote-poll` on whatsapp-web.js answers `400` `POLL_OPTION_NOT_FOUND` when none of the option texts match, where it answered `200` and cleared the vote; an empty `options` list still clears it.
+- ⚠️ **Breaking (API).** Once teardown begins, every request except `/api/health`, `/api/health/*`, the dashboard's HTML pages and CORS preflights answers `503` with `Connection: close`, `GET /api/infra/health` included, while a new `/events` handshake is still admitted until the server closes; probe `/api/health/live` for a check that survives teardown.
 - A compose file or pod spec of your own that drops all capabilities and starts the container as root must add `KILL` to the `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` that 0.24.0 shipped, or a stop never reaches the app: it runs out the grace period and exits `137`.
 - Rolling back to 0.24.0 while webhook outbox rows are in state `queued` strands them: 0.24.0 never replays that state and prunes it after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). The upgrade also deletes duplicate terminal `webhook_delivery_failures` rows, which a rollback does not restore.
+- ⚠️ **Breaking (API).** `PUT /api/infra/config` answers `400` for a database or Redis port outside 1-65535 and a negative or fractional pool size, which it used to store and the next boot refused.
+- An `FFMPEG_PATH` wrapper script that reads an environment variable outside `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` no longer sees it; set what it needs inside the script.
 
 ## [0.24.0] - 2026-10-03
 
