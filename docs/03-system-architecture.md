@@ -923,6 +923,7 @@ export interface EngineEventCallbacks {
   onMessageRevoked?: (message: RevokedMessage) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
+  onEventResponse?: (event: EventResponseEvent) => void; // an RSVP to a WhatsApp event; Baileys only
   onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
   onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
