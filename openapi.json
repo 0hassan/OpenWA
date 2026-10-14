@@ -11336,7 +11336,7 @@
             }
           },
           "400": {
-            "description": "The id does not name a group, the session is not active, neither url nor base64 was supplied, or the url answers non-2xx, times out or cannot be reached",
+            "description": "The id does not name a group, the session is not active, neither url nor base64 was supplied, the url answers non-2xx, times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11933,7 +11933,7 @@
             }
           },
           "400": {
-            "description": "Neither url nor base64 provided, base64 without mimetype, session is not started, or the url answers non-2xx, times out or cannot be reached",
+            "description": "Neither url nor base64 provided, base64 without mimetype, session is not started, the url answers non-2xx, times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG)",
             "content": {
               "application/json": {
                 "schema": {

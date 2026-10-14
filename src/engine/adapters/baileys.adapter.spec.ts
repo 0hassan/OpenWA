@@ -242,6 +242,16 @@ const newAdapter = (): BaileysAdapter =>
 
 const noopCallbacks = (over: Partial<EngineEventCallbacks> = {}): EngineEventCallbacks => over;
 
+// A real 1x1 PNG, and a small SVG: the picture writes read the header of what they upload, so bytes that
+// are no image are refused before they reach the socket.
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const SVG_BYTES = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>',
+);
+
 /**
  * Every text send now carries send-options, because that is how the SSRF-safe preview generator
  * replaces the library's own (see safe-link-preview.ts). Matching on the shape rather than
@@ -5270,7 +5280,7 @@ describe('BaileysAdapter store-backed ops', () => {
 });
 
 describe('BaileysAdapter group management', () => {
-  const PNG_INPUT = { mimetype: 'image/png', data: 'QUJD' };
+  const PNG_INPUT = { mimetype: 'image/png', data: PNG_BYTES.toString('base64') };
   const META = {
     id: '123-456@g.us',
     subject: 'G',
@@ -5818,8 +5828,18 @@ describe('BaileysAdapter group management', () => {
     // fakeSock.user.id is '628999:1@s.whatsapp.net' (see beforeEach) — the own JID the adapter
     // normalizes the same way as everywhere else.
     const adapter = await ready();
-    await adapter.setProfilePicture({ mimetype: 'image/png', data: Buffer.from('IMG').toString('base64') });
-    expect(fakeSock.updateProfilePicture).toHaveBeenCalledWith('628999@s.whatsapp.net', Buffer.from('IMG'));
+    await adapter.setProfilePicture({ mimetype: 'image/png', data: PNG_BYTES.toString('base64') });
+    expect(fakeSock.updateProfilePicture).toHaveBeenCalledWith('628999@s.whatsapp.net', PNG_BYTES);
+  });
+
+  // SVG decoding is blocked process-wide (see blockSvgDecoding), so the library's own conversion rejects
+  // an SVG with an error nothing maps, which answered 500 for a file the client chose.
+  it('setProfilePicture refuses an SVG with a 400 and uploads nothing', async () => {
+    const adapter = await ready();
+    await expect(
+      adapter.setProfilePicture({ mimetype: 'image/svg+xml', data: SVG_BYTES.toString('base64') }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fakeSock.updateProfilePicture).not.toHaveBeenCalled();
   });
 
   it('setProfilePicture throws when the own JID is not known', async () => {
@@ -7101,8 +7121,16 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
 
   it('setGroupPicture targets the GROUP jid, not the own account', async () => {
     const adapter = await readyWithMessage();
-    await adapter.setGroupPicture('120363@g.us', { mimetype: 'image/png', data: 'QUJD' });
-    expect(fakeSock.updateProfilePicture).toHaveBeenCalledWith('120363@g.us', expect.any(Buffer));
+    await adapter.setGroupPicture('120363@g.us', { mimetype: 'image/png', data: PNG_BYTES.toString('base64') });
+    expect(fakeSock.updateProfilePicture).toHaveBeenCalledWith('120363@g.us', PNG_BYTES);
+  });
+
+  it('setGroupPicture refuses an SVG with a 400 and uploads nothing', async () => {
+    const adapter = await readyWithMessage();
+    await expect(
+      adapter.setGroupPicture('120363@g.us', { mimetype: 'image/svg+xml', data: SVG_BYTES.toString('base64') }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(fakeSock.updateProfilePicture).not.toHaveBeenCalled();
   });
 
   it('deleteGroupPicture removes by the GROUP jid', async () => {

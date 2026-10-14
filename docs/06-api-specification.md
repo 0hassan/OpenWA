@@ -2893,7 +2893,7 @@ Set the group's picture. The account must be a group admin.
 
 **Response** `200` — `{ "success": true, "message": "Group picture updated" }`
 
-**Errors:** `400` the id does not name a group, the session is not active, neither `url` nor `base64` was supplied, or the `url` answers non-2xx, times out or cannot be reached · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `413` base64 or downloaded media over the media cap (see §6.3) · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` the id does not name a group, the session is not active, neither `url` nor `base64` was supplied, the `url` answers non-2xx, times out or cannot be reached, or the image cannot be read (Baileys refuses an SVG) · `401` missing/invalid API key · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` the session is not connected (engine exists but is not `ready`) · `413` base64 or downloaded media over the media cap (see §6.3) · `503` a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable), or WhatsApp did not answer within the request budget — the change may or may not have been applied; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### DELETE /api/sessions/:sessionId/groups/:groupId/picture
 
@@ -6615,7 +6615,7 @@ or
 
 **Response** `200` — `{ "success": true, "message": "Profile picture updated" }`
 
-**Errors:** `400` neither `url` nor `base64` provided / base64 without `mimetype` / a `url` that answers non-2xx, times out or cannot be reached · `401` · `403` the whatsapp-web.js engine refused the change (the Baileys engine has no acceptance signal and answers `200`) · `409` conflict or engine not ready (retryable) · `413` base64 or downloaded image over the media cap (see §6.3) · `503` session not ready, dependency unavailable, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable)
+**Errors:** `400` neither `url` nor `base64` provided / base64 without `mimetype` / a `url` that answers non-2xx, times out or cannot be reached / an image that cannot be read (Baileys refuses an SVG) · `401` · `403` the whatsapp-web.js engine refused the change (the Baileys engine has no acceptance signal and answers `200`) · `409` conflict or engine not ready (retryable) · `413` base64 or downloaded image over the media cap (see §6.3) · `503` session not ready, dependency unavailable, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault (retryable)
 
 #### DELETE /api/sessions/:sessionId/profile/picture
 

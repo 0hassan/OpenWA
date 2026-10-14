@@ -156,6 +156,27 @@ export async function blockSvgDecoding(): Promise<void> {
 }
 
 /**
+ * Refuse a picture the image decoder cannot read, before Baileys hands it to that decoder: its own
+ * conversion rejects such a file with an error nothing maps, which reached the client as a 500. An SVG is
+ * one since blockSvgDecoding, and so is a file that is no image at all. Only the header is read. A sharp
+ * that cannot load is left to the library, which reports that itself.
+ */
+export async function assertReadableImage(data: Buffer): Promise<void> {
+  const sharp = await import('sharp').then(
+    module => module.default,
+    () => undefined,
+  );
+  if (!sharp) return;
+  try {
+    await sharp(data).metadata();
+  } catch (error) {
+    throw new BadRequestException(
+      `The picture could not be read as an image (SVG is not accepted): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
  * Animation frames a sticker conversion accepts: a 10-second animation at 50 fps. Each frame is
  * resized and encoded at 512x512 (a few ms apiece), so cost is linear in the frame count, and a
  * GIF of 1x1 frames packs tens of thousands of them into well under a megabyte.
