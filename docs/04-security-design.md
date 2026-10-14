@@ -83,15 +83,17 @@ three scoping dimensions enforced by `ApiKeyGuard`.
 A route declares its minimum level with `@RequireRole(...)`; a key passes when its role ranks at or
 above that level (`AuthService.hasPermission`). A key below it is rejected with `403 Forbidden`.
 
-| Scope     | Field             | Effect                                                                                                                                                                                                       |
-| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Source IP | `allowedIps`      | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                                                                 |
-| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a request carrying any other session id is rejected with `403`                                                                                                     |
-| Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it |
+| Scope     | Field             | Effect                                                                                                                                                                                                              |
+| --------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source IP | `allowedIps`      | Empty/absent = unrestricted; non-empty = fail-closed IP whitelist (see §4.3)                                                                                                                                        |
+| Sessions  | `allowedSessions` | Empty/absent = every session; non-empty = a session named in the route path outside the list is rejected with `403`, and a `sessionId` filter in the query or body is narrowed to the list (an empty result, `200`) |
+| Chats     | `allowedChats`    | Empty/absent = every chat; non-empty = default-deny: only chat-scoped routes, MCP tools and events, only for a listed chat, else `403` (an event outside the list is never delivered); Bull Board refuses it        |
 
 The key-lifecycle routes (`/api/auth/api-keys`) are additionally fenced with `@RequireUnscopedKey()`:
 a session-scoped key is refused there whatever its role, so it cannot mint or widen credentials
-beyond its own confinement.
+beyond its own confinement. The same fence covers the other routes that act on the whole deployment:
+every `/api/infra` route, the plugin routes (except the per-session config override), `GET /api/settings`,
+`GET /api/stats/overview` and `/messages`, `POST /api/sessions` and the proxy setter. `SECURITY.md` lists them.
 
 A session's egress proxy (`proxyUrl` on `POST /api/sessions`, `PATCH /api/sessions/:sessionId/proxy`)
 is set only by an unscoped `admin` key; any other key gets `403`. The proxy is trusted egress chosen by
@@ -654,7 +656,7 @@ flowchart TB
 | Plugin instance secrets (`plugin_instances.secret`, `verifyToken`, `config`) | Database: **plaintext**; `secret`, `verifyToken` and secret-marked config are masked on API reads, but `GET /api/infra/export-data` includes them verbatim        | Per instance (regenerate-secret)                                   |
 | Session auth state                                                           | File system (data volume) — **not encrypted**                                                                                                                     | Never (tied to the WA session)                                     |
 
-> `API_MASTER_KEY` only seeds the first ADMIN key, and is read only while the key table is empty. Changing it later has no effect: the new value never authenticates and the seeded key stays valid. Rotate by minting a new ADMIN key with `POST /api/auth/api-keys` and revoking the seeded `Default Admin Key`.
+> `API_MASTER_KEY` only seeds the first ADMIN key, and is read only while the key table is empty. Changing it later has no effect: the new value never authenticates and the seeded key stays valid. A value that is set must still be at least 32 characters and not a known default on every production boot, or the boot refuses to start; unset it after rotating. Rotate by minting a new ADMIN key with `POST /api/auth/api-keys` and revoking the seeded `Default Admin Key`.
 
 > There is no application `ENCRYPTION_KEY` — OpenWA does not encrypt data at rest (see §4.4). The rotation cadences above are operational recommendations, not enforced by the app.
 
@@ -777,7 +779,7 @@ npm audit --json > audit-report.json
 
 ```yaml
 # .github/dependabot.yml, root npm ecosystem only (the file also covers /dashboard,
-# /sdk/javascript, github-actions, docker and docker-compose). The comment above each
+# /sdk/javascript, /sdk/python, /sdk/java, /sdk/php, /sdk/go, github-actions, docker and docker-compose). The comment above each
 # ignore is omitted here.
 version: 2
 updates:

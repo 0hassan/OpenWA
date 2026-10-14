@@ -381,7 +381,7 @@ LOG_FORMAT=json
 # DATABASE_NAME=openwa
 # DATABASE_USERNAME=user
 # DATABASE_PASSWORD=pass
-# DATABASE_POOL_SIZE=20
+# DATABASE_POOL_SIZE=10
 # DATABASE_SSL=false
 
 # ===========================================

@@ -159,7 +159,8 @@ updates:
   # The other SDKs ship runtime dependencies to their consumers (httpx, guzzle, gson), and their
   # published ranges admit whatever is current, so an advisory in one of them is a PR here, not a
   # surprise in a user's lockfile. These PRs touch sdk/**, so SDK CI gates each one. The Go client
-  # depends on the standard library alone; its entry watches the toolchain directive.
+  # depends on the standard library alone and its go.mod has no require, so its entry keeps the
+  # one-entry-per-SDK rule and starts proposing updates once a dependency is added.
   - package-ecosystem: pip
     directory: /sdk/python
     schedule:

@@ -434,7 +434,8 @@ docker stats --no-stream
 #    copied live; stop the sessions first if a restore must not need re-pairing, and start them
 #    again in step 10
 docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
-docker cp openwa-api:/app/data/backups/. ./backups/
+docker cp openwa-api:/app/data/backups/. ./backups/ \
+  && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # the copy off the volume is the backup
 
 # Verify backup (backup.sh writes $BACKUP_DIR/openwa-backup-<timestamp>.tar.gz,
 # BACKUP_DIR defaults to ./backups — it creates no dated subdirectories)
@@ -520,7 +521,8 @@ curl -H "X-API-Key: $API_KEY" \
 export BACKUP_DIR="/backups/openwa"
 mkdir -p "$BACKUP_DIR"
 docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
-docker cp openwa-api:/app/data/backups/. "$BACKUP_DIR"/
+docker cp openwa-api:/app/data/backups/. "$BACKUP_DIR"/ \
+  && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # the copy off the volume is the backup
 
 # 3. Export the Data DB as JSON alongside the archive (admin key)
 curl -H "X-API-Key: $ADMIN_API_KEY" \
@@ -781,9 +783,11 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 >
 > ```bash
 > docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
-> docker cp openwa-api:/app/data/backups/. ./backups/
+> docker cp openwa-api:/app/data/backups/. ./backups/ \
+>   && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # do not let archives pile up on the volume
 > # Helm: kubectl exec <pod> -- env BACKUP_DIR=/app/data/backups ./scripts/backup.sh
 > #       kubectl cp <pod>:/app/data/backups ./backups
+> #       kubectl exec <pod> -- sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'
 > ```
 >
 > The script stages a full copy of the data in `TMPDIR` before archiving it. The compose file mounts

@@ -571,6 +571,9 @@ metadata:
     nginx.ingress.kubernetes.io/affinity: 'cookie'
     nginx.ingress.kubernetes.io/session-cookie-name: 'openwa-session'
     nginx.ingress.kubernetes.io/session-cookie-max-age: '172800'
+    # ingress-nginx refuses a request body over 1m by default, which base64 media sends exceed.
+    # Keep this at or above BODY_SIZE_LIMIT (25mb by default).
+    nginx.ingress.kubernetes.io/proxy-body-size: '25m'
 spec:
   ingressClassName: nginx
   rules:
@@ -597,6 +600,9 @@ already encodes the `replicaCount: 1` constraint below; prefer it over hand-appl
 raw manifests here stay for operators who do not use Helm.
 
 ```bash
+# Apply the namespace first: a directory is applied in file-name order, and the other files name it
+kubectl apply -f k8s/namespace.yaml
+
 # Apply all manifests
 kubectl apply -f k8s/
 

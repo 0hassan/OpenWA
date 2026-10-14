@@ -562,9 +562,10 @@ export function useStopSessionMutation() {
 }
 ```
 
-> **There is no `useSessionQr` polling hook.** QR codes are not fetched on a 30 s
-> `refetchInterval`. The Sessions page fetches the current QR imperatively via `sessionApi.getQR()`
-> and then receives fresh codes pushed over the WebSocket (`session.qr` events, see §17.6).
+> **There is no `useSessionQr` hook and no 30 s `refetchInterval`.** The Sessions page fetches the
+> current QR imperatively via `sessionApi.getQR()`, and `useSessionPairing` re-reads it with
+> `GET /sessions/:id/qr` every 5 s for as long as the QR modal is open; fresh codes are also pushed
+> over the WebSocket (`session.qr` events, see §17.6).
 
 ## 17.6 WebSocket Integration
 

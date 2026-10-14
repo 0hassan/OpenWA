@@ -1143,7 +1143,7 @@ flowchart TD
 **Solutions:**
 
 ```bash
-# Show migration status (executed + pending)
+# From a source checkout: show migration status (executed + pending)
 npm run migration:show
 
 # Run all pending migrations
@@ -1152,13 +1152,17 @@ npm run migration:run
 # Rollback last migration
 npm run migration:revert
 
+# Inside the released image, which has no ts-node, use the :prod variants against dist/
+docker compose run --rm openwa-api npm run migration:show:prod
+docker compose run --rm openwa-api npm run migration:run:prod
+
 # Schema is managed by migrations (there is no schema:sync)
 # The auth/audit DB has parallel :main variants, e.g.:
 npm run migration:run:main
 npm run migration:run:main:prod   # inside the released image
 ```
 
-**PostgreSQL crash-loop on boot after upgrade** — if logs show `column "id" is of type uuid but default expression is of type character varying` or `foreign key constraint ... cannot be implemented ... incompatible types: character varying and uuid`, the deployment was previously bootstrapped with `DATABASE_SYNCHRONIZE=true` (native `uuid` columns vs the migrations' `varchar`). A guard migration converts the columns automatically on the next boot; for large `messages` tables, run the migration against the stopped app (`npm run migration:run`) during a maintenance window. See [14.5 / 14.9 — PostgreSQL crash-loop after upgrading a `DATABASE_SYNCHRONIZE=true` deployment](./14-migration-guide.md). `DATABASE_SYNCHRONIZE=true` is unsupported on PostgreSQL for production.
+**PostgreSQL crash-loop on boot after upgrade** — if logs show `column "id" is of type uuid but default expression is of type character varying` or `foreign key constraint ... cannot be implemented ... incompatible types: character varying and uuid`, the deployment was previously bootstrapped with `DATABASE_SYNCHRONIZE=true` (native `uuid` columns vs the migrations' `varchar`). A guard migration converts the columns automatically on the next boot; for large `messages` tables, run the migration against the stopped app (`npm run migration:run` from a source checkout, `npm run migration:run:prod` in the image) during a maintenance window. See [14.5 / 14.9 — PostgreSQL crash-loop after upgrading a `DATABASE_SYNCHRONIZE=true` deployment](./14-migration-guide.md). `DATABASE_SYNCHRONIZE=true` is unsupported on PostgreSQL for production.
 
 ## 12.7 Docker Issues
 
@@ -1414,15 +1418,16 @@ Remember OpenWA is **single-port**: the Dashboard, REST API, and Socket.IO all s
 ```bash
 # Production compose, whose data is the openwa-data volume: back up inside the container, then copy
 # the archive off the volume. In crontab, for example every six hours:
-# 0 */6 * * * docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh && docker cp openwa-api:/app/data/backups/. /backups/openwa/
+# 0 */6 * * * docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh && docker cp openwa-api:/app/data/backups/. /backups/openwa/ && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'
 docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
-docker cp openwa-api:/app/data/backups/. /backups/openwa/
+docker cp openwa-api:/app/data/backups/. /backups/openwa/ \
+  && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'
 
 # Bare metal or docker-compose.dev.yml, whose data is ./data in the checkout:
 # 0 */6 * * * cd /path/to/openwa && BACKUP_DIR=/backups/openwa ./scripts/backup.sh
 ```
 
-The archives stay in `/app/data/backups` on the volume as well, so prune them there too.
+Once an archive is copied off, the last command removes it from `/app/data/backups`, so archives do not pile up on the volume.
 
 The shipped script also covers `main.sqlite`, the selected data store, whatsapp-web.js state,
 `BAILEYS_AUTH_DIR` (default `./data/baileys`), media, plugin packages/state, and generated secrets. Apply

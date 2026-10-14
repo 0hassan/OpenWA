@@ -221,7 +221,7 @@ interface MyPluginConfig {
 
 export default class MyAwesomePlugin implements IPlugin {
   async onLoad(ctx: PluginContext): Promise<void> {
-    ctx.logger.log('Plugin loaded', { version: ctx.manifest.version });
+    ctx.logger.log('Plugin loaded', { pluginId: ctx.pluginId });
 
     // Register a hook handler. Handlers receive a HookContext and return a HookResult.
     ctx.registerHook('message:received', async hookCtx => {
@@ -277,13 +277,13 @@ export interface IPlugin {
 
 export interface PluginContext {
   pluginId: string;
-  manifest: PluginManifest;
+  manifest: PluginManifest; // in-process (built-in) context only; a sandboxed plugin has none
 
   // Effective config for the firing session (per-session override merged over the base). A getter,
   // so it reflects live config edits; outside a hook it returns the base config.
   config: Record<string, unknown>;
 
-  hookManager: HookManager;
+  hookManager: HookManager; // in-process (built-in) context only; a sandboxed plugin registers through registerHook
   logger: PluginLogger; // log / debug / warn / error
   storage: PluginStorage; // get / set / delete / list — requires 'storage:use', scoped to this plugin
 
@@ -675,7 +675,8 @@ data) would declare `engine:read` and call `ctx.engine.getGroupInfo(...)` / `ctx
 ## 19.8 Plugin Management API
 
 `PluginsController` (`src/modules/plugins/plugins.controller.ts`) is mounted at `plugins` and **every
-route requires the `ADMIN` role** (`@RequireRole(ApiKeyRole.ADMIN)` — not a bare API-key guard). There
+route requires the `ADMIN` role** (`@RequireRole(ApiKeyRole.ADMIN)` — not a bare API-key guard) and an
+unscoped key (a session-scoped key is refused), except `PUT :id/config/:sessionId`. There
 is **no** `POST :id/reload` and **no** `GET :id/config`. Install is a multipart `.zip` upload (or by
 URL / catalog), not an npm/github source descriptor.
 
@@ -786,7 +787,8 @@ Two further checks apply on top of the permission:
   security boundary; the manifest half is static (editing config can't widen it).
 - **Network allowlist.** `ctx.net.fetch` additionally requires the target host to be on the plugin's
   **effective** allowlist: `manifest.net.allow` plus the https origin of every `net.allowConfigHosts` config key
-  that resolves to an https URL, taken across the base config **and** every per-session override. A host
+  that resolves to an https URL, taken across the base config, every per-session override **and** the config
+  of every enabled integration instance of the plugin. A host
   admitted only through `allowConfigHosts` is therefore allowed while absent from `net.allow`. The request
   always passes through the SSRF guard (which blocks internal IPs even for an allowlisted host).
 
