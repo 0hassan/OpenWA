@@ -168,20 +168,25 @@ describe('PluginUninstaller — uninstall', () => {
   });
 
   // A takeover the plugin held would keep every other plugin silent on that chat for good.
-  it('hands the takeovers of the plugin back before it removes anything', async () => {
+  it('hands the takeovers of the plugin back once it no longer runs, before it removes anything', async () => {
     const dir = writeUserPlugin('relay');
     seedEntry(storage, 'relay');
     const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
-    const onDisk: boolean[] = [];
-    const withRelease = makeUninstaller(config, storage, pluginsDir, () => {
-      onDisk.push(fs.existsSync(dir) && storage.getPluginEntry('relay') !== undefined);
+    const seen: Array<{ onDisk: boolean; running: boolean }> = [];
+    let withRelease!: ReturnType<typeof makeUninstaller>;
+    withRelease = makeUninstaller(config, storage, pluginsDir, () => {
+      seen.push({
+        onDisk: fs.existsSync(dir) && storage.getPluginEntry('relay') !== undefined,
+        running: withRelease.plugins.has('relay'),
+      });
       return Promise.resolve();
     });
     withRelease.plugins.set('relay', loadedUserPlugin('relay', dir));
 
     await withRelease.uninstaller.uninstallPlugin('relay');
 
-    expect(onDisk).toEqual([true]);
+    // Still running at the release would let it take a chat over again before its worker ends.
+    expect(seen).toEqual([{ onDisk: true, running: false }]);
     expect(fs.existsSync(dir)).toBe(false);
   });
 
@@ -189,16 +194,24 @@ describe('PluginUninstaller — uninstall', () => {
     const dir = writeUserPlugin('relay');
     seedEntry(storage, 'relay');
     const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
-    const failing = makeUninstaller(config, storage, pluginsDir, () =>
-      Promise.reject(new Error('mapping store unavailable')),
+    let storeUp = false;
+    const flaky = makeUninstaller(config, storage, pluginsDir, () =>
+      storeUp ? Promise.resolve() : Promise.reject(new Error('mapping store unavailable')),
     );
-    failing.plugins.set('relay', loadedUserPlugin('relay', dir));
+    flaky.plugins.set('relay', loadedUserPlugin('relay', dir));
 
-    await expect(failing.uninstaller.uninstallPlugin('relay')).rejects.toThrow('mapping store unavailable');
+    await expect(flaky.uninstaller.uninstallPlugin('relay')).rejects.toThrow('mapping store unavailable');
 
+    // Nothing of the plugin was removed, though it no longer runs.
     expect(fs.existsSync(dir)).toBe(true);
     expect(storage.getPluginEntry('relay')).toBeDefined();
-    expect(failing.plugins.has('relay')).toBe(true);
+    expect(flaky.plugins.has('relay')).toBe(false);
+
+    // The repeat finds no runtime, retries the release and removes the plugin.
+    storeUp = true;
+    await flaky.uninstaller.uninstallPlugin('relay');
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(storage.getPluginEntry('relay')).toBeUndefined();
   });
 });
 
