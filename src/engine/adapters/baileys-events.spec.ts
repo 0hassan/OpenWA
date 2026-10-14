@@ -1156,6 +1156,24 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', fromMe: true }));
   });
 
+  it('applies an edit the account made from its phone as a plain protocol message, under its own id', async () => {
+    const stored = original({ key: { id: 'ORIG1', remoteJid: group, fromMe: true } });
+    const { events, onMessageEdited, recordMessageEdit } = setup({}, stored);
+    const plain = {
+      key: { id: 'ENV2', remoteJid: group, fromMe: true },
+      messageTimestamp: 1_786_000_100,
+      message: { protocolMessage: editPlain.protocolMessage },
+    } as unknown as WAMessage;
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [plain] });
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'ORIG1', body: 'new text', fromMe: true }),
+    );
+    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text');
+  });
+
   it('reads an edit of a message that is still being processed, with the secret that copy carries', async () => {
     // The original's repeat-delivery check never settles until released, which keeps it in flight; the
     // edit's own read of the store answers nothing.

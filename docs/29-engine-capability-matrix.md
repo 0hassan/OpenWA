@@ -990,7 +990,9 @@ adapter boundary — none silently stubs.
   chats, encrypted under the secret of the message it changes, which the library does not decrypt. The
   adapter reads them with the stored copy of that message (the session's message store, bounded by
   `BAILEYS_MESSAGE_STORE_LIMIT`), so an edit or reaction of a message the store no longer holds is not
-  delivered. whatsapp-web.js receives both already decrypted from WhatsApp Web.
+  delivered. A message the session sent is held the same way as one it received, and an edit the
+  account makes from its own phone is applied under the account's own id, plain or encrypted.
+  whatsapp-web.js receives both already decrypted from WhatsApp Web.
 - **`muteChat` addressing.** whatsapp-web.js resolves the chat before writing and answers `400` for a
   chatId it cannot resolve; Baileys writes the app-state patch without a lookup and answers `200` for
   a chat that does not exist. `pinChat` splits the same way.
