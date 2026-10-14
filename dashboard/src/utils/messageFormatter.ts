@@ -72,7 +72,9 @@ export function parseMessageBody(input: string): MessageNode[] {
   while (cursor < input.length) {
     // Look for next ``` first (longer marker wins).
     if (tripleStart !== -1 && tripleStart < cursor) tripleStart = input.indexOf('```', cursor);
-    const singleStart = findSingleBacktick(input, cursor);
+    // A single backtick only wins when it comes before the triple, so the search stops there: running
+    // on to the end of the body at every turn is quadratic in a message made of code blocks.
+    const singleStart = findSingleBacktick(input, cursor, tripleStart === -1 ? input.length : tripleStart);
 
     let nextCode: 'triple' | 'single' | null = null;
     let nextIdx = Infinity;
@@ -120,14 +122,14 @@ export function parseMessageBody(input: string): MessageNode[] {
 }
 
 /**
- * Find next single-backtick that is NOT part of a triple-backtick.
+ * Find next single-backtick, before `limit`, that is NOT part of a triple-backtick.
  * Returns -1 if none.
  */
-function findSingleBacktick(s: string, from: number): number {
+function findSingleBacktick(s: string, from: number, limit: number): number {
   let i = from;
-  while (i < s.length) {
+  while (i < limit) {
     const idx = s.indexOf('`', i);
-    if (idx === -1) return -1;
+    if (idx === -1 || idx >= limit) return -1;
     // Skip if part of a triple-backtick sequence.
     if (s.slice(idx, idx + 3) === '```') {
       i = idx + 3;

@@ -128,6 +128,20 @@ test('hostile input: code spans with no triple backtick after them do not rescan
     assert.ok(elapsed < 1000, `parsing ${evil.length} chars took ${Math.round(elapsed)} ms`);
     assert.ok(nodes.length > 0);
   }
+  // Nor do code blocks: each block used to be followed by a search for a single backtick that ran past
+  // every later block to the end of the body, which is quadratic in the number of blocks.
+  for (const evil of [
+    '```a``` '.repeat(8_000),
+    '`'.repeat(64_000),
+    '``` '.repeat(16_000),
+    '```a``` `b` '.repeat(5_000),
+  ]) {
+    const started = performance.now();
+    const nodes = parseMessageBody(evil);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 250, `parsing ${evil.length} chars took ${Math.round(elapsed)} ms`);
+    assert.ok(nodes.length > 0);
+  }
   // A triple backtick further on is still found once the spans in front of it are consumed.
   assert.deepEqual(parseMessageBody('`a` b ```c``` `d`'), [
     { type: 'code', value: 'a' },

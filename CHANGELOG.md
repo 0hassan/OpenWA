@@ -150,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show an API key's name as text in its delete and revoke confirmation, where a name with a styled tag took the dashboard to its error screen.
 - Keep the dashboard's QR and pairing dialog open when its status read fails transiently, instead of closing it mid-scan.
 - Stop a dashboard backup export or media download answered after sign-out from saving its file.
-- Parse a dashboard message made of many code spans in linear time and render a body over 4096 characters without links, so one long message no longer freezes the tab for seconds.
+- Parse a dashboard message made of many code spans or code blocks in linear time and render a body over 4096 characters without links, so one long message no longer freezes the tab for seconds.
 - Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`, a `timeout` of 0 or infinity means no timeout, and a negative, NaN or non-number raises `ValueError`.
 - Python SDK (next SDK release after 0.5.1): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
 - JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key.
