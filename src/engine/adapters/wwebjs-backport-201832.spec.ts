@@ -44,7 +44,7 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
   describe('gitApplyLeftTreeUntouched', () => {
     it.each([
       ['git never executed', { code: 'ENOENT' as const, status: undefined }],
-      ['a diff git could not parse', { status: 128, stderr: 'error: corrupt patch at line 7' }],
+      ['a diff git could not parse', { status: 128, stderr: 'error: corrupt patch at line 12' }],
       ['input git did not recognise', { status: 128, stderr: 'error: unrecognized input' }],
       ['a non-diff file', { status: 128, stderr: 'error: No valid patches in input (allow with "--allow-empty")' }],
       ['a bad invocation', { status: 128, stderr: 'usage: git apply [<options>] [<patch>...]' }],
@@ -125,7 +125,7 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     const injected = path.join(dir, 'src', 'util', 'Injected', 'Utils.js');
     const pristine = fs.readFileSync(injected, 'utf8');
     applyBackport(dir);
-    // `patch` writes in diff order and Injected/Utils.js is the LAST of the twelve files, one after
+    // `patch` writes in diff order and Injected/Utils.js is the LAST of the eleven files, one after
     // Message.js — which is what the stand-down check keys on. A run that died in that window leaves
     // exactly this tree: every structure constructor normalizes, so the tree reads as healthy, while the
     // browser-side normalizer every inbound message crosses never landed. Asserting only the structure
@@ -135,8 +135,8 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched[\s\S]*Injected\/Utils\.js/);
   });
 
-  // `patch` writes in diff order and Message.js is the 11th of 12 files, so a run that was killed usually
-  // stopped before it. Applying the diff again would reject the ten hunks that landed, leave their .rej
+  // `patch` writes in diff order and Message.js is the 10th of 11 files, so a run that was killed usually
+  // stopped before it. Applying the diff again would reject the nine hunks that landed, leave their .rej
   // files in the tree and call an interrupted install version skew.
   it('refuses a tree whose run stopped before Message.js, without touching it', () => {
     const dir = copyWwjs();
@@ -162,24 +162,24 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     expect(litter).toEqual([]);
   });
 
-  // index.d.ts is the FIRST file `patch` writes. No structure marker covers it, so a run that died right
-  // after it read as a pristine tree: the diff was applied again, its typings hunk rejected and the
-  // interrupted install reported as version skew with a .rej left behind.
+  // src/Client.js is the FIRST file `patch` writes, so a run that died right after it leaves every other
+  // file pristine. Its marker is a real one: the tree is refused, instead of the diff being applied again
+  // over the hunks of Client.js, which would reject them and call an interrupted install version skew.
   it('refuses a tree whose run stopped right after the first file, without touching it', () => {
     const done = copyWwjs();
     applyBackport(done);
     const dir = copyWwjs();
-    const typings = path.join(dir, 'index.d.ts');
-    fs.copyFileSync(path.join(done, 'index.d.ts'), typings);
-    const before = fs.readFileSync(typings, 'utf8');
+    const clientJs = path.join(dir, 'src', 'Client.js');
+    fs.copyFileSync(path.join(done, 'src', 'Client.js'), clientJs);
+    const before = fs.readFileSync(clientJs, 'utf8');
     const baseJs = path.join(dir, 'src', 'structures', 'Base.js');
     const base = fs.readFileSync(baseJs, 'utf8');
 
     expect(() => applyBackport(dir)).toThrow(/PARTIALLY patched[\s\S]*Message\.js[\s\S]*reinstall/i);
 
-    expect(fs.readFileSync(typings, 'utf8')).toBe(before);
+    expect(fs.readFileSync(clientJs, 'utf8')).toBe(before);
     expect(fs.readFileSync(baseJs, 'utf8')).toBe(base);
-    expect(fs.existsSync(`${typings}.rej`)).toBe(false);
+    expect(fs.existsSync(`${clientJs}.rej`)).toBe(false);
   });
 
   it('refuses to stand down on a half-patched tree', () => {
@@ -378,7 +378,7 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
     }
 
     // #889: both appliers reject a patch whose lines end CRLF — a bare \r is not one of the
-    // ' '/'+'/'-'/'@' markers a unified diff allows, and line 7 of this patch is an empty context line,
+    // ' '/'+'/'-'/'@' markers a unified diff allows, and line 12 of this patch is an empty context line,
     // so both fail exactly there. On Windows core.autocrlf=true checks the file out that way, so the
     // git fallback added FOR Windows could never run there and `npm install` died on the attempt.
     it('applies even when the patch file was checked out with CRLF line endings', () => {

@@ -25,6 +25,11 @@
  * dropped. Any OTHER reject means the installed shape drifted from the backport's
  * expected base; we abort the build loudly rather than ship a silently partial
  * patch.
+ *
+ * The PR's one typings hunk (index.d.ts, a method signature joined onto one line) is left out of
+ * wwebjs-201832.patch. It changes no behavior; as the first file `patch` wrote it would be the only
+ * marker of an interrupted run that tests formatting instead of the fix; and a release that merely
+ * reformatted its typings would reject it and fail the install.
  */
 'use strict';
 
@@ -47,10 +52,8 @@ const EXPECTED_REJECTS = new Set(['src/structures/Contact.js.rej']);
 // applies the diff in file order and Utils.js is applied LAST, one file after Message.js — which is
 // what the skip branch keys on. Omitting a file here means a run that died in that window leaves a
 // tree where every assertion passes, so every later run stands down and the missing site latches in
-// permanently. The same holds at the other end: index.d.ts is the FIRST file written, and a run that
-// died right after it reads as a pristine tree, so the diff is applied again and rejects its hunk.
-// One entry per file: `siteLanded` resolves a file's marker with `.find`, so a second entry for the
-// same path would never be read.
+// permanently. One entry per file: `siteLanded` resolves a file's marker with `.find`, so a second
+// entry for the same path would never be read.
 const REQUIRED_SITES = [
   ['src/structures/Base.js', /static _normalizeId\(id\)/],
   ['src/structures/Message.js', /this\.id = Base\._normalizeId\(data\.id\)/],
@@ -65,8 +68,6 @@ const REQUIRED_SITES = [
   ['src/util/Injected/Utils.js', /_serialized: msg\.id\.\$1/],
   ['src/Client.js', /res\.gid\._serialized \|\| res\.gid\.\$1/],
   ['src/structures/GroupChat.js', /pWid\._serialized \|\| pWid\.\$1/],
-  // The typings hunk, the one file the patch writes before any of the above.
-  ['index.d.ts', /sendReaction\(messageId: string, reaction: string\): Promise<void>;/],
 ];
 
 /** Artifacts `patch` can leave behind. `.~N~` are GNU's backup-if-mismatch copies of pre-patch source. */
@@ -86,7 +87,7 @@ function siteLanded(wwjsDir, rel) {
 /**
  * The REQUIRED_SITES a backport this patcher began did not reach, by relative path. The tree is judged
  * ours when at least one site carries the text its marker looks for: with none the backport never
- * started, or upstream fixed the tree its own way. A run killed part-way leaves any prefix of the twelve
+ * started, or upstream fixed the tree its own way. A run killed part-way leaves any prefix of the eleven
  * files, so no single file can stand for the rest. A file that cannot be read is not counted, since an
  * install that cannot be inspected is not evidence of a broken one.
  */
@@ -148,8 +149,8 @@ function findArtifacts(root, dir = root) {
  * has CRLF.
  *
  * Neither applier accepts CRLF: a unified diff line must start with ' ', '+', '-' or '@', and a bare
- * \r is none of those, so both stop at line 7 of this patch — its first empty context line (`git
- * apply`: "corrupt patch at line 7"; `patch`: "malformed patch at line 7"). Windows checks the file out
+ * \r is none of those, so both stop at line 12 of this patch — its first empty context line (`git
+ * apply`: "corrupt patch at line 12"; `patch`: "malformed patch at line 12"). Windows checks the file out
  * that way whenever `core.autocrlf` is on, which is its default, so the git fallback added for Windows
  * could never actually run there and took `npm install` down with it (#889).
  *
@@ -259,7 +260,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS, patchFile = DEFAULT_PATCH) {
     return { skipped: true, reason: 'installed whatsapp-web.js already normalizes message ids' };
   }
 
-  // A run that died before Message.js (the 11th of 12 files) left the earlier files patched and this one
+  // A run that died before Message.js (the 10th of 11 files) left the earlier files patched and this one
   // not. Applying the diff again would reject every hunk that already landed, litter the tree with .rej
   // files and report version skew for what is an interrupted install.
   const landedBefore = missingSites(wwjsDir);

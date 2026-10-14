@@ -96,8 +96,8 @@ describe('isBackportMissing', () => {
       expect(backportProblem(dir)).toBe(BACKPORT_MISSING_MESSAGE);
     });
 
-    // Message.js is the 11th of 12 files the patcher writes, so a run that was killed usually stopped
-    // before it: ten sites landed, Message.js did not, and the tree is not a pristine one.
+    // Message.js is the 10th of 11 files the patcher writes, so a run that was killed usually stopped
+    // before it: nine sites landed, Message.js did not, and the tree is not a pristine one.
     it('names a tree whose run stopped before Message.js, not the missing-backport message', () => {
       const dir = wholeInstall();
       fs.writeFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'this.id = data.id;');
@@ -108,17 +108,17 @@ describe('isBackportMissing', () => {
       expect(backportProblem(dir)).toContain('src/structures/Message.js, src/util/Injected/Utils.js');
     });
 
-    // index.d.ts is the first file written, so a run killed right after it leaves every structure file
+    // src/Client.js is the first file written, so a run killed right after it leaves every structure file
     // unpatched: the tree is not a pristine one, and the answer is the list, not "run the patcher".
     it('names a tree where only the first file the patcher writes landed', () => {
       const dir = wholeInstall();
       for (const [rel] of REQUIRED_SITES) {
-        if (rel !== 'index.d.ts') fs.writeFileSync(path.join(dir, rel), 'this.id = data.id;');
+        if (rel !== 'src/Client.js') fs.writeFileSync(path.join(dir, rel), 'this.id = data.id;');
       }
 
       expect(isBackportMissing(dir)).toBe(true);
       expect(partialBackportSites(dir)).toHaveLength(REQUIRED_SITES.length - 1);
-      expect(partialBackportSites(dir)).not.toContain('index.d.ts');
+      expect(partialBackportSites(dir)).not.toContain('src/Client.js');
       expect(backportProblem(dir)).toContain('src/structures/Message.js');
       expect(backportProblem(dir)).not.toBe(BACKPORT_MISSING_MESSAGE);
     });
