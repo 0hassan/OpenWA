@@ -38,6 +38,23 @@ describe('mutationTargetsForeignRow', () => {
     }
   });
 
+  // The account's own message to a broadcast list (or status post) is filed under the list, while each
+  // recipient reacts from their own one-to-one chat, as the engine adapters already allow.
+  it('lets a recipient react to a message the account sent to a broadcast list', () => {
+    for (const list of ['1700000002@broadcast', 'status@broadcast']) {
+      expect(
+        mutationTargetsForeignRow({ chatId: list, direction: OUT }, { kind: 'reaction', chatId: direct }),
+      ).toBeNull();
+      // Only a reaction, and only to the account's own message.
+      expect(mutationTargetsForeignRow({ chatId: list, direction: OUT }, { kind: 'edit', chatId: direct })).toBe(
+        'chat',
+      );
+      expect(mutationTargetsForeignRow({ chatId: list, direction: IN }, { kind: 'reaction', chatId: direct })).toBe(
+        'chat',
+      );
+    }
+  });
+
   // A REST send keeps the number as its caller wrote it ('+', spaces, with or without the mobile marker
   // digit) while the engine reports its own spelling, which can differ either way.
   it('reads the spellings of one phone number as one chat', () => {

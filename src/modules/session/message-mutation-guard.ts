@@ -47,6 +47,16 @@ function entityOf(jid: string): { kind: string; id: string } | null {
 const isPerson = (kind: string): boolean => kind === 'user' || kind === 'lid';
 
 /**
+ * A message the account sent to a broadcast list, or posted as a status, is filed under the list or the
+ * status chat, while each recipient or viewer reacts from their own one-to-one chat: no chat can ever
+ * match it. The engine adapters exempt exactly this case for a reaction, and so does the guard.
+ */
+function isOwnBroadcast(row: StoredMessageRef): boolean {
+  const kind = entityOf(row.chatId)?.kind;
+  return row.direction === MessageDirection.OUTGOING && (kind === 'broadcast' || kind === 'status');
+}
+
+/**
  * Whether two ids provably name different chats or people, compared by the entity they name rather than
  * by dialect or spelling. A lid against a phone number may be one person.
  */
@@ -68,7 +78,8 @@ export function provablyDifferent(a?: string | null, b?: string | null): boolean
  * message only this row can tell. WhatsApp clients ignore a change made by somebody other than the
  * author, so applying it would make the gateway's record say what no client shows.
  *
- *  - `chat`: a message id belongs to one chat.
+ *  - `chat`: a message id belongs to one chat. A reaction to a message the account sent to a broadcast
+ *    list or posted as a status is the exception: its recipients react from their own chats.
  *  - `direction`: an edit, and a revoke in a one-to-one chat, come from the author only, so a change
  *    made by the counterparty cannot name a message the account sent, nor the reverse. Group revokes are
  *    exempt, since an admin may delete anyone's message.
@@ -78,7 +89,9 @@ export function mutationTargetsForeignRow(
   row: StoredMessageRef,
   source: MutationSource,
 ): 'chat' | 'direction' | 'author' | null {
-  if (provablyDifferent(row.chatId, source.chatId)) return 'chat';
+  if (!(source.kind === 'reaction' && isOwnBroadcast(row)) && provablyDifferent(row.chatId, source.chatId)) {
+    return 'chat';
+  }
   const group = source.chatId.endsWith('@g.us') || row.chatId.endsWith('@g.us');
   const authorOnly = source.kind === 'edit' || (source.kind === 'revoke' && !group);
   if (authorOnly && source.fromMe !== undefined) {
