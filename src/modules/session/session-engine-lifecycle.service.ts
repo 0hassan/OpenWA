@@ -1442,6 +1442,10 @@ export class SessionEngineLifecycle {
         this.cancelReconnect(id);
         return;
       }
+      // A read retry the disconnect of this attempt's own engine armed waits on an engine that is gone
+      // now: it would hold the timer the next attempt needs, then fire against the evicted engine and
+      // end at its fence, leaving the session with no engine and nothing armed.
+      this.endReadRetry(id);
       // Schedule another attempt. The row stays INITIALIZING through the backoff (an active status, with
       // lastError still showing the reason), so a retryable failure writes nothing per attempt.
       this.scheduleReconnect(id, session);
