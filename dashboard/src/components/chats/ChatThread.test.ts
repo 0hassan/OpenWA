@@ -2,7 +2,7 @@
 // prompt-button tap only for an operator key, so a read-only key must not be offered them. It also
 // checks the thread, not just the helpers, resolves an @mention in a body and in a quote.
 import '../../test-helpers/register-hooks.ts';
-import { test, before, after, afterEach } from 'node:test';
+import { test, before, after, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createElement, createRef } from 'react';
@@ -43,6 +43,7 @@ after(() => {
 
 afterEach(() => {
   focusVisibleOverride = null;
+  mock.restoreAll();
   rtl.cleanup();
   window.sessionStorage.removeItem('openwa_user_role');
 });
@@ -773,12 +774,151 @@ test('a focus a pointer brought to an action is not given back, and marks pointe
   assert.ok(thread);
   const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
   assert.ok(del);
-  // The focusin of a mouse click: the element is not the focused one, so it is not :focus-visible.
+  // A mouse click: the press, then the focusin of an element that is not the focused one, so not :focus-visible.
+  rtl.fireEvent.pointerDown(del);
   rtl.fireEvent.focusIn(del);
   assert.equal(thread.hasAttribute('data-pointer'), true);
 
   rerenderWith([first, { ...second, type: 'revoked', body: '' }]);
 
+  assert.equal(focusedMessage(), 'body');
+});
+
+/** Makes the thread's clock (performance.now) a number the test moves. */
+function holdClock(): { advance: (ms: number) => void } {
+  let now = 50_000;
+  mock.method(performance, 'now', () => now);
+  return {
+    advance: ms => {
+      now += ms;
+    },
+  };
+}
+
+// A script or a screen reader moves focus after a click: nothing pointed at it, so it is not pointer mode,
+// and the actions of the message it lands on are shown to that reader.
+test('focus moved by a script after a click is not pointer focus, and shows the actions', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const clock = holdClock();
+  const [first, second] = bubblesOf(container);
+
+  rtl.fireEvent.pointerDown(first);
+  rtl.fireEvent.focusIn(first);
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+
+  clock.advance(1500);
+  rtl.fireEvent.focusIn(second);
+  assert.equal(thread.hasAttribute('data-pointer'), false);
+});
+
+// A click focuses its target in the task of its press, which is far inside the window.
+test('focus a click brings keeps pointer mode, also a moment after the press', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const clock = holdClock();
+
+  rtl.fireEvent.pointerDown(bubblesOf(container)[0]);
+  clock.advance(400);
+  rtl.fireEvent.focusIn(bubblesOf(container)[1]);
+
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+});
+
+// The lightbox is outside the thread, and its close button gives focus back to the bubble that opened it
+// as it goes away: a press anywhere in the page is the one that focus follows, not only a press in the thread.
+test('focus given back after a press outside the thread is pointer focus, until the window has passed', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const close = document.createElement('button');
+  document.body.appendChild(close);
+  const clock = holdClock();
+  try {
+    rtl.fireEvent.pointerDown(close);
+    clock.advance(300);
+    rtl.fireEvent.focusIn(bubblesOf(container)[0]);
+    assert.equal(thread.hasAttribute('data-pointer'), true);
+
+    rtl.fireEvent.pointerDown(close);
+    clock.advance(1500);
+    rtl.fireEvent.focusIn(bubblesOf(container)[1]);
+    assert.equal(thread.hasAttribute('data-pointer'), false);
+  } finally {
+    close.remove();
+  }
+});
+
+// A click on the controls of an audio or video element sends the page no pointer event at all.
+test('focus on a media control is pointer focus without any press seen', () => {
+  const voice: ChatMessageView = {
+    ...PROMPT,
+    id: 'db-vn',
+    waMessageId: 'wamid.vn',
+    type: 'voice',
+    body: '',
+    metadata: { media: { mimetype: 'audio/ogg', data: 'AAAA' } },
+  };
+  const { container } = renderThread('operator', [PROMPT, voice]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const audio = container.querySelector<HTMLElement>('audio');
+  assert.ok(audio);
+  holdClock();
+
+  rtl.fireEvent.focusIn(audio);
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+
+  rtl.fireEvent.focusIn(bubblesOf(container)[0]);
+  assert.equal(thread.hasAttribute('data-pointer'), false);
+});
+
+// Focus nothing pointed at is held like focus a key brought: a delete reached that way still gives it back.
+test('focus no pointer brought is held, and given back when the message is deleted', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  holdClock();
+
+  // Not :focus-visible and no press before it: an assistive technology's focus.
+  rtl.fireEvent.focusIn(del);
+  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+
+  assert.equal(focusedMessage(), 'wamid.3');
+});
+
+// The confirmation of a mouse click on Delete can stay open for longer than the window. The page's focus
+// coming back is not a script's: pointer mode stays, and nothing is held that a click did not bring.
+test('a dialog that outlasts the pointer window does not turn a click into keyboard focus', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  const clock = holdClock();
+
+  rtl.fireEvent.pointerDown(del);
+  rtl.fireEvent.focusIn(del);
+  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
+  clock.advance(4000);
+  rtl.fireEvent.focusIn(del);
+
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
   assert.equal(focusedMessage(), 'body');
 });
 
@@ -906,6 +1046,53 @@ test('a later focus on a control the page once took focus from is classified aga
   } finally {
     outside.remove();
   }
+});
+
+// The round trip ends when the page gives focus back. The control it was given back to is then an ordinary one:
+// moving on to another message and returning to it is a new focus, held for it like any other.
+test('a control the page gave focus back to is classified again when the reader returns to it', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const [first, second] = bubblesOf(container);
+  const del = second.querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+
+  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
+  rtl.fireEvent.focusIn(del);
+  first.focus();
+  del.focus();
+  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+
+  assert.equal(focusedMessage(), 'wamid.3');
+});
+
+// Only the one control the page took focus from is forgiven. A focus that lands on another control while the
+// page is still away is a new focus: what is held moves to it, or the place given back after the next change
+// of the list is the stale one.
+test('a focus on another control after the page lost focus is classified, not taken for the return', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const [, second, third] = bubblesOf(container);
+  const del = second.querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+
+  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
+  third.focus();
+  rerenderWith([a, b, { ...c, type: 'revoked', body: '' }]);
+
+  assert.equal(focusedMessage(), 'wamid.2');
 });
 
 // Only the page's own loss is forgiven: the same blur while the page has focus is the focus going nowhere.

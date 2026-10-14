@@ -58,6 +58,14 @@ interface ChatThreadProps {
   onClickButton: (message: ChatMessageView, button: { id: string; text: string }) => Promise<void>;
 }
 
+/**
+ * How long after a pointer press a focus that is not :focus-visible still counts as the press's own. A click
+ * focuses its target in the same task as its pointerdown, and the lightbox's close button gives focus back to
+ * the bubble that opened it as it goes away; a focus long after a press is a script's or an assistive
+ * technology's.
+ */
+const POINTER_FOCUS_WINDOW_MS = 1000;
+
 // The messages area of the active chat room: the bubble list (media, quotes, reactions, hover
 // actions) plus the floating scroll-to-bottom button. The page owns the message query and the
 // scroll-position hook (its containerRef is handed down); reply/react/delete/lightbox intents go
@@ -147,6 +155,16 @@ function ChatThread({
   // above nor re-classifies the focus that comes back. The blur arrives after confirm() has returned, so the
   // handler that opened the dialog cannot put the place back itself.
   const deactivatedRef = useRef<EventTarget | null>(null);
+  // When the pointer last went down anywhere in the page (performance.now()); see POINTER_FOCUS_WINDOW_MS. Not
+  // only in the thread: the press that closes the lightbox is outside it, and the focus it gives back is one.
+  const pointerAtRef = useRef<number>(Number.NEGATIVE_INFINITY);
+  useEffect(() => {
+    const notePress = () => {
+      pointerAtRef.current = performance.now();
+    };
+    document.addEventListener('pointerdown', notePress, true);
+    return () => document.removeEventListener('pointerdown', notePress, true);
+  }, []);
   useEffect(() => {
     const held = keyboardFocusRef.current;
     if (!held) return;
@@ -351,11 +369,13 @@ function ChatThread({
     <div
       className="room-messages"
       ref={messagesContainerRef}
-      // The actions show while focus is inside a bubble, but only for keyboard focus: a click also focuses
-      // the bubble, and its menu would stay drawn over the message after the pointer left. The marker is
-      // read by Chats.css. It follows the focus itself as well as the pointer and the keys: a key pressed
+      // The actions show while focus is inside a bubble, but not for focus a pointer brought: a click also
+      // focuses the bubble, and its menu would stay drawn over the message after the pointer left. The marker
+      // is read by Chats.css. It follows the focus itself as well as the pointer and the keys: a key pressed
       // outside the thread is never seen here, and a click on a native audio or video control sends the
-      // page no pointer event at all, though it focuses the element.
+      // page no pointer event at all, though it focuses the element. A focus that is not :focus-visible
+      // is the pointer's only when a press came just before it or the element is a media control: one that
+      // a script or an assistive technology moves later is not, and its actions are shown.
       onPointerDown={event => event.currentTarget.setAttribute('data-pointer', '')}
       onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
       onFocus={event => {
@@ -366,10 +386,12 @@ function ChatThread({
         deactivatedRef.current = null;
         if (resumed) return;
         const bubble = target.closest<HTMLElement>('[data-roving-message]');
-        const keyboard = target.matches(':focus-visible');
-        if (keyboard) event.currentTarget.removeAttribute('data-pointer');
-        else event.currentTarget.setAttribute('data-pointer', '');
-        if (!keyboard || !bubble) {
+        const pointer =
+          !target.matches(':focus-visible') &&
+          (target.matches('audio, video') || performance.now() - pointerAtRef.current < POINTER_FOCUS_WINDOW_MS);
+        if (pointer) event.currentTarget.setAttribute('data-pointer', '');
+        else event.currentTarget.removeAttribute('data-pointer');
+        if (pointer || !bubble) {
           keyboardFocusRef.current = null;
           return;
         }
