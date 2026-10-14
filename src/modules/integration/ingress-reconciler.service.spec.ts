@@ -149,6 +149,29 @@ describe('IngressReconcilerService.sweep', () => {
     ]);
   });
 
+  it('replays a healthy row behind a whole batch of rows whose payload cannot be read', async () => {
+    // Oldest first, a full batch of them heads every sweep: nothing behind it would ever be replayed.
+    const unreadable: string[] = [];
+    for (let i = 0; i < OPTS.batchSize; i++) unreadable.push(await insertEvent({ createdAt: minutesAgo(30) }));
+    const healthy = await insertEvent();
+    for (const id of unreadable) await ds.query(`UPDATE ingress_events SET payload = '{oops' WHERE id = ?`, [id]);
+
+    const first = await service.sweep(OPTS);
+    expect(first).toMatchObject({ replayed: 0, skipped: OPTS.batchSize });
+    expect((await stored(healthy)).dispatchState).toBe('pending');
+
+    const second = await service.sweep(OPTS);
+    expect(second).toMatchObject({ replayed: 1, failed: 0 });
+    expect((await stored(healthy)).dispatchState).toBe('dispatched');
+    // No budget of the unreadable rows was spent, and they are looked at again once the hour is over.
+    expect(await ds.query(`SELECT DISTINCT "dispatchAttempts" FROM ingress_events WHERE payload = '{oops'`)).toEqual([
+      { dispatchAttempts: 0 },
+    ]);
+    const later = new Date(Date.now() + 61 * 60_000);
+    const third = await service.sweep(OPTS, later);
+    expect(third.skipped).toBe(OPTS.batchSize);
+  });
+
   it('skips a pending row whose payload is gone (nothing to replay from) without burning its budget', async () => {
     const id = await insertEvent({ payload: null });
 

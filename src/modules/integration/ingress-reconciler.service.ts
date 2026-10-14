@@ -45,6 +45,15 @@ export function resolveIngressReconcilerOptions(env: NodeJS.ProcessEnv = process
   };
 }
 
+/**
+ * How long a row whose stored payload could not be read stays out of the sweep's batch, and how many such
+ * rows are remembered. A full batch of them, oldest first, would otherwise head every sweep and no healthy
+ * row behind them would ever be replayed. Held in memory, not in the attempt budget: the row is not
+ * touched, so nothing of its budget is spent, and it is looked at again after the hour or a restart.
+ */
+const UNREADABLE_RETRY_MS = 60 * 60 * 1000;
+const UNREADABLE_REMEMBERED_MAX = 1000;
+
 export interface IngressReconcileStats {
   scanned: number;
   replayed: number;
@@ -81,6 +90,8 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
   // The pass in flight, settled when it ends; doubles as the overlap guard.
   private inFlight?: Promise<void>;
   private readonly stop = new AbortController();
+  // Row id to the time it may be read again, for rows whose payload could not be read (see above).
+  private readonly unreadableUntil = new Map<string, number>();
 
   constructor(
     @InjectRepository(IngressEvent, 'data') private readonly events: Repository<IngressEvent>,
@@ -150,8 +161,11 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
       // oldest rows back every sweep and starve every other instance's stranded deliveries. The join is
       // 1:1 (plugin_instances is unique on pluginId+instanceId), so limit() bounds rows, not join fan-out.
       // Ids only: a stored payload that does not parse (an imported or hand-edited row) fails the read of the
-      // whole batch, so no row behind it would ever be replayed. Each row is read on its own below.
-      const batch = await this.events
+      // whole batch, so no row behind it would ever be replayed. Each row is read on its own below, and one
+      // that cannot be read is kept out of the next batches for a while, so a batch full of them cannot starve
+      // the rows behind.
+      const unreadable = this.unreadableRows(now);
+      const query = this.events
         .createQueryBuilder('e')
         .select('e.id')
         .innerJoin(
@@ -162,10 +176,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
         )
         .where('e.dispatchState = :state', { state: 'pending' })
         .andWhere('e.createdAt < :cutoff', { cutoff })
-        .andWhere('e.payload IS NOT NULL')
-        .orderBy('e.createdAt', 'ASC')
-        .limit(opts.batchSize)
-        .getMany();
+        .andWhere('e.payload IS NOT NULL');
+      if (unreadable.length) query.andWhere('e.id NOT IN (:...unreadable)', { unreadable });
+      const batch = await query.orderBy('e.createdAt', 'ASC').limit(opts.batchSize).getMany();
       for (const { id } of batch) {
         if (this.stop.signal.aborted) break;
         let row: IngressEvent | null;
@@ -176,6 +189,7 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             id,
             action: 'ingress_reconcile_row_unreadable',
           });
+          this.rememberUnreadable(id, now);
           stats.skipped++;
           continue;
         }
@@ -237,6 +251,25 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
     } finally {
       this.inFlight = undefined;
       settle();
+    }
+  }
+
+  /** Ids of the rows still to be left out of a batch; forgets those whose time to be read again came. */
+  private unreadableRows(now: Date): string[] {
+    for (const [id, until] of this.unreadableUntil) {
+      if (until <= now.getTime()) this.unreadableUntil.delete(id);
+    }
+    return [...this.unreadableUntil.keys()];
+  }
+
+  private rememberUnreadable(id: string, now: Date): void {
+    this.unreadableUntil.delete(id);
+    this.unreadableUntil.set(id, now.getTime() + UNREADABLE_RETRY_MS);
+    // Oldest first, as the map keeps insertion order; a store with more of them than this is not a store
+    // an operator can leave alone, and the oldest are looked at again.
+    while (this.unreadableUntil.size > UNREADABLE_REMEMBERED_MAX) {
+      const oldest = this.unreadableUntil.keys().next().value as string;
+      this.unreadableUntil.delete(oldest);
     }
   }
 
