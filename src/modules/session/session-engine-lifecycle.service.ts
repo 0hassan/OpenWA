@@ -1045,6 +1045,9 @@ export class SessionEngineLifecycle {
         sessionId: id,
         action: 'reconnect_schedule_error',
       });
+      // Nothing else revisits this disconnect: the engine reports DISCONNECTED itself, so the liveness
+      // watchdog skips it, and it stays registered with its lease renewed. Read again shortly.
+      this.retryDisconnectAfterFailedRead(id, engine, reason);
       return;
     }
     // A session deleted just before this ran has nothing left to reconnect; skip it.
@@ -1123,6 +1126,21 @@ export class SessionEngineLifecycle {
 
     // Attempt to reconnect
     this.scheduleReconnect(id, session);
+  }
+
+  /**
+   * Handle a disconnect again after its session read failed. The retry sits on the episode's reconnect
+   * timer, so every control that cancels a reconnect (stop, delete, logout, shutdown) cancels it too, and
+   * it re-enters handleEngineDisconnected, whose fences end it once the engine is no longer the live one.
+   * It repeats at the base reconnect delay until the read answers.
+   */
+  private retryDisconnectAfterFailedRead(id: string, engine: IWhatsAppEngine, reason: string): void {
+    const state = this.reconnectStates.get(id);
+    if (!state || state.timer || this.closed || this.shutdownService?.isShuttingDown()) return;
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      void this.handleEngineDisconnected(id, engine, reason);
+    }, state.baseDelay);
   }
 
   private scheduleReconnect(id: string, session: Session): void {

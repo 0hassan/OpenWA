@@ -385,6 +385,53 @@ describe('SessionEngineLifecycle races', () => {
     });
   });
 
+  // The engine reports DISCONNECTED itself, so the liveness watchdog never probes it again, and it stays
+  // registered with its lease renewed: a disconnect whose row read fails once is not handled again by anything.
+  describe('a disconnect whose session read fails', () => {
+    afterEach(() => jest.useRealTimers());
+
+    const disconnectWithFailedRead = async (): Promise<{
+      engine: Record<string, jest.Mock>;
+      state: ReconnectState;
+    }> => {
+      await lifecycle.start(ID);
+      const engine = (engineFactory.create.mock.results[0] as { value: Record<string, jest.Mock> }).value;
+      const callbacks = (engine.initialize.mock.calls as [EngineEventCallbacks][])[0][0];
+      const state = internals.reconnectStates.get(ID)!;
+      jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] });
+      repository.findOne.mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+
+      callbacks.onDisconnected?.('NAVIGATION');
+      await flush();
+      return { engine, state };
+    };
+
+    it('handles the disconnect again, so a reconnect is armed once the read succeeds', async () => {
+      const { engine, state } = await disconnectWithFailedRead();
+      expect(state.attempts).toBe(0);
+      expect(state.timer).not.toBeNull();
+
+      jest.advanceTimersByTime(state.baseDelay);
+      await flush();
+
+      expect(state.attempts).toBe(1);
+      expect(state.timer).not.toBeNull();
+      expect(internals.engines.get(ID)).toBe(engine);
+    });
+
+    it('does not read again once a stop has retired the engine', async () => {
+      const { state } = await disconnectWithFailedRead();
+      await lifecycle.stop(ID);
+      const reads = repository.findOne.mock.calls.length;
+
+      jest.advanceTimersByTime(state.baseDelay * 2);
+      await flush();
+
+      expect(repository.findOne.mock.calls.length).toBe(reads);
+      expect(internals.reconnectStates.has(ID)).toBe(false);
+    });
+  });
+
   describe('a reconnect attempt failing while the next one tears its engine down', () => {
     it('leaves the episode to the later attempt instead of arming another over it', async () => {
       const state: ReconnectState = { attempts: 1, timer: null, maxAttempts: 5, baseDelay: 5000 };
