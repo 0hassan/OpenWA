@@ -562,3 +562,32 @@ test('a click marks pointer use, a key press clears it, and the stylesheet revea
     assert.ok(rule.includes('.room-messages:not([data-pointer])'), `${target} is gated on keyboard modality`);
   }
 });
+
+// The button is a child of the scroller. Absolutely positioned there it moves with the content, which put it
+// at the bottom of the first screen of the thread and off screen whenever it was shown. Sticky, as the last
+// child, it holds to the bottom of the visible pane. jsdom has no layout, so the declaration is pinned.
+test('the scroll-to-bottom button is sticky inside the scroller, not absolute', () => {
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  const rule = /\.chats-page \.scroll-to-bottom-btn \{([^}]*)\}/.exec(css)?.[1] ?? '';
+  assert.match(rule, /position:\s*sticky;/);
+  assert.match(rule, /bottom:\s*1rem;/);
+  assert.doesNotMatch(rule, /position:\s*absolute/);
+});
+
+// A Tab from the sidebar into the thread is a key press the thread never sees, so a click made in the thread
+// earlier left the pointer mark on, and the focused bubble showed no actions until the next key. A focus
+// the browser calls keyboard focus (:focus-visible) clears the mark; the focus a click brings does not match.
+test('focus that arrives by keyboard clears the pointer mark a click left, and a mouse focus does not', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const bubble = bubblesOf(container)[0];
+
+  rtl.fireEvent.pointerDown(bubble);
+  // A focus event on an element that is not the focused one has no :focus-visible, as a click's does not.
+  rtl.fireEvent.focusIn(bubble);
+  assert.equal(thread.hasAttribute('data-pointer'), true);
+
+  bubble.focus();
+  assert.equal(thread.hasAttribute('data-pointer'), false);
+});

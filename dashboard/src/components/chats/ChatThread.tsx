@@ -267,36 +267,25 @@ function ChatThread({
     return new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // position:relative so the scroll-to-bottom button can float inside.
   return (
     <div
       className="room-messages"
       ref={messagesContainerRef}
       // The actions show while focus is inside a bubble, but only for keyboard focus: a click also focuses
       // the bubble, and its menu would stay drawn over the message after the pointer left. The marker is
-      // read by Chats.css.
+      // read by Chats.css. Focus that a key press brings in from outside the thread clears it as well: the
+      // key was pressed elsewhere, so no keydown reached this element, and the marker a click left would
+      // keep the menu of the focused bubble hidden until the next key.
       onPointerDown={event => event.currentTarget.setAttribute('data-pointer', '')}
       onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
-      onFocus={() => {
+      onFocus={event => {
         focusInThreadRef.current = true;
+        if (event.target.matches(':focus-visible')) event.currentTarget.removeAttribute('data-pointer');
       }}
       onBlur={event => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusInThreadRef.current = false;
       }}
     >
-      {/* Floating scroll-to-bottom button. Hidden while loading (no height to measure yet)
-          and when the user is already at/near the bottom. */}
-      {showJumpToBottom && !loadingMessages && (
-        <button
-          type="button"
-          className="scroll-to-bottom-btn"
-          onClick={handleJumpToBottom}
-          aria-label={t('chats.scrollToBottom')}
-          title={t('chats.scrollToBottom')}
-        >
-          <ChevronDown size={22} />
-        </button>
-      )}
       {/* Older-page spinner, or the failure in its place. An in-flow sibling before the thread, not
           an overlay — it pushes the oldest bubble down, which is why useChatScrollPosition reads
           this container's height at REQUEST time (before this renders), not on whichever commit
@@ -674,6 +663,21 @@ function ChatThread({
             </div>
           );
         })
+      )}
+      {/* Floating scroll-to-bottom button. The LAST child, so that `position: sticky; bottom` holds it at
+          the bottom of the visible pane while the thread scrolls under it: absolutely positioned inside
+          the scroller it moved with the content and was off screen whenever it was shown. Hidden while
+          loading (no height to measure yet) and when the user is already at/near the bottom. */}
+      {showJumpToBottom && !loadingMessages && (
+        <button
+          type="button"
+          className="scroll-to-bottom-btn"
+          onClick={handleJumpToBottom}
+          aria-label={t('chats.scrollToBottom')}
+          title={t('chats.scrollToBottom')}
+        >
+          <ChevronDown size={22} />
+        </button>
       )}
     </div>
   );

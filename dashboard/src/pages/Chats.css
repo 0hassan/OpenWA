@@ -453,13 +453,18 @@
 }
 
 /* Floating scroll-to-bottom button. Sits at the bottom-right of the messages pane (not the footer)
-   so it overlays the conversation without stealing input-bar space. The default desktop scrollbar
-   gutter leaves ~15px to the right edge; we anchor a bit further in so the button doesn't overlap
-   the scrollbar on narrow viewports. */
+   so it overlays the conversation without stealing input-bar space. It is the last child of the
+   scroller and sticky, not absolute: an absolute child of the scroller moves with the content, so it
+   sat at the bottom of the first screen of the thread, off screen whenever it was shown. In flow it
+   would add its own height and one flex gap to the thread, which the negative margin takes back, so
+   the scroll height is the same with and without it (the gap is the 0.75rem of .room-messages). The
+   right edge is the scroller's padding, clear of the scrollbar. */
 .chats-page .scroll-to-bottom-btn {
-  position: absolute;
-  right: 1.5rem;
+  position: sticky;
   bottom: 1rem;
+  align-self: flex-end;
+  flex: none;
+  margin-top: calc(-40px - 0.75rem);
   z-index: 5;
   width: 40px;
   height: 40px;
