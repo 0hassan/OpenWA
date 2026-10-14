@@ -108,7 +108,7 @@ import com.rmyndharis.openwa.errors.OpenWANotFoundError;
 try {
     client.messages.sendText(sessionId, body);
 } catch (OpenWAConflictError e) {
-    // 409 — engine not ready, or a keyed send that is pending or uncertain:
+    // 409 — a conflicting state: typically the engine is not ready, or a keyed send is pending or uncertain;
     // e.code() tells them apart (see Send idempotency)
 } catch (OpenWANotFoundError e) {
     // 404 — session or chat not found

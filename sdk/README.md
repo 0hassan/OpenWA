@@ -88,7 +88,7 @@ const client = new OpenWAClient({
 
 const session = await client.sessions.create({ name: 'my-session' });
 await client.sessions.start(session.id);
-// Link the account before sending: scan sessions.getQrCode or use sessions.requestPairingCode,
+// Link the account before sending: scan sessions.getQrCode (or use sessions.requestPairingCode for a number with no linked session),
 // then wait for status 'ready'. An unlinked session answers the send with 409.
 const result = await client.messages.sendText(session.id, {
   chatId: '628123456789@c.us',
@@ -105,7 +105,7 @@ try {
   await client.messages.sendText(/* … */);
 } catch (e) {
   if (e instanceof OpenWAConflictError) {
-    /* session not ready, or a keyed send pending or unconfirmed (409) */
+    /* a conflicting state (409): typically a session not ready, or a keyed send pending or unconfirmed */
   }
 }
 ```
@@ -129,7 +129,7 @@ client = OpenWAClient(
 
 session = client.sessions.create({"name": "my-session"})
 client.sessions.start(session["id"])
-# Link the account before sending: scan sessions.get_qr_code or use sessions.request_pairing_code,
+# Link the account before sending: scan sessions.get_qr_code (or use sessions.request_pairing_code for a number with no linked session),
 # then wait for status "ready". An unlinked session answers the send with 409.
 result = client.messages.send_text(session["id"], {
     "chatId": "628123456789@c.us",
@@ -158,7 +158,7 @@ $client = new Client([
 
 $session = $client->sessions->create(['name' => 'my-session']);
 $client->sessions->start($session['id']);
-// Link the account before sending: scan sessions->getQrCode or use sessions->requestPairingCode,
+// Link the account before sending: scan sessions->getQrCode (or use sessions->requestPairingCode for a number with no linked session),
 // then wait for status 'ready'. An unlinked session answers the send with 409.
 $result = $client->messages->sendText($session['id'], [
     'chatId' => '628123456789@c.us',
@@ -191,7 +191,7 @@ OpenWAClient client = new OpenWAClient("http://localhost:2785", "owa_k1_…");
 
 SessionResponse session = client.sessions.create(CreateSessionRequest.builder().name("my-session").build());
 client.sessions.start(session.id());
-// Link the account before sending: scan sessions.getQrCode or use sessions.requestPairingCode,
+// Link the account before sending: scan sessions.getQrCode (or use sessions.requestPairingCode for a number with no linked session),
 // then wait for status READY. An unlinked session answers the send with 409.
 MessageResponse result = client.messages.sendText(session.id(),
     SendTextRequest.builder()
@@ -234,7 +234,7 @@ if err != nil {
 if _, err := client.Sessions.Start(ctx, session.ID); err != nil {
     log.Fatal(err)
 }
-// Link the account before sending: scan Sessions.QRCode or use Sessions.RequestPairingCode,
+// Link the account before sending: scan Sessions.QRCode (or use Sessions.RequestPairingCode for a number with no linked session),
 // then wait for status "ready". An unlinked session answers the send with 409.
 res, err := client.Messages.SendText(ctx, session.ID, openwa.SendTextRequest{
     ChatID: "628123456789@c.us",

@@ -29,8 +29,8 @@ var (
 	ErrForbidden = errors.New("openwa: forbidden")
 	// ErrNotFound is returned for a 404.
 	ErrNotFound = errors.New("openwa: not found")
-	// ErrConflict is returned for a 409: the session is not ready for the operation, or a keyed send is
-	// pending or may already have been sent (see the error code).
+	// ErrConflict is returned for a 409: a conflicting state, typically a session that is not ready for the
+	// operation, or a keyed send that is pending or may already have been sent (see the error code).
 	ErrConflict = errors.New("openwa: conflict")
 	// ErrRateLimited is returned for a 429 (too many requests). The global rate
 	// limiter's 429 lifts when its window expires (seconds for the per-second

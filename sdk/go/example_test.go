@@ -27,7 +27,7 @@ func ExampleNew() {
 		log.Fatal(err)
 	}
 
-	// Link the account before sending: scan Sessions.QRCode or use Sessions.RequestPairingCode,
+	// Link the account before sending: scan Sessions.QRCode (or use Sessions.RequestPairingCode for a number with no linked session),
 	// then wait for status "ready". An unlinked session answers the send with 409.
 	res, err := client.Messages.SendText(ctx, session.ID, openwa.SendTextRequest{
 		ChatID: "628123456789@c.us",
