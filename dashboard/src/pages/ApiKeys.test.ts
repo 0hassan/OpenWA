@@ -4,8 +4,11 @@
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ALLOWED_CHATS_MAX } from '../utils/sessionScope.ts';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
@@ -367,6 +370,55 @@ test('an untouched list with an entry the form would refuse does not block Save'
   fireEvent.change(screen.getByLabelText('Allowed IP addresses (optional)'), { target: { value: 'fd00::1' } });
   assert.equal(edited.disabled, true);
   screen.getByText('Not an IPv4 address or CIDR range: fd00::1');
+});
+
+// The gateway answers a list of more than 2000 chats with 400 and, in production, words it as a bare
+// "Bad Request". The form counts entries itself, so it has to hold the same bound the gateway publishes
+// and spare a stored list that the update does not send.
+const chatList = (count: number, offset = 0): string =>
+  Array.from({ length: count }, (_, i) => `1203630${String(offset + i).padStart(9, '0')}@g.us`).join('\n');
+
+test('the form holds the chat limit the gateway publishes', () => {
+  const contract = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../../../openapi.json', import.meta.url)), 'utf8'),
+  ) as {
+    components: { schemas: Record<string, { properties: { allowedChats: { maxItems: number } } }> };
+  };
+  for (const dto of ['CreateApiKeyDto', 'UpdateApiKeyDto']) {
+    assert.equal(contract.components.schemas[dto].properties.allowedChats.maxItems, ALLOWED_CHATS_MAX);
+  }
+});
+
+test('a chat list at the limit keeps Create enabled and one past it disables it', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), { target: { value: chatList(ALLOWED_CHATS_MAX) } });
+  assert.equal(create.disabled, false);
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), {
+    target: { value: chatList(ALLOWED_CHATS_MAX + 1) },
+  });
+  assert.equal(create.disabled, true);
+});
+
+test('a stored list past the limit does not block an unrelated edit, and a new one does', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const stored = chatList(ALLOWED_CHATS_MAX + 1).split('\n');
+  const save = await openEdit({ ...billingBot, allowedChats: stored, expiresAt: '2027-03-04T05:06:59.000Z' });
+  // Left as stored it is not sent, so its length is not checked.
+  assert.equal(save.disabled, false);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove expiry' }));
+  fireEvent.click(save);
+  await waitFor(() => assert.equal(updateBodies.length, 1));
+  assert.deepEqual(updateBodies[0], { expiresAt: null });
+
+  // Replaced, it is sent whole, so it is counted again.
+  rtl.cleanup();
+  const edited = await openEdit({ ...billingBot, allowedChats: stored });
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), {
+    target: { value: chatList(ALLOWED_CHATS_MAX + 1, 100_000) },
+  });
+  assert.equal(edited.disabled, true);
 });
 
 test('a refused update keeps the editor open and shows the reason', async () => {
