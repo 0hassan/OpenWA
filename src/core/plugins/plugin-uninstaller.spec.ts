@@ -14,7 +14,12 @@ import { PluginInstance, PluginStatus, PluginType } from './plugin.interfaces';
  * uninstallPlugin actually reads. The unload seam is the callback the lifecycle would provide; every
  * assertion is unchanged.
  */
-const makeUninstaller = (config: ConfigService, storage: PluginStorageService, pluginsDir: string) => {
+const makeUninstaller = (
+  config: ConfigService,
+  storage: PluginStorageService,
+  pluginsDir: string,
+  releaseTakeovers?: (pluginId: string) => Promise<void>,
+) => {
   const plugins = new Map<string, PluginInstance>();
   const uninstaller = new PluginUninstaller(
     createLogger('PluginLoaderService'),
@@ -26,6 +31,8 @@ const makeUninstaller = (config: ConfigService, storage: PluginStorageService, p
       plugins.delete(pluginId);
       return Promise.resolve();
     },
+    null,
+    releaseTakeovers,
   );
   return { uninstaller, plugins };
 };
@@ -158,6 +165,31 @@ describe('PluginUninstaller — uninstall', () => {
     plugins.set('core-engine', { ...loadedUserPlugin('core-engine', pluginsDir), builtIn: true });
     seedEntry(storage, 'core-engine', true);
     await expect(uninstaller.uninstallPlugin('core-engine')).rejects.toThrow(/built-in/i);
+  });
+
+  // A takeover the plugin held would keep every other plugin silent on that chat for good.
+  it('hands the takeovers of the plugin back once it is gone, and survives that failing', async () => {
+    const dir = writeUserPlugin('relay');
+    seedEntry(storage, 'relay');
+    const release = jest.fn().mockResolvedValue(undefined);
+    const config = { get: (k: string) => (k === 'plugins.dir' ? pluginsDir : tmpDir) } as unknown as ConfigService;
+    const withRelease = makeUninstaller(config, storage, pluginsDir, release);
+    withRelease.plugins.set('relay', loadedUserPlugin('relay', dir));
+
+    await withRelease.uninstaller.uninstallPlugin('relay');
+
+    expect(release).toHaveBeenCalledWith('relay');
+    expect(fs.existsSync(dir)).toBe(false);
+
+    const dir2 = writeUserPlugin('relay2');
+    seedEntry(storage, 'relay2');
+    const failing = makeUninstaller(config, storage, pluginsDir, () => {
+      throw new Error('mapping store unavailable');
+    });
+    failing.plugins.set('relay2', loadedUserPlugin('relay2', dir2));
+
+    await expect(failing.uninstaller.uninstallPlugin('relay2')).resolves.toBeUndefined();
+    expect(fs.existsSync(dir2)).toBe(false);
   });
 });
 

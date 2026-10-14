@@ -97,6 +97,14 @@ export class ConversationMappingService implements PluginConversationMappingPort
     }
   }
 
+  /**
+   * A takeover is scoped to the chat, not to the plugin, and silences every other plugin there. The
+   * mappings stay, so a plugin installed again keeps its provider conversations; only the takeovers go.
+   */
+  async releaseTakeovers(pluginId: string): Promise<void> {
+    await this.repo.update({ pluginId, handoverState: In(['human', 'closed']) }, { handoverState: 'bot' });
+  }
+
   get(key: MappingKey): Promise<ConversationMapping | null> {
     return this.repo.findOne({ where: key });
   }

@@ -232,6 +232,23 @@ describe('ConversationMappingService', () => {
     });
   });
 
+  it('releaseTakeovers hands a plugin back its chats and leaves the mappings and other plugins alone', async () => {
+    await service.upsert(key, 'conv-1', { handoverState: 'human' });
+    await service.upsert({ ...key, chatId: 'chat-2' }, 'conv-2', { handoverState: 'closed' });
+    await service.upsert({ ...key, pluginId: 'other', chatId: 'chat-3' }, 'conv-3', { handoverState: 'human' });
+    expect(await service.findHandoverForChat('sess-1', 'chat-1')).toMatchObject({ handoverState: 'human' });
+
+    await service.releaseTakeovers('chatwoot');
+
+    expect(await service.findHandoverForChat('sess-1', 'chat-1')).toBeNull();
+    expect(await service.findHandoverForChat('sess-1', 'chat-2')).toBeNull();
+    expect((await service.get(key))?.providerConversationId).toBe('conv-1');
+    expect(await service.findHandoverForChat('sess-1', 'chat-3')).toMatchObject({
+      pluginId: 'other',
+      handoverState: 'human',
+    });
+  });
+
   // SQLite serves every repository from one connection, so a transaction the insert opens is shared with
   // the writes made while it is open, and the rollback of the conflict it expects would undo them too.
   it('does not undo a write made while an upsert is refused for a bound conversation', async () => {

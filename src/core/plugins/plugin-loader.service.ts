@@ -240,6 +240,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       this.pluginsDir,
       pluginId => this.lifecycle.unloadPlugin(pluginId),
       this.legacyPluginsDir,
+      pluginId => this.hostServices.getConversationMappingPort().releaseTakeovers(pluginId),
     );
   }
 

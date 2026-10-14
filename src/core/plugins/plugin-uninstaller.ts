@@ -31,6 +31,8 @@ export class PluginUninstaller {
     private readonly unload: (pluginId: string) => Promise<void>,
     /** The legacy plugin tree the boot scan also loads from, or null when PLUGINS_DIR is set. */
     private readonly legacyPluginsDir: string | null = null,
+    /** Hands the chats the plugin took over back to the bot; the conversation store is not this file's. */
+    private readonly releaseTakeovers?: (pluginId: string) => Promise<void>,
   ) {}
 
   /** <root>/<id> for an id with no loaded package, or null if the id escapes that root. */
@@ -84,6 +86,18 @@ export class PluginUninstaller {
     // otherwise leak <dataDir>/plugins/<id> — persisted secrets included — on every uninstall.
     // Best-effort, and strictly that one plugin's directory.
     this.pluginStorage.deletePluginData(pluginId);
+
+    // A takeover the plugin held keeps every other plugin silent on that chat, and nothing is left to
+    // hand it back. Best-effort: the plugin is gone either way.
+    try {
+      await this.releaseTakeovers?.(pluginId);
+    } catch (error) {
+      this.logger.warn(`Could not release the takeovers of uninstalled plugin ${pluginId}`, {
+        pluginId,
+        action: 'plugin_takeover_release_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     this.logger.log(`Plugin uninstalled: ${pluginId}`, { pluginId, action: 'plugin_uninstalled' });
   }
