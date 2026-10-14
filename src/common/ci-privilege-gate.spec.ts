@@ -551,3 +551,18 @@ describe('the dashboard unit tests are bounded', () => {
     expect(steps[0]['timeout-minutes']).toEqual(expect.any(Number));
   });
 });
+
+/**
+ * The PHP release runs the SDK tests and then pushes to the mirror with a personal access token in the
+ * environment, in one job. A git hook that a dev dependency of those tests left behind would run in that
+ * push with the token, so the push runs with hooks switched off.
+ */
+describe('the PHP SDK release pushes to the mirror with hooks disabled', () => {
+  it('names core.hooksPath on the push that carries the token', () => {
+    const pushes = runCommandsOf('php-sdk-release.yml')
+      .flatMap(run => run.split('\n'))
+      .filter(line => /\bgit\b.*\bpush\b/.test(line));
+    expect(pushes.length).toBeGreaterThan(0);
+    for (const line of pushes) expect(line).toContain('core.hooksPath=/dev/null');
+  });
+});
