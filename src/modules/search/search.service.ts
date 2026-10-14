@@ -1,6 +1,6 @@
-import { Injectable, NotImplementedException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotImplementedException } from '@nestjs/common';
 import { SearchProviderRegistry } from './search-provider.registry';
-import { SEARCH_DEFAULT_LIMIT, SEARCH_LIMIT_MAX, SEARCH_OFFSET_MAX } from './search.constants';
+import { SEARCH_DEFAULT_LIMIT, SEARCH_LIMIT_MAX, SEARCH_OFFSET_MAX, SEARCH_TERMS_MAX } from './search.constants';
 import type { SearchQuery, SearchResults } from './search.types';
 
 @Injectable()
@@ -10,6 +10,11 @@ export class SearchService {
   async search(query: SearchQuery, callerSessionIds?: string[], callerChatIds?: string[]): Promise<SearchResults> {
     const provider = this.registry.active();
     if (!provider) throw new NotImplementedException('Search is not configured (no active search provider).');
+    // Bounded here, ahead of every provider: the cost of a query grows with its words, whatever backend
+    // runs it. A repeated word is one word.
+    if (new Set(query.q.trim().split(/\s+/)).size > SEARCH_TERMS_MAX) {
+      throw new BadRequestException(`q may hold at most ${SEARCH_TERMS_MAX} distinct words.`);
+    }
     // Auth scoping is authoritative — a caller cannot override it via the query. This covers both
     // fences: sessions (allowedSessions) and chats (allowedChats, expanded lid-aware by the caller),
     // each undefined for an unrestricted key. Bound pagination host-side so EVERY provider

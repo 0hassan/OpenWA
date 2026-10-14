@@ -18,3 +18,13 @@ export const SEARCH_OFFSET_MAX = 100_000;
 
 /** Default page size when a caller omits `limit` (matches the built-in provider's historical default). */
 export const SEARCH_DEFAULT_LIMIT = 50;
+
+/** Longest `q`, in characters. A generous bound: it exists so the request cannot be a megabyte of terms. */
+export const SEARCH_QUERY_MAX_LENGTH = 1000;
+
+/**
+ * Most distinct whitespace-separated words in `q`. Each one costs a pass over every message that
+ * matches, and the built-in provider runs on the event loop, so a query of hundreds of words froze every
+ * session for seconds. A word repeated is still one word: the provider collapses repeats.
+ */
+export const SEARCH_TERMS_MAX = 32;

@@ -187,6 +187,17 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     }
   });
 
+  it('runs a repeated word once, since a repeat adds nothing under AND but costs a pass per match', async () => {
+    const query = jest.spyOn(ds, 'query');
+    const repeated = await provider.search({ q: Array.from({ length: 200 }, () => 'hello').join(' ') });
+    const single = await provider.search({ q: 'hello' });
+
+    const matched = query.mock.calls.filter(([sql]) => String(sql).includes('MATCH')).map(([, params]) => params);
+    expect((matched[0] as unknown[])[0]).toBe('"hello"');
+    expect((matched[1] as unknown[])[0]).toBe('"hello"');
+    expect(repeated.hits.map(h => h.messageId)).toEqual(single.hits.map(h => h.messageId));
+  });
+
   it('keeps multi-token AND semantics after quoting', async () => {
     // Both rows carry 'hello' AND 'world'... exactly one does ('goodbye world' lacks 'hello').
     const res = await provider.search({ q: 'hello world' });

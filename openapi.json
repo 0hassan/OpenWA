@@ -17723,8 +17723,9 @@
             "name": "q",
             "required": true,
             "in": "query",
-            "description": "Search term (required, non-empty)",
+            "description": "Search term (required, non-empty, at most 1000 characters and 32 distinct words)",
             "schema": {
+              "maxLength": 1000,
               "type": "string"
             }
           },
@@ -17829,7 +17830,7 @@
             }
           },
           "400": {
-            "description": "Empty or whitespace-only \"q\"",
+            "description": "Empty or whitespace-only \"q\", or one over 1000 characters or 32 distinct words",
             "content": {
               "application/json": {
                 "schema": {

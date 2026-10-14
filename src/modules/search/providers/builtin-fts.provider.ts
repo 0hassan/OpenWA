@@ -314,7 +314,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
    * unchanged. Postgres already uses the tolerant websearch_to_tsquery and needs no equivalent.
    */
   private static toFts5Query(raw: string): string {
-    const tokens = raw.trim().split(/\s+/).filter(Boolean);
+    // A repeated token is dropped: `a a` is `a` under implicit AND, but FTS5 would pay for each copy
+    // on every matching row.
+    const tokens = [...new Set(raw.trim().split(/\s+/).filter(Boolean))];
     if (tokens.length === 0) return '""';
     return tokens.map(tok => `"${tok.replace(/"/g, '""')}"`).join(' ');
   }

@@ -112,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep one terminal webhook failure per receiver idempotency key.
 - Reject poll votes with no matching options while preserving explicit vote clearing.
 - Read the duration and waveform of an outgoing Baileys audio file in a separate process, so a crafted file can no longer abort or exhaust the gateway.
+- Bound `GET /api/search` to 1000 characters and 32 distinct words and run a repeated word once, so one request can no longer hold the event loop on SQLite for seconds.
 
 ### Documentation
 
@@ -146,6 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
 - Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working until it is edited.
+- `GET /api/search` answers `400` for a `q` over 1000 characters or with more than 32 distinct words; a repeated word counts once.
 - With `DATABASE_SSL=true`, the PostgreSQL certificate is now verified against `DATABASE_HOST` even when it is an IP address (`pg` 8.23.1). A certificate that names only `localhost` stops matching a connection by IP: use the certificate's DNS name as the host or add the IP to its subject alternative names. `DATABASE_SSL_REJECT_UNAUTHORIZED=false` remains the escape hatch.
 - The first boot builds three indexes on `messages` (`IDX_messages_session_timestamp_id`, `IDX_messages_session_chat_timestamp_id` and `IDX_messages_session_direction_timestamp_id`) not concurrently; on a large table boot takes longer, on PostgreSQL writes to that table wait until each build finishes, and the table with its indexes grows by about 240 MB per million messages.
 - Baileys answers `400` for an animated sticker with more than 500 frames.
