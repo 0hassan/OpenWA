@@ -865,6 +865,49 @@ describe('MessageProjector (inbound projection)', () => {
         expect(updatesAfterInsert()).toEqual([]);
       });
 
+      // An id names one message: a repeat of it from another chat, emitted while the first is still in its
+      // hook chain, must not take the chat the entry is judged by.
+      it('keeps the chat of the first delivery of an id when a repeat names another chat', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+        // The repeat is emitted and its insert is out, so its entry is still the shared one when the change
+        // that names its chat arrives.
+        let finishRepeat: () => void = () => undefined;
+        messageRepository.insert.mockImplementationOnce(
+          () =>
+            new Promise(resolve => {
+              finishRepeat = () => resolve({ identifiers: [{ id: 1 }], generatedMaps: [{}] });
+            }),
+        );
+
+        projector.handleInboundMessage(
+          SESSION_ID,
+          engine,
+          makeIncoming({ chatId: '15559998888@c.us', from: '15559998888@c.us' }),
+        );
+        await drain();
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'FORGED',
+          chatId: '15559998888@c.us',
+          fromMe: false,
+        } as never);
+        await drain();
+        releaseHook();
+        await drain();
+        finishRepeat();
+        await drain();
+
+        // What the first delivery is stored and announced with: not the text aimed through the repeat.
+        const bodies = messageRepository.insert.mock.calls.map(([row]) => (row as { body: string }).body);
+        expect(bodies).not.toContain('FORGED');
+        const announced = (webhookService.dispatch.mock.calls as Array<[string, string, { body?: string }]>)
+          .filter(([, event]) => event === 'message.received')
+          .map(([, , payload]) => payload.body);
+        expect(announced).not.toContain('FORGED');
+      });
+
       it("keeps another member's edit out of a group message while its row is not written", async () => {
         const engine = makeEngine();
         engines.set(SESSION_ID, engine);

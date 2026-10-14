@@ -319,6 +319,28 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
 
     // An id names one message. A repeat of it sent from another chat is held under the same entry, and
     // must not take the entry over: a change aimed through the repeat would be judged by its chat.
+    it('keeps the chat of the first arrival of an own echo too', async () => {
+      const first = admit(arrival('A', CHAT, false, false, true));
+      const repeat = admit(arrival('A', OTHER, false, false, true));
+      const gate = deferred<void>();
+      insertGate = row => (row.chatId === OTHER ? gate.promise : Promise.resolve());
+      projector.handleOwnSendEcho('s1', engine, message('A', OTHER, { fromMe: true, body: 'repeat echo' }), repeat);
+      await flush();
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'A',
+        body: 'FORGED',
+        chatId: OTHER,
+        fromMe: true,
+      } as never);
+      projector.handleOwnSendEcho('s1', engine, message('A', CHAT, { fromMe: true, body: 'echo' }), first);
+      await flush();
+      gate.resolve();
+      await flush();
+
+      expect(rows.find(r => r.chatId === CHAT)).toEqual(expect.objectContaining({ body: 'echo' }));
+      expect(dispatched('message.sent').map(p => p.body)).not.toContain('FORGED');
+    });
+
     // In a group the edit comes from the participant who wrote the message, which the arrival names.
     it('keeps a group edit by another participant out of the message, and takes the one by its author', async () => {
       const GROUP = '120363000000000001@g.us';

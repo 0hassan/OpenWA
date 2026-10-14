@@ -8822,6 +8822,51 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
     expect(onMessageCreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'REUSED', fromMe: true }));
   });
 
+  it.each([
+    ['one-to-one chat', { remoteJid: PEER, fromMe: false }],
+    ['member of the same group', { remoteJid: GROUP, fromMe: false, participant: '628333@s.whatsapp.net' }],
+  ])('drops a reuse of the id of a group message still downloading from another %s', async (_name, key) => {
+    let release!: () => void;
+    baileys.downloadMediaMessage.mockReturnValueOnce(
+      new Promise(resolve => {
+        release = () => resolve(streamOf(Buffer.from('JPEG')));
+      }),
+    );
+    const onMessage = jest.fn();
+    const adapter = newAdapter();
+    await adapter.initialize({ onMessage });
+    fakeSock.fire('connection.update', { connection: 'open' });
+    const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        {
+          key: { remoteJid: GROUP, fromMe: false, participant: '628111@s.whatsapp.net', id: 'GROUPED' },
+          message: { imageMessage: { mimetype: 'image/jpeg', caption: 'the original' } },
+          messageTimestamp: 1700000099,
+        },
+      ],
+    });
+    fakeSock.fire('messages.upsert', {
+      type: 'notify',
+      messages: [
+        { key: { ...key, id: 'GROUPED' }, message: { conversation: 'a reuse' }, messageTimestamp: 1700000100 },
+      ],
+    });
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      'Dropping a message that reuses the id of one still being processed',
+      expect.objectContaining({ msgId: 'GROUPED' }),
+    );
+
+    release();
+    for (let i = 0; i < 5; i++) await settle();
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 'GROUPED', body: 'the original' }));
+  });
+
   it('still takes a repeat delivery of a message still downloading from the same chat and sender', async () => {
     let release!: () => void;
     baileys.downloadMediaMessage
