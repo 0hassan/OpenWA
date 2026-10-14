@@ -221,9 +221,27 @@ test('an archived audio placeholder reserves the height of the player that repla
   assert.ok(placeholder, 'the placeholder did not render');
   assert.ok(placeholder.classList.contains('message-media-archived-loading-audio'));
   // The player has a fixed height, so a placeholder of that height means the bubble never grows when
-  // the bytes land (a reader scrolled up, or pinned to the bottom, would otherwise be moved by it).
+  // the bytes land (a reader scrolled up, or pinned to the bottom, would otherwise be moved by it). The
+  // player's bottom margin is 0.25rem larger than the placeholder's, which the box makes up.
   const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
-  assert.match(css, /\.message-media-archived-loading-audio\s*\{[^}]*min-height:\s*54px/);
+  assert.match(css, /\.message-media-archived-loading-audio\s*\{[^}]*min-height:\s*calc\(54px \+ 0\.25rem\)/);
+});
+
+test('an archived video placeholder reserves the box a video element has before its metadata loads', async () => {
+  const { container } = rtl.render(
+    createElement(ArchivedMediaPreview, {
+      kind: 'video',
+      fallback,
+      load: () => new Promise<Blob>(() => undefined),
+    }),
+  );
+  const placeholder = container.querySelector('.message-media-archived-loading');
+  assert.ok(placeholder, 'the placeholder did not render');
+  assert.ok(placeholder.classList.contains('message-media-archived-loading-video'));
+  // A video element is 150px tall until it knows its size. An 18px placeholder swapped for it pushed the
+  // text a reader was on down by 140px for every video above them.
+  const css = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8');
+  assert.match(css, /\.message-media-archived-loading-video\s*\{[^}]*min-height:\s*calc\(150px \+ 0\.25rem\)/);
 });
 
 test('an archived audio player reports its arrival so a bottom-pinned thread stays pinned', async () => {

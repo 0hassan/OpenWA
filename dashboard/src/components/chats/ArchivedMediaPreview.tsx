@@ -132,7 +132,9 @@ function ArchivedMediaPreview({
     return (
       <div
         ref={anchorRef}
-        className={`message-media-omitted message-media-archived-loading${kind === 'audio' ? ' message-media-archived-loading-audio' : ''}`}
+        className={`message-media-omitted message-media-archived-loading${
+          kind === 'audio' || kind === 'video' ? ` message-media-archived-loading-${kind}` : ''
+        }`}
         role="status"
         aria-busy="true"
         aria-label={t('common.loading')}

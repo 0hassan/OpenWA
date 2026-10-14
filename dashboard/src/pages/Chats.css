@@ -1005,10 +1005,17 @@
   text-decoration: none;
 }
 
-/* The archived audio placeholder holds the height of the native player that replaces it, so the bubble
-   does not grow when the bytes land and move a thread that was pinned to the bottom or being read. */
+/* The archived audio and video placeholders hold the height of the element that replaces them, so the
+   bubble does not grow when the bytes land and move a thread that was pinned to the bottom or being read.
+   The element's own bottom margin is 0.5rem and the placeholder's 0.25rem, so the quarter rem that is
+   missing from the margin is added to the box: a native audio player is 54px tall, and a video element
+   that has no metadata yet has the default 150px replaced-element height. */
 .chats-page .message-media-archived-loading-audio {
-  min-height: 54px;
+  min-height: calc(54px + 0.25rem);
+}
+
+.chats-page .message-media-archived-loading-video {
+  min-height: calc(150px + 0.25rem);
 }
 
 /* The map preview keeps its own modest cap, but bounded by the bubble the way every other media type
