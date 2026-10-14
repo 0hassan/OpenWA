@@ -27,12 +27,37 @@ interface OrchestrationResult {
   estimatedTime: number; // Estimated restart time in seconds
 }
 
+/** How long a reachability or listing call may take before the daemon is read as unavailable. */
+const DOCKER_CALL_TIMEOUT_MS = 10_000;
+
 @Injectable()
 export class DockerService implements OnModuleInit {
   private readonly logger = createLogger(DockerService.name);
   private docker: Docker | null = null;
   private isAvailable = false;
   private reinitInFlight = false;
+  /** Visible for testing. */
+  callTimeoutMs = DOCKER_CALL_TIMEOUT_MS;
+
+  /**
+   * dockerode sets no timeout, so a daemon or socket proxy that accepts the connection and never
+   * answers (a dropped SYN, a wedged upstream) would hold the caller, boot included, until the OS or
+   * the proxy gave up. Short calls are bounded here; image pulls and container starts are not.
+   */
+  private async answered<T>(call: Promise<T>, what: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Docker did not answer ${what} within ${this.callTimeoutMs}ms`)),
+        this.callTimeoutMs,
+      );
+    });
+    try {
+      return await Promise.race([call, deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   async onModuleInit() {
     await this.initializeDocker();
@@ -90,7 +115,7 @@ export class DockerService implements OnModuleInit {
   private async initializeDocker(): Promise<void> {
     try {
       this.docker = new Docker(this.buildDockerOptions());
-      await this.docker.ping();
+      await this.answered(this.docker.ping(), 'a ping');
       this.isAvailable = true;
       this.logger.log('Docker API connected successfully');
     } catch (error) {
@@ -142,7 +167,7 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const containers = await this.docker.listContainers({ all: true });
+      const containers = await this.answered(this.docker.listContainers({ all: true }), 'a container list');
       return containers
         .filter(c => {
           // Filter by OpenWA labels or name prefix
@@ -186,12 +211,15 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const containers = await this.docker.listContainers({
-        all: true,
-        filters: {
-          label: [`com.openwa.service=${service}`],
-        },
-      });
+      const containers = await this.answered(
+        this.docker.listContainers({
+          all: true,
+          filters: {
+            label: [`com.openwa.service=${service}`],
+          },
+        }),
+        'a container list',
+      );
 
       if (containers.length > 0) {
         return this.docker.getContainer(containers[0].Id);
@@ -200,7 +228,7 @@ export class DockerService implements OnModuleInit {
       // Fallback: try by EXACT name (never a substring — a substring, and especially the empty
       // string, would resolve an arbitrary container). OpenWA-managed containers are `openwa-<service>`.
       const target = `openwa-${service}`;
-      const allContainers = await this.docker.listContainers({ all: true });
+      const allContainers = await this.answered(this.docker.listContainers({ all: true }), 'a container list');
       const match = allContainers.find(c => c.Names?.some(n => n === target || n === `/${target}`));
 
       if (match) {
@@ -624,7 +652,7 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const info = (await this.docker.info()) as {
+      const info = (await this.answered(this.docker.info(), 'the daemon info')) as {
         Containers: number;
         ContainersRunning: number;
         ContainersPaused: number;
