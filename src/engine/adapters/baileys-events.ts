@@ -801,17 +801,6 @@ export class BaileysEvents {
   }
 
   /**
-   * The stored copy of a message id, or null when the store cannot answer.
-   *
-   * Deliberately fail-open: a locked database or a row whose JSON no longer parses must not be read
-   * as "this was never sent". The caller's only other outcome is the catch above, which drops the
-   * message outright, and Baileys acks the node before it emits the upsert, so WhatsApp does not
-   * send it again. A repeat is absorbed where it matters: the webhook carries the same idempotency
-   * key and the insert oracle holds the row to one. A WebSocket subscriber does see the frame twice,
-   * which is the price paid here deliberately, because a message nobody ever hears about cannot be
-   * recovered at all. The persist side of the same store is already written this way.
-   */
-  /**
    * What an edit, revoke or reaction targets: the stored copy, or the one still being processed. The
    * in-flight copy is taken BEFORE the store is read, because an original that finishes while the read is
    * out has left the map and may have been written after the read began, which would find it in neither.
@@ -827,6 +816,17 @@ export class BaileysEvents {
     return inFlight ? { key: inFlight.key, message: inFlight.message } : null;
   }
 
+  /**
+   * The stored copy of a message id, or null when the store cannot answer.
+   *
+   * Deliberately fail-open: a locked database or a row whose JSON no longer parses must not be read
+   * as "this was never sent". The caller's only other outcome is the catch above, which drops the
+   * message outright, and Baileys acks the node before it emits the upsert, so WhatsApp does not
+   * send it again. A repeat is absorbed where it matters: the webhook carries the same idempotency
+   * key and the insert oracle holds the row to one. A WebSocket subscriber does see the frame twice,
+   * which is the price paid here deliberately, because a message nobody ever hears about cannot be
+   * recovered at all. The persist side of the same store is already written this way.
+   */
   private async readStoredMessage(messageId: string, purpose: string): Promise<WAMessage | null> {
     try {
       return (await this.host.getStoredMessage(messageId)) ?? null;

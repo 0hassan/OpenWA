@@ -176,8 +176,6 @@ describe('InfraConfigController.saveConfig local storage path', () => {
     // With no boot snapshot recorded, every key in the environment counts as host-supplied.
     process.env.STORAGE_LOCAL_PATH = '/srv/openwa/media';
     try {
-      useRealProbe();
-
       newController().saveConfig(localAt(unwritable));
 
       expect(resolveStorageRoot).not.toHaveBeenCalled();

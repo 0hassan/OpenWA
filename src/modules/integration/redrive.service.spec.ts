@@ -4,6 +4,7 @@ import { IntegrationDeliveryFailure } from './entities/integration-delivery-fail
 import { IngressEvent } from './entities/ingress-event.entity';
 import { Repository } from 'typeorm';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from './integration.constants';
+import { LoggerService } from '../../common/services/logger.service';
 
 describe('RedriveService', () => {
   let repo: jest.Mocked<Partial<Repository<IntegrationDeliveryFailure>>>;
@@ -38,14 +39,26 @@ describe('RedriveService', () => {
       .mockRejectedValueOnce(new SyntaxError('Unexpected token o in JSON at position 1'))
       .mockResolvedValueOnce([{ id: 'f1' }, { id: 'f2' }]);
     (repo.findOneBy as jest.Mock).mockRejectedValueOnce(new SyntaxError('bad json')).mockResolvedValueOnce(healthy);
+    const logged = jest.spyOn(LoggerService.prototype, 'error').mockImplementation(() => undefined);
 
-    const res = await makeSvc().redriveInstance('p', 'i', null);
+    try {
+      const res = await makeSvc().redriveInstance('p', 'i', null);
 
-    expect(res.redriven).toBe(1);
-    expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
-    expect(repo.update).toHaveBeenCalledWith({ id: 'f2' }, { redriven: true });
-    // The unreadable row goes behind the readable ones, so a batch of them cannot starve the rest.
-    expect(repo.increment).toHaveBeenCalledWith({ id: 'f1' }, 'attempts', 1);
+      expect(res.redriven).toBe(1);
+      expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
+      expect(repo.update).toHaveBeenCalledWith({ id: 'f2' }, { redriven: true });
+      // The unreadable row goes behind the readable ones, so a batch of them cannot starve the rest.
+      expect(repo.increment).toHaveBeenCalledWith({ id: 'f1' }, 'attempts', 1);
+      // Its id and the action are fields of the log line, as an alert on the action reads them: not
+      // folded into the trace argument.
+      expect(logged).toHaveBeenCalledWith(
+        expect.stringContaining('could not be read'),
+        expect.any(String),
+        expect.objectContaining({ id: 'f1', action: 'ingress_redrive_row_unreadable' }),
+      );
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('re-enqueues non-redriven inbound failures for an instance and marks them redriven', async () => {
