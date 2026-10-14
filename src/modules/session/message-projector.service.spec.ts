@@ -843,6 +843,8 @@ describe('MessageProjector (inbound projection)', () => {
           'message.received',
           expect.objectContaining({ body: 'FORGED' }),
         );
+        // Nor is it announced as an edit of a message the consumer has not been given yet.
+        expect(webhookService.dispatch).not.toHaveBeenCalledWith(SESSION_ID, 'message.edited', expect.anything());
       });
 
       it('keeps an edit that claims to come from the account out of a message the counterparty sent', async () => {

@@ -475,11 +475,15 @@ export class BaileysEvents {
         // Learned before the chat id is canonicalized, as processInboundMessage does without a ticket.
         this.host.recordKeyLidMappings(msg.key);
         const remoteJid = msg.key.remoteJid!;
+        const behindChat = (remoteJid.endsWith('@g.us') || remoteJid.endsWith('@broadcast')) && msg.key.participant;
         return admit({
           id: msg.key.id ?? '',
           chatId: this.host.toNeutralJid(baileysChatJid(remoteJid, msg.key.participant, msg.key.fromMe === true)),
           status: remoteJid === 'status@broadcast',
           needsRoom: this.plannedMediaDownload(this.host.getLoadedLib?.(), msg),
+          fromMe: msg.key.fromMe === true,
+          // As the mapper sets it, so a change that arrives before the emit is held to the same rule.
+          ...(behindChat ? { author: this.host.toNeutralJid(msg.key.participant!) } : {}),
         });
       },
       error =>

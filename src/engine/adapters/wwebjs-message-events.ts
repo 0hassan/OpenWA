@@ -31,6 +31,8 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
           chatId: base.chatId,
           status: Boolean(base.isStatusBroadcast),
           needsRoom: mayDownload && plannedInboundDownload(msg),
+          fromMe: base.fromMe,
+          ...(base.author ? { author: base.author } : {}),
         }),
       error =>
         host.logger.error(

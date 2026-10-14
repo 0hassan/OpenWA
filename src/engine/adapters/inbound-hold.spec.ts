@@ -511,6 +511,27 @@ describe('Baileys inbound messages held for storage', () => {
     expect(h.announced()).toEqual(['H']);
   });
 
+  // The session holds a change that reaches a message before its emit to the rule of the row it will
+  // become, which needs the direction and the sender from the arrival on.
+  it('names whose message it is in the arrival, and the sender behind a group message', async () => {
+    const h = heldProjector();
+    const admitInbound = jest.fn(h.callbacks.admitInbound);
+    const { events } = build(4, { ...h.callbacks, admitInbound });
+    const own = { ...text('B', 'c@s.whatsapp.net'), key: { id: 'B', remoteJid: 'c@s.whatsapp.net', fromMe: true } };
+    const member = {
+      ...text('C', '120363000000000001@g.us'),
+      key: { id: 'C', remoteJid: '120363000000000001@g.us', fromMe: false, participant: 'm@s.whatsapp.net' },
+    };
+    upsert(events, text('A', 'c@s.whatsapp.net'), own as WAMessage, member as WAMessage);
+    await flush();
+
+    expect(admitInbound.mock.calls.map(([a]) => [a.id, a.fromMe, a.author])).toEqual([
+      ['A', false, undefined],
+      ['B', true, undefined],
+      ['C', false, 'm@s.whatsapp.net'],
+    ]);
+  });
+
   it('still processes a message, and the rest of its batch, when its admission throws', async () => {
     const h = heldProjector();
     let calls = 0;
@@ -956,6 +977,20 @@ describe('whatsapp-web.js inbound messages held for storage', () => {
     ]);
     expect(page).toHaveBeenCalledTimes(1);
     expect(h.inserted()).toEqual(['echo-image', 'echo-text']);
+  });
+
+  it('names whose message it is in the arrival', async () => {
+    const h = heldProjector();
+    const admitInbound = jest.fn(h.callbacks.admitInbound);
+    const { client } = build({ ...h.callbacks, admitInbound });
+    client.emit('message_create', ownEcho('mine', '628111@c.us', undefined, 'hi'));
+    client.emit('message', incoming('theirs', '628111@c.us', undefined, 'hello'));
+    await flush();
+
+    expect(admitInbound.mock.calls.map(([a]) => [a.id, a.fromMe])).toEqual([
+      ['mine', true],
+      ['theirs', false],
+    ]);
   });
 
   it('settles the ticket of an own echo its handler never takes, so the chat is not held up', async () => {

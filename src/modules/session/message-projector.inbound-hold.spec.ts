@@ -52,7 +52,13 @@ const message = (id: string, chatId: string, over: Partial<IncomingMessage> = {}
   ...over,
 });
 
-const arrival = (id: string, chatId: string, needsRoom = false, status = false) => ({ id, chatId, needsRoom, status });
+const arrival = (id: string, chatId: string, needsRoom = false, status = false, fromMe?: boolean) => ({
+  id,
+  chatId,
+  needsRoom,
+  status,
+  fromMe,
+});
 
 describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
   const env = { ...process.env };
@@ -245,6 +251,83 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
     expect(hooked?.body).toBe('edited');
     expect(rows[0]).toEqual(expect.objectContaining({ body: 'edited' }));
     expect(dispatched('message.received')[0]).toEqual(expect.objectContaining({ body: 'edited' }));
+  });
+
+  // The entry exists from the arrival, and a change that names another chat or the other party has to be
+  // held to the rule of the row it will become from then on, not only once the message is emitted.
+  describe('a change that reaches a message admitted on arrival', () => {
+    // Phone ids, so that two of them are provably different chats.
+    const CHAT = '15550001111@c.us';
+    const OTHER = '15559998888@c.us';
+
+    it('keeps an edit from another chat out of the message, and does not announce it', async () => {
+      const t = admit(arrival('A', CHAT, false, false, false));
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'A',
+        body: 'FORGED',
+        chatId: OTHER,
+        fromMe: false,
+      } as never);
+      projector.handleInboundMessage('s1', engine, message('A', CHAT, { body: 'original' }), t);
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: 'original' }));
+      expect(dispatched('message.edited')).toEqual([]);
+      expect(eventsGateway.emitMessageEdited).not.toHaveBeenCalled();
+    });
+
+    it('keeps an edit that claims to come from the account out of a message the counterparty sent', async () => {
+      const t = admit(arrival('A', CHAT, false, false, false));
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'A',
+        body: 'FORGED',
+        chatId: CHAT,
+        fromMe: true,
+      } as never);
+      projector.handleInboundMessage('s1', engine, message('A', CHAT, { body: 'original' }), t);
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: 'original' }));
+      expect(dispatched('message.edited')).toEqual([]);
+    });
+
+    it('keeps a reaction aimed through another chat out of the message, and does not announce it', async () => {
+      const t = admit(arrival('A', CHAT, false, false, false));
+      projector.applyReactionQueued('s1', { messageId: 'A', chatId: OTHER, reaction: 'X', senderId: 'x@c.us' });
+      projector.handleInboundMessage('s1', engine, message('A', CHAT), t);
+      await flush();
+
+      expect((rows[0].metadata as Row | undefined)?.reactions).toBeUndefined();
+      expect(eventsGateway.emitMessageReaction).not.toHaveBeenCalled();
+    });
+
+    it('still takes an edit from the same chat and sender', async () => {
+      const t = admit(arrival('A', CHAT, false, false, false));
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'A',
+        body: 'edited',
+        chatId: CHAT,
+        fromMe: false,
+      } as never);
+      projector.handleInboundMessage('s1', engine, message('A', CHAT, { body: 'original' }), t);
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: 'edited' }));
+    });
+
+    it('does not guess a direction when the engine did not say whose message it is', async () => {
+      const t = admit(arrival('A', CHAT));
+      projector.applyMessageEditQueued('s1', {
+        messageId: 'A',
+        body: 'edited',
+        chatId: CHAT,
+        fromMe: true,
+      } as never);
+      projector.handleInboundMessage('s1', engine, message('A', CHAT, { body: 'original', fromMe: true }), t);
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: 'edited' }));
+    });
   });
 
   it('stores a reaction and an ack that arrived before the emit once the row is written', async () => {

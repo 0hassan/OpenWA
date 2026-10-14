@@ -864,6 +864,10 @@ export interface EngineEventCallbacks {
     chatId: string;
     needsRoom: boolean;
     status: boolean;
+    /** Whether the account itself sent it. Left out where the engine cannot say before it maps the message. */
+    fromMe?: boolean;
+    /** The neutral id of the sender behind a group, status or list message, as `IncomingMessage.author`. */
+    author?: string;
   }) => InboundTicket | undefined;
   onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void;
   /**

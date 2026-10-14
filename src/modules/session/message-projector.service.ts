@@ -92,6 +92,13 @@ type InboundMessageData = { [K in keyof IncomingMessage]: IncomingMessage[K] };
 
 const quoteOf = (m: Pick<IncomingMessage, 'chatId' | 'body'>) => ({ chatId: m.chatId, body: m.body });
 
+/** Where a message lives and who wrote it: what a change aimed at it is held to (see mutationTargetsForeignRow). */
+const refOf = (m: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>): StoredMessageRef => ({
+  chatId: m.chatId,
+  direction: m.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+  author: m.author,
+});
+
 /** A message not yet written, and the changes that reached it meanwhile (see inboundInFlight). */
 interface InFlightEntry {
   // What a quote of it may lend, as the hook chain last left it. Never the message itself: a repeat
@@ -270,7 +277,7 @@ export class MessageProjector {
   admitInbound(
     id: string,
     engine: IWhatsAppEngine,
-    a: { id: string; chatId: string; needsRoom: boolean; status: boolean },
+    a: { id: string; chatId: string; needsRoom: boolean; status: boolean; fromMe?: boolean; author?: string },
   ): InboundTicket | undefined {
     if (!this.engines.isLive(id, engine)) return undefined;
     const key = a.status || !a.id ? null : `${id}:${a.id}`;
@@ -278,6 +285,10 @@ export class MessageProjector {
     if (key) {
       entry = this.inboundInFlight.get(key) ?? entry;
       this.inboundInFlight.set(key, entry);
+      // From the arrival, so a change that reaches the message while it downloads media is held to the rule
+      // of the row it will become. Only when the engine says whose message it is: a guessed direction
+      // would refuse the account's own change.
+      if (a.fromMe !== undefined) entry.ref ??= refOf({ chatId: a.chatId, fromMe: a.fromMe, author: a.author });
     }
     entry.holders = (entry.holders ?? 0) + 1;
     const room = a.needsRoom ? this.room(id) : undefined;
@@ -364,7 +375,7 @@ export class MessageProjector {
     // handler's rewrite.
     const inFlightKey = `${id}:${message.id}`;
     const inFlight = turn
-      ? Object.assign(turn.entry, { quote: quoteOf(messageData) })
+      ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
 
     const onFailure = (err: unknown): null => {
@@ -437,12 +448,15 @@ export class MessageProjector {
   /** Record a message as not yet written; a re-fire of the same id keeps the changes recorded so far. */
   private trackInFlight(key: string, message: InboundMessageData) {
     const { revoked, revokeAnnounced, editedBody, ackStatus, reactions } = this.inboundInFlight.get(key) ?? {};
-    const ref: StoredMessageRef = {
-      chatId: message.chatId,
-      direction: message.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
-      author: message.author,
+    const inFlight = {
+      quote: quoteOf(message),
+      ref: refOf(message),
+      revoked,
+      revokeAnnounced,
+      editedBody,
+      ackStatus,
+      reactions,
     };
-    const inFlight = { quote: quoteOf(message), ref, revoked, revokeAnnounced, editedBody, ackStatus, reactions };
     this.inboundInFlight.set(key, inFlight);
     return inFlight;
   }
@@ -901,7 +915,7 @@ export class MessageProjector {
     // path, the entry follows the chain's rewrites, so a quote carries what the row will hold.
     const inFlightKey = `${id}:${message.id}`;
     const inFlight = turn
-      ? Object.assign(turn.entry, { quote: quoteOf(messageData) })
+      ? Object.assign(turn.entry, { quote: quoteOf(messageData), ref: refOf(messageData) })
       : this.trackInFlight(inFlightKey, messageData);
     // Execute hook for message sent - plugins can modify or stop processing. Like the inbound path,
     // the hook chain runs concurrently and the commit waits its turn on the chat's queue.
@@ -1208,7 +1222,10 @@ export class MessageProjector {
   applyReactionQueued(id: string, event: ReactionEvent): void {
     // A message not written yet keeps the reaction for its row; the live event still goes out now.
     const inFlight = event.messageId ? this.inboundInFlight.get(`${id}:${event.messageId}`) : undefined;
-    if (inFlight && !this.foreignToInFlight(inFlight, { kind: 'reaction', chatId: event.chatId })) {
+    if (inFlight) {
+      // The row it will become would drop the change, and no row exists yet to say so: it is neither
+      // kept for the row nor announced.
+      if (this.foreignToInFlight(inFlight, { kind: 'reaction', chatId: event.chatId })) return;
       (inFlight.reactions ??= {})[event.senderId] = event.reaction ?? '';
     }
     this.mutationProjector.applyReactionQueued(id, event);
@@ -1217,15 +1234,10 @@ export class MessageProjector {
   /** Edit apply, queued on the per-message mutation chain — see MessageMutationProjector. */
   applyMessageEditQueued(id: string, message: EditedMessage): void {
     const inFlight = this.inboundInFlight.get(`${id}:${message.messageId}`);
-    if (
-      inFlight &&
-      !this.foreignToInFlight(inFlight, {
-        kind: 'edit',
-        chatId: message.chatId,
-        fromMe: message.fromMe,
-        author: message.author,
-      })
-    ) {
+    if (inFlight) {
+      // See applyReactionQueued: judged foreign, it is neither kept for the row nor announced.
+      const source = { kind: 'edit', chatId: message.chatId, fromMe: message.fromMe, author: message.author } as const;
+      if (this.foreignToInFlight(inFlight, source)) return;
       inFlight.editedBody = message.body;
     }
     this.mutationProjector.applyMessageEditQueued(id, message);
