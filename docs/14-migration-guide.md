@@ -827,8 +827,8 @@ set -e
 #    this step: see Known Upgrade Hazards below.
 mkdir -p ./backups
 docker exec -e BACKUP_DIR=/app/data/backups -e TMPDIR=/app/data/backups openwa-api ./scripts/backup.sh
-docker cp openwa-api:/app/data/backups/. ./backups/ \
-  && docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # the copy off the volume is the backup
+docker cp openwa-api:/app/data/backups/. ./backups/
+docker exec openwa-api sh -c 'rm -f /app/data/backups/openwa-backup-*.tar.gz'   # the copy off the volume is the backup
 
 # 2. Stop the current version
 docker compose down
