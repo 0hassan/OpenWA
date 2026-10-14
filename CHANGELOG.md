@@ -100,6 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
 - Stop `backup.sh` and `restore.sh` on an env line they cannot parse instead of falling back to a default path or TLS setting.
 - Verify the PostgreSQL server certificate in `backup.sh` when `DATABASE_SSL=true`, as the app does.
+- Leave no truncated archive in `BACKUP_DIR` when the final tar step of `backup.sh` fails, for example on a full volume.
 - Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.

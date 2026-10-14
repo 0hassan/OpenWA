@@ -66,6 +66,8 @@
 #       sets nothing and send both to the default paths (skipped as root)
 #   (ak) the archive and a BACKUP_DIR backup.sh creates stay private under a permissive umask, and the
 #       staging copy is removed after a backup that succeeds and one that fails
+#   (al) a tar that fails part way exits non-zero and leaves no archive in BACKUP_DIR, so a truncated
+#       file cannot pass for the newest backup
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -118,7 +120,7 @@ db_fingerprint() {
 # to shadow tar (simulating an incomplete archive) without touching the real scripts.
 populate_shim() {
   shim_dir="$1"
-  tools="env bash sh cp tar gzip mktemp date rm sed mkdir ls cat chmod grep printf uname dirname tr tail"
+  tools="env bash sh cp mv tar gzip mktemp date rm sed mkdir ls cat chmod grep printf uname dirname tr tail"
   if [ "${2:-}" = "with-sqlite3" ]; then
     tools="$tools sqlite3"
   fi
@@ -2238,6 +2240,41 @@ case "$AK_PROBE" in
     ;;
   *) pass "(ak) the archive is 600 and a created BACKUP_DIR is 700 (staging cleanup not checked: this mktemp ignores TMPDIR)" ;;
 esac
+
+echo ""
+echo "==> (al) a tar that fails part way leaves no archive behind"
+# A full volume stops tar after part of the archive is written. That file must not stay under the
+# openwa-backup-*.tar.gz name, where a listing or a keep-newest rotation reads it as the latest backup.
+AL="$WORK/al"
+mkdir -p "$AL/src/data" "$AL/shim"
+make_fixture "$AL/src/data/main.sqlite" "al-main"
+make_fixture "$AL/src/data/openwa.sqlite" "al-data"
+if [ "$HAS_SQLITE3" -eq 1 ]; then
+  populate_shim "$AL/shim" with-sqlite3
+else
+  populate_shim "$AL/shim"
+fi
+# (remove the populate_shim symlink first: writing through it would target the real tar)
+rm -f "$AL/shim/tar"
+cat >"$AL/shim/tar" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = "-czf" ]; then
+  printf 'partial' >"\$2"
+  echo "tar: Write error" >&2
+  exit 2
+fi
+exec "$REAL_TAR" "\$@"
+EOF
+chmod +x "$AL/shim/tar"
+set +e
+(cd "$AL/src" && PATH="$AL/shim" BACKUP_DIR="$AL/out" "$BACKUP" >/dev/null 2>&1)
+RC_AL=$?
+set -e
+[ "$RC_AL" -ne 0 ] || fail "(al) backup exited 0 after its tar failed"
+if [ -n "$(ls -A "$AL/out" 2>/dev/null || true)" ]; then
+  fail "(al) a truncated archive was left behind: $(ls -A "$AL/out")"
+fi
+pass "(al) a failed tar exits non-zero and leaves nothing in BACKUP_DIR"
 
 echo ""
 echo "All smoke tests passed!"
