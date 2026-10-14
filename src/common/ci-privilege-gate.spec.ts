@@ -358,6 +358,19 @@ describe('a job that can mint a publish credential pins global npm installs and 
   it.each(workflows)('%s: id-token jobs run no Python installer or build frontend', file => {
     expect(pythonInstallsInOidcJobs(file)).toEqual([]);
   });
+
+  // The JavaScript SDK's toolchain (the install, the test runner, the compiler that builds dist/) is
+  // third-party code as well. Its publish job uploads the tarball the build job made and tested, and
+  // runs nothing but the pinned npm that publishes it.
+  it('js-sdk-release.yml: the id-token job installs no project dependency and runs no project script', () => {
+    const runs = oidcJobRuns('js-sdk-release.yml')
+      .map(({ run }) => run)
+      .join('\n');
+    // Non-vacuity: the finder sees the publish step.
+    expect(runs).toMatch(/\bnpm publish\b/);
+    expect(runs).not.toMatch(/\bnpm[ \t]+(?:ci|test|run|audit|pack|exec|x|rebuild)\b|\bnpx\b/);
+    expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
+  });
 });
 
 /**

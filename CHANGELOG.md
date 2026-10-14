@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ffmpeg runs with only `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` from the gateway's environment, so no secret reaches it or a wrapper script behind `FFMPEG_PATH`.
 - The release workflow keeps its staging image when a gate fails on a good build, so a re-run of the failed jobs finds it; an abandoned release leaves one stray tag.
 - The PHP SDK release pushes its tag with git hooks disabled.
+- The JavaScript SDK release builds, tests and packs the tarball in a job without the publish credential, and a second job publishes that tarball; the Java SDK release runs its tests in a job without the Maven Central token and the signing key.
+- The release workflow reads the version it extracts the release notes for from the environment instead of interpolating it into the script.
 - Dependabot watches the Python, Java, PHP and Go SDK manifests.
 
 ### Fixed

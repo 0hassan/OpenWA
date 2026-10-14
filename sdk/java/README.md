@@ -206,7 +206,8 @@ One-time setup (repository secrets):
 - `GPG_PRIVATE_KEY` — ASCII-armored signing key.
 - `GPG_PASSPHRASE` — passphrase for that key.
 
-All four secrets are checked before anything is built, and a missing one **fails
+A `verify` job runs the tests with none of them. The `publish` job that follows
+checks all four secrets before it builds anything, and a missing one **fails
 the run**. That is deliberate: skipping the deploy and reporting green is
 indistinguishable from a real release in the run list, so configure the secrets
 before tagging rather than tagging to see what happens.

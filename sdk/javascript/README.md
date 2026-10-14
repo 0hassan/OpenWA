@@ -122,9 +122,10 @@ Cutting a release:
    version and never trigger an SDK publish.
 3. The workflow audits the SDK lockfile (`npm audit --audit-level=high`),
    re-runs the SDK's tests, typecheck, build and dual CJS/ESM smoke check
-   (packaging plus requests through each build's client), then publishes.
-   The published tarball is the one those gates passed, not a later
-   rebuild.
+   (packaging plus requests through each build's client), then packs the
+   tarball. A second job, the only one that can mint the publish credential,
+   uploads that tarball and runs no project code: the published bytes are the
+   ones those gates passed, not a later rebuild.
 
 ## License
 

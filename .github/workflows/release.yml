@@ -418,9 +418,11 @@ jobs:
 
       - name: Extract release notes from CHANGELOG
         id: changelog
+        env:
+          # Through the environment, not interpolated into the script: the value comes from the tag name.
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           # Extract the section for this version from CHANGELOG.md
-          VERSION="${{ steps.version.outputs.VERSION }}"
           NOTES=$(awk "/^## \[${VERSION}\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
           if [ -z "$NOTES" ]; then
             NOTES="Release v${VERSION}"

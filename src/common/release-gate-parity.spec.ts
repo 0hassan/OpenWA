@@ -255,7 +255,7 @@ describe('every npm tree is audited and kept current', () => {
   // tree from one path to the other is a deliberate edit here.
   it.each([
     ['release.yml', 'lint', ['', 'dashboard']],
-    ['js-sdk-release.yml', 'publish', ['sdk/javascript']],
+    ['js-sdk-release.yml', 'build', ['sdk/javascript']],
   ])('%s %s audits exactly the trees it publishes', (file, job, published) => {
     const audits = releaseAudits(file, job);
     expect(audits.map(audit => audit.tree)).toEqual(published);
@@ -265,11 +265,11 @@ describe('every npm tree is audited and kept current', () => {
     ).toEqual([]);
   });
 
-  // `npm audit` reads the lockfile alone, so a high advisory stops the publish job before `npm ci`
-  // runs any of the toolchain while the job can mint a publish credential.
+  // `npm audit` reads the lockfile alone, so a high advisory stops the build job before `npm ci`
+  // runs any of the toolchain.
   it('js-sdk-release.yml audits the SDK before it installs it', () => {
-    const [audit] = releaseAudits('js-sdk-release.yml', 'publish');
-    const install = jobSteps('js-sdk-release.yml', 'publish').findIndex(step =>
+    const [audit] = releaseAudits('js-sdk-release.yml', 'build');
+    const install = jobSteps('js-sdk-release.yml', 'build').findIndex(step =>
       /^npm ci\b/.test(executableLines(step.run ?? '').trim()),
     );
     expect(install).toBeGreaterThan(-1);
@@ -312,7 +312,7 @@ describe('every npm tree is audited and kept current', () => {
 describe('the JavaScript SDK tests run only on a Node their toolchain supports', () => {
   it.each([
     ['sdk-ci.yml', 'javascript'],
-    ['js-sdk-release.yml', 'publish'],
+    ['js-sdk-release.yml', 'build'],
   ])('%s %s installs under --engine-strict wherever it runs npm test', (file, job) => {
     const steps = (
       yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
