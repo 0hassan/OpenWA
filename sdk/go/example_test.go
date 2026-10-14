@@ -50,6 +50,8 @@ func ExampleClient_typedErrors() {
 	switch {
 	case errors.Is(err, openwa.ErrConflict):
 		// Engine not ready (409) — retry after the session reaches "ready".
+		// A keyed send can also answer 409 for a pending or uncertain outcome; APIError.Code
+		// tells them apart, and an uncertain one must be checked in the chat before it is sent again.
 	case errors.Is(err, openwa.ErrNotFound):
 		// Unknown session (404).
 	case err != nil:
