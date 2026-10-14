@@ -25,10 +25,7 @@ import java.net.Socket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.time.DateTimeException;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Map;
@@ -42,7 +39,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -144,37 +140,31 @@ class DefaultHttpTransportTest {
 
     @Test
     void reportsAFailedExchangeAsAnIOException() {
-        // The failure is HttpClient's own: older JDKs overflow computing a FOREVER deadline, newer ones
-        // saturate and send the request. transportFailure is covered on its own below either way.
-        Assumptions.assumeTrue(overflowsOnThisJdk(), "this JDK schedules a FOREVER timeout without overflowing");
-        AtomicInteger hits = new AtomicInteger();
-        server.createContext("/ok", ex -> {
-            hits.incrementAndGet();
-            ex.sendResponseHeaders(204, -1);
-            ex.close();
-        });
-        // HttpClient fails this exchange with an ArithmeticException; it must not escape as one.
+        // HttpClient fails an exchange it cannot schedule (a deadline that overflows, a closed selector
+        // manager) with a runtime exception, and it must not escape the transport as one. The failure is
+        // injected: which exchanges a JDK fails that way differs between releases.
+        RecordingClient failing = new RecordingClient(new ArithmeticException("long overflow"));
         HttpRequestData req = new HttpRequestData(
-            HttpMethod.GET, baseUrl + "/ok", Map.of(), null, ChronoUnit.FOREVER.getDuration());
+            HttpMethod.GET, baseUrl + "/ok", Map.of(), null, Duration.ofSeconds(5));
 
-        IOException err = assertThrows(IOException.class, () -> new DefaultHttpTransport().send(req));
+        IOException err = assertThrows(IOException.class, () -> new DefaultHttpTransport(failing).send(req));
 
         assertInstanceOf(ArithmeticException.class, err.getCause());
-        assertEquals(0, hits.get());
+        assertEquals(1, failing.started.get());
     }
 
-    private static boolean overflowsOnThisJdk() {
-        try {
-            Instant.now().plus(ChronoUnit.FOREVER.getDuration());
-            return false;
-        } catch (ArithmeticException | DateTimeException e) {
-            return true;
-        }
-    }
-
-    /** A client that only records whether an exchange was started. */
+    /** A client that records the exchanges it is asked to start, and fails them when given a failure. */
     private static final class RecordingClient extends HttpClient {
         final AtomicInteger started = new AtomicInteger();
+        private final Throwable failure;
+
+        RecordingClient() {
+            this(null);
+        }
+
+        RecordingClient(Throwable failure) {
+            this.failure = failure;
+        }
 
         @Override public Optional<CookieHandler> cookieHandler() { return Optional.empty(); }
         @Override public Optional<Duration> connectTimeout() { return Optional.empty(); }
@@ -195,7 +185,7 @@ class DefaultHttpTransportTest {
         public <T> CompletableFuture<HttpResponse<T>> sendAsync(
             HttpRequest request, HttpResponse.BodyHandler<T> handler) {
             started.incrementAndGet();
-            return new CompletableFuture<>();
+            return failure == null ? new CompletableFuture<>() : CompletableFuture.failedFuture(failure);
         }
 
         @Override
