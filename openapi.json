@@ -19994,7 +19994,8 @@
           "chatId": {
             "type": "string",
             "description": "WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)",
-            "example": "628123456789@c.us"
+            "example": "628123456789@c.us",
+            "maxLength": 255
           },
           "text": {
             "type": "string",
@@ -20063,7 +20064,8 @@
           "chatId": {
             "type": "string",
             "description": "WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)",
-            "example": "628123456789@c.us"
+            "example": "628123456789@c.us",
+            "maxLength": 255
           },
           "templateId": {
             "type": "string",
@@ -20111,7 +20113,8 @@
           "chatId": {
             "type": "string",
             "description": "WhatsApp chat ID",
-            "example": "628123456789@c.us"
+            "example": "628123456789@c.us",
+            "maxLength": 255
           },
           "url": {
             "type": "string",
@@ -20167,7 +20170,8 @@
           "chatId": {
             "type": "string",
             "description": "WhatsApp chat ID",
-            "example": "628123456789@c.us"
+            "example": "628123456789@c.us",
+            "maxLength": 255
           },
           "url": {
             "type": "string",
@@ -20226,7 +20230,8 @@
         "properties": {
           "chatId": {
             "type": "string",
-            "description": "Chat ID (e.g. 628123456789@c.us)"
+            "description": "Chat ID (e.g. 628123456789@c.us)",
+            "maxLength": 255
           },
           "latitude": {
             "type": "number",
@@ -20260,7 +20265,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "contactName": {
             "type": "string",
@@ -20287,7 +20293,8 @@
         "properties": {
           "chatId": {
             "type": "string",
-            "description": "Chat ID (e.g. 628123456789@c.us or 1203630000@g.us)"
+            "description": "Chat ID (e.g. 628123456789@c.us or 1203630000@g.us)",
+            "maxLength": 255
           },
           "name": {
             "type": "string",
@@ -20330,7 +20337,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "quotedMessageId": {
             "type": "string"
@@ -20362,7 +20370,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string",
@@ -20389,10 +20398,12 @@
         "type": "object",
         "properties": {
           "fromChatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "toChatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -20408,7 +20419,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -21065,7 +21077,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -21084,7 +21097,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "pollMessageId": {
             "type": "string",
@@ -21109,7 +21123,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -21134,7 +21149,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -21149,7 +21165,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -21169,7 +21186,8 @@
         "type": "object",
         "properties": {
           "chatId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 255
           },
           "messageId": {
             "type": "string"
@@ -21288,7 +21306,8 @@
           "chatId": {
             "type": "string",
             "description": "Recipient chat ID",
-            "example": "628123456789@c.us"
+            "example": "628123456789@c.us",
+            "maxLength": 255
           },
           "type": {
             "type": "string",
@@ -21347,7 +21366,8 @@
         "properties": {
           "batchId": {
             "type": "string",
-            "description": "Custom batch ID (auto-generated if not provided)"
+            "description": "Custom batch ID (auto-generated if not provided)",
+            "maxLength": 255
           },
           "messages": {
             "description": "Array of messages (max 100 per request; exact duplicate entries are collapsed — first occurrence wins)",

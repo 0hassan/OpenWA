@@ -1747,7 +1747,7 @@ Send a plain text message.
 
 | Field             | Type     | Required | Constraints                    | Description                                                                                  |
 | ----------------- | -------- | -------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
-| chatId            | string   | Yes      | non-empty                      | `phone@c.us` or `groupId@g.us`                                                               |
+| chatId            | string   | Yes      | non-empty, max 255             | `phone@c.us` or `groupId@g.us`                                                               |
 | text              | string   | Yes      | non-empty, max 4096            | Message text                                                                                 |
 | mentions          | string[] | No       | array of WIDs                  | WIDs to @mention (e.g. `["62811@c.us"]`). See **Mentions** below                             |
 | linkPreview       | boolean  | No       | —                              | `false` suppresses it; on Baileys `true` is required to get one. See **Link previews** below |
@@ -1873,7 +1873,7 @@ Render a stored text template (header/body/footer joined by blank lines, `{{vars
 
 | Field        | Type                    | Required    | Constraints                                       | Description                                                 |
 | ------------ | ----------------------- | ----------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| chatId       | string                  | Yes         | non-empty                                         | Target chat                                                 |
+| chatId       | string                  | Yes         | non-empty, max 255                                | Target chat                                                 |
 | templateId   | string                  | Conditional | non-empty; required when `templateName` is absent | Stored template id                                          |
 | templateName | string                  | Conditional | non-empty; required when `templateId` is absent   | Stored template name                                        |
 | vars         | Record\<string,string\> | No          | object                                            | Substituted into `{{placeholder}}` tokens; defaults to `{}` |
@@ -1914,7 +1914,7 @@ Send an image (by URL or base64) with an optional caption.
 
 | Field           | Type     | Required    | Constraints                           | Description                                                                              |
 | --------------- | -------- | ----------- | ------------------------------------- | ---------------------------------------------------------------------------------------- |
-| chatId          | string   | Yes         | non-empty                             | Target chat                                                                              |
+| chatId          | string   | Yes         | non-empty, max 255                    | Target chat                                                                              |
 | url             | string   | Conditional | URL; required when `base64` is absent | http/https media URL (SSRF-guarded; a blocked internal or unreachable URL maps to `400`) |
 | base64          | string   | Conditional | string; required when `url` is absent | Base64 media data (capped to the media byte limit)                                       |
 | mimetype        | string   | Conditional | string; required when using `base64`  | MIME type of the media                                                                   |
@@ -2034,14 +2034,14 @@ Send a location pin.
 
 **Request body** — `SendLocationDto`
 
-| Field           | Type   | Required | Constraints     | Description                                                                       |
-| --------------- | ------ | -------- | --------------- | --------------------------------------------------------------------------------- |
-| chatId          | string | Yes      | non-empty       | Target chat                                                                       |
-| latitude        | number | Yes      | valid latitude  | Latitude (out-of-range → `400`)                                                   |
-| longitude       | number | Yes      | valid longitude | Longitude (out-of-range → `400`)                                                  |
-| description     | string | No       | string          | Pin description                                                                   |
-| address         | string | No       | string          | Pin address                                                                       |
-| quotedMessageId | string | No       | non-empty       | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
+| Field           | Type   | Required | Constraints        | Description                                                                       |
+| --------------- | ------ | -------- | ------------------ | --------------------------------------------------------------------------------- |
+| chatId          | string | Yes      | non-empty, max 255 | Target chat                                                                       |
+| latitude        | number | Yes      | valid latitude     | Latitude (out-of-range → `400`)                                                   |
+| longitude       | number | Yes      | valid longitude    | Longitude (out-of-range → `400`)                                                  |
+| description     | string | No       | string             | Pin description                                                                   |
+| address         | string | No       | string             | Pin address                                                                       |
+| quotedMessageId | string | No       | non-empty          | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
 
 ```json
 {
@@ -2075,12 +2075,12 @@ Send a contact card (vCard).
 
 **Request body** — `SendContactDto`
 
-| Field           | Type   | Required | Constraints | Description                                                                       |
-| --------------- | ------ | -------- | ----------- | --------------------------------------------------------------------------------- |
-| chatId          | string | Yes      | non-empty   | Target chat                                                                       |
-| contactName     | string | Yes      | non-empty   | Display name for the contact card                                                 |
-| contactNumber   | string | Yes      | non-empty   | Contact phone number                                                              |
-| quotedMessageId | string | No       | non-empty   | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
+| Field           | Type   | Required | Constraints        | Description                                                                       |
+| --------------- | ------ | -------- | ------------------ | --------------------------------------------------------------------------------- |
+| chatId          | string | Yes      | non-empty, max 255 | Target chat                                                                       |
+| contactName     | string | Yes      | non-empty          | Display name for the contact card                                                 |
+| contactNumber   | string | Yes      | non-empty          | Contact phone number                                                              |
+| quotedMessageId | string | No       | non-empty          | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
 
 ```json
 { "chatId": "628123456789@c.us", "contactName": "John Doe", "contactNumber": "628987654321" }
@@ -2136,7 +2136,7 @@ Send a native WhatsApp poll.
 
 | Field                | Type     | Required | Constraints                               | Description                                                  |
 | -------------------- | -------- | -------- | ----------------------------------------- | ------------------------------------------------------------ |
-| chatId               | string   | Yes      | non-empty                                 | Target chat                                                  |
+| chatId               | string   | Yes      | non-empty, max 255                        | Target chat                                                  |
 | name                 | string   | Yes      | max 255                                   | Poll question / title                                        |
 | options              | string[] | Yes      | 2–12 items, each non-empty, max 100 chars | Options to vote on                                           |
 | allowMultipleAnswers | boolean  | No       | —                                         | Allow picking several options (default single choice)        |
@@ -2173,12 +2173,12 @@ Reply to a message, quoting a prior message.
 
 **Request body** — `ReplyMessageDto`
 
-| Field           | Type     | Required | Constraints   | Description                              |
-| --------------- | -------- | -------- | ------------- | ---------------------------------------- |
-| chatId          | string   | Yes      | non-empty     | Target chat                              |
-| quotedMessageId | string   | Yes      | non-empty     | WhatsApp id of the message being quoted  |
-| text            | string   | Yes      | non-empty     | Reply text                               |
-| mentions        | string[] | No       | array of WIDs | WIDs to @mention. See **Mentions** above |
+| Field           | Type     | Required | Constraints        | Description                              |
+| --------------- | -------- | -------- | ------------------ | ---------------------------------------- |
+| chatId          | string   | Yes      | non-empty, max 255 | Target chat                              |
+| quotedMessageId | string   | Yes      | non-empty          | WhatsApp id of the message being quoted  |
+| text            | string   | Yes      | non-empty          | Reply text                               |
+| mentions        | string[] | No       | array of WIDs      | WIDs to @mention. See **Mentions** above |
 
 ```json
 { "chatId": "628123456789@c.us", "quotedMessageId": "true_628123456789@c.us_3EB0ABCD", "text": "Replying to you" }
@@ -2210,7 +2210,7 @@ Tap a choice on a WhatsApp Business button / list prompt by sending the structur
 
 | Field     | Type   | Required | Constraints         | Description                                                                  |
 | --------- | ------ | -------- | ------------------- | ---------------------------------------------------------------------------- |
-| chatId    | string | Yes      | non-empty           | Chat that holds the prompt                                                   |
+| chatId    | string | Yes      | non-empty, max 255  | Chat that holds the prompt                                                   |
 | messageId | string | Yes      | non-empty           | WhatsApp id of the inbound prompt (`buttons` on `message.received`)          |
 | buttonId  | string | Yes      | non-empty, max 256  | Stable id of the choice (`buttons[].id`)                                     |
 | text      | string | No       | non-empty, max 4096 | Visible label; resolved from the stored prompt when omitted, else `buttonId` |
@@ -2251,11 +2251,11 @@ Forward a message from one chat to another.
 
 **Request body** — `ForwardMessageDto`
 
-| Field      | Type   | Required | Constraints | Description                           |
-| ---------- | ------ | -------- | ----------- | ------------------------------------- |
-| fromChatId | string | Yes      | non-empty   | Source chat                           |
-| toChatId   | string | Yes      | non-empty   | Destination chat                      |
-| messageId  | string | Yes      | non-empty   | WhatsApp id of the message to forward |
+| Field      | Type   | Required | Constraints        | Description                           |
+| ---------- | ------ | -------- | ------------------ | ------------------------------------- |
+| fromChatId | string | Yes      | non-empty, max 255 | Source chat                           |
+| toChatId   | string | Yes      | non-empty, max 255 | Destination chat                      |
+| messageId  | string | Yes      | non-empty          | WhatsApp id of the message to forward |
 
 ```json
 { "fromChatId": "628111111111@c.us", "toChatId": "628222222222@c.us", "messageId": "true_628111111111@c.us_3EB0XYZ" }
@@ -2287,7 +2287,7 @@ Add or remove a reaction to a message (an empty emoji removes the reaction).
 
 | Field     | Type   | Required | Constraints           | Description                                                                      |
 | --------- | ------ | -------- | --------------------- | -------------------------------------------------------------------------------- |
-| chatId    | string | Yes      | non-empty             | Target chat                                                                      |
+| chatId    | string | Yes      | non-empty, max 255    | Target chat                                                                      |
 | messageId | string | Yes      | non-empty             | Message to react to                                                              |
 | emoji     | string | Yes      | string (may be empty) | Reaction emoji; an empty string removes the reaction. The field must be present. |
 
@@ -2321,7 +2321,7 @@ Delete a message (for everyone by default); also clears the stored record and fl
 
 | Field       | Type    | Required | Constraints              | Description                                            |
 | ----------- | ------- | -------- | ------------------------ | ------------------------------------------------------ |
-| chatId      | string  | Yes      | non-empty                | Target chat                                            |
+| chatId      | string  | Yes      | non-empty, max 255       | Target chat                                            |
 | messageId   | string  | Yes      | non-empty                | Message to delete                                      |
 | forEveryone | boolean | No       | boolean (default `true`) | Delete for everyone; defaults to `true` in the service |
 
@@ -2355,7 +2355,7 @@ Edit the text of a message sent by this account; also updates the stored record'
 
 | Field     | Type     | Required | Constraints             | Description                                       |
 | --------- | -------- | -------- | ----------------------- | ------------------------------------------------- |
-| chatId    | string   | Yes      | non-empty               | Chat containing the message                       |
+| chatId    | string   | Yes      | non-empty, max 255      | Chat containing the message                       |
 | messageId | string   | Yes      | non-empty               | Message to edit (the send response's `messageId`) |
 | body      | string   | Yes      | non-empty, ≤ 4096 chars | New text content                                  |
 | mentions  | string[] | No       | array of WIDs           | Re-applies participant tags to the new body       |
@@ -2390,7 +2390,7 @@ Send messages to multiple recipients as an async batch — returns immediately a
 
 | Field    | Type                  | Required | Constraints                      | Description                                                                                                                                                                                                                          |
 | -------- | --------------------- | -------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| batchId  | string                | No       | string                           | Auto-generated `batch_<hex>` if omitted; a duplicate id returns `400`                                                                                                                                                                |
+| batchId  | string                | No       | string, max 255                  | Auto-generated `batch_<hex>` if omitted; a duplicate id returns `400`                                                                                                                                                                |
 | messages | BulkMessageItemDto[]  | Yes      | array, max 100, nested-validated | The batch items (see below); exact duplicate entries (same `chatId`, `type`, `content` and `variables`) are collapsed before processing, first occurrence wins, order preserved; distinct messages to the same `chatId` are all sent |
 | options  | BulkMessageOptionsDto | No       | nested-validated                 | Pacing/error options (see below)                                                                                                                                                                                                     |
 
@@ -2398,7 +2398,7 @@ Each `BulkMessageItemDto`: `{ chatId: string, type: 'text'|'image'|'video'|'audi
 
 `BulkMessageOptionsDto`: `{ delayBetweenMessages?: number (1000–60000, default 3000), randomizeDelay?: boolean (default true), stopOnError?: boolean (default false) }`.
 
-Each item must carry what its `type` sends: a non-empty `chatId`, a non-empty `content.text` for `text`, and a `url` or `base64` under `content.<type>` for a media type. Without `base64`, the `url` must be an absolute http(s) URL; a `url` holding a placeholder is checked once `variables` fill it in. If any item does not, the request answers `400` and nothing is queued. The check runs again per item after `variables` and the `message:sending` gate, where a failure fails that item only.
+Each item must carry what its `type` sends: a non-empty `chatId` of at most 255 characters, a non-empty `content.text` for `text`, and a `url` or `base64` under `content.<type>` for a media type. Without `base64`, the `url` must be an absolute http(s) URL; a `url` holding a placeholder is checked once `variables` fill it in. If any item does not, the request answers `400` and nothing is queued. The check runs again per item after `variables` and the `message:sending` gate, where a failure fails that item only.
 
 Each item's base64 media is checked against the media byte cap (`MEDIA_DOWNLOAD_MAX_BYTES`) twice: at batch creation, and again per item after `variables` and the `message:sending` plugin gate are applied. An item that outgrows the cap only after rendering fails individually (`failed` in `results`, with `message:failed` fired) instead of being sent. `totalMessages` in the response reflects the de-duplicated item count.
 
