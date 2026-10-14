@@ -218,6 +218,78 @@ test('archive-only media previews inline from the media route; a plain omitted m
   }
 });
 
+test('an archived image is observed against the thread scroller and saved under its own name, or one unique to its message', async () => {
+  // ArchivedMediaPreview is covered on its own; this pins what the thread hands it. The scroll container
+  // as observer root keeps the lazy-load lead from being clipped to the container's own box, the stored
+  // file name is what a named photo saves under, and the row id keeps nameless photos apart.
+  const image = (id: string, filename?: string): ChatMessageView => ({
+    ...PROMPT,
+    id,
+    waMessageId: `wamid.${id}`,
+    body: '',
+    type: 'image',
+    metadata: { media: { mimetype: 'image/jpeg', filename, omitted: true, sizeBytes: 10, archived: true } },
+  });
+  const roots: unknown[] = [];
+  class IntersectingObserver {
+    callback: IntersectionObserverCallback;
+    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+      this.callback = callback;
+      roots.push(options?.root);
+    }
+    // Reports the placeholder as inside the margin at once, so the preview fetches.
+    observe(target: Element): void {
+      const entry = { isIntersecting: true, target } as IntersectionObserverEntry;
+      this.callback([entry], this as unknown as IntersectionObserver);
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  const downloads: string[] = [];
+  // The viewer saves through a detached <a download> it clicks with dispatchEvent.
+  const anchorProto = HTMLAnchorElement.prototype as { dispatchEvent?: unknown };
+  const observerTarget = globalThis as { IntersectionObserver?: unknown };
+  const fetchOriginal = globalThis.fetch;
+  const createOriginal = URL.createObjectURL;
+  const revokeOriginal = URL.revokeObjectURL;
+  observerTarget.IntersectionObserver = IntersectingObserver;
+  globalThis.fetch = (async () =>
+    new Response(new Blob(['x'], { type: 'image/jpeg' }), { status: 200 })) as typeof fetch;
+  URL.createObjectURL = () => 'blob:archived';
+  URL.revokeObjectURL = () => {};
+  anchorProto.dispatchEvent = function (this: HTMLAnchorElement, event: Event): boolean {
+    if (event.type === 'click') downloads.push(this.download);
+    return true;
+  };
+  try {
+    for (const message of [image('db-named', 'holiday.jpg'), image('db-nameless')]) {
+      const { container } = renderThread('viewer', [message]);
+      const img = await rtl.waitFor(() => {
+        const found = container.querySelector('img.chat-image-media');
+        assert.ok(found, 'the archived image did not preview');
+        return found;
+      });
+      // A boolean, not assert.equal: a failed equality would inspect a whole jsdom tree.
+      const scroller = container.querySelector('.room-messages');
+      assert.ok(scroller && roots.at(-1) === scroller, 'the observer is not rooted at the thread scroller');
+      rtl.fireEvent.click(img);
+      rtl.fireEvent.click(await rtl.screen.findByRole('button', { name: 'Download' }));
+      await rtl.act(() => new Promise(resolve => setTimeout(resolve, 50)));
+      rtl.cleanup();
+    }
+    assert.deepEqual(downloads, ['holiday.jpg', 'image-db-nameless.jpg']);
+  } finally {
+    delete observerTarget.IntersectionObserver;
+    delete anchorProto.dispatchEvent;
+    globalThis.fetch = fetchOriginal;
+    URL.createObjectURL = createOriginal;
+    URL.revokeObjectURL = revokeOriginal;
+  }
+});
+
 test('a media download answered after sign-out saves no file', async () => {
   // Logout cancels nothing in flight: a download the operator started just before it would otherwise
   // land in the downloads folder with the login form already showing.
