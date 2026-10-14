@@ -39,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Baileys linked-device name defaults to `Ubuntu` instead of `OpenWA`, because some accounts reject a non-standard name on phone-number pairing (#1857, thanks @yoosufhaffejee).
 - The `/events` WebSocket echoes a `requestId` only when it is a string of at most 128 characters; any other value is dropped from the reply.
 - A `/events` WebSocket `unsubscribe` whose `sessionId` is neither `*` nor a session id of at most 128 letters, digits and hyphens answers `INVALID_SESSION`, as `subscribe` does.
-- The Baileys engine refuses SVG input to its image decoder, so a sticker sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
 - The Baileys engine refuses SVG input to its image decoder, so a sticker, profile picture or group picture sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
 
 ### Fixed
