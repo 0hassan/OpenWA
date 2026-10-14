@@ -283,6 +283,18 @@ export class SessionEngineEventWiring {
 
         host.messages.applyMessageEditQueued(id, message);
       },
+      onEventResponse: (event): void => {
+        if (!host.isLiveEngine(id, engine)) return;
+        this.logger.debug(`Event response: ${event.response} to ${event.eventMessageId}`, {
+          sessionId: id,
+          chatId: event.chatId,
+          eventMessageId: event.eventMessageId,
+          action: 'event_response',
+        });
+        const payload = { sessionId: id, ...event };
+        host.eventsGateway.emitEventResponse(id, payload);
+        void host.webhookService.dispatch(id, 'event.response', payload);
+      },
       onGroupEvent: (event): void => {
         if (!host.isLiveEngine(id, engine)) return;
         this.logger.debug(`Group event: ${event.kind} in ${event.groupId}`, {

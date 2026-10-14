@@ -1,8 +1,10 @@
 import type * as BaileysLib from '@whiskeysockets/baileys';
 import type { WACallEvent, WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
 import {
+  Contact,
   EditedMessage,
   EngineEventCallbacks,
+  EventResponseEvent,
   GroupEvent,
   IncomingCallEvent,
   InboundTicket,
@@ -26,6 +28,7 @@ import {
   extractBaileysContext,
   extractBaileysLocation,
   isBaileysCatalogShare,
+  mapBaileysEventResponseType,
   mapBaileysStatus,
   setBaileysText,
 } from './baileys-message-mapper';
@@ -236,12 +239,33 @@ export interface BaileysEventsHost {
   getOnMessageAck(): EngineEventCallbacks['onMessageAck'];
   /** The currently-registered onGroupEvent callback, if any (assigned at initialize()). */
   getOnGroupEvent(): EngineEventCallbacks['onGroupEvent'];
+  /** The currently-registered onEventResponse callback, if any (assigned at initialize()). */
+  getOnEventResponse(): EngineEventCallbacks['onEventResponse'];
+  /** A contact from the session's own store, by any id dialect; no network read. */
+  findContact(contactId: string): Contact | null;
   /** The currently-registered onCall callback, if any (assigned at initialize()). */
   getOnCall(): EngineEventCallbacks['onCall'];
   /** The currently-registered onPresenceUpdate callback, if any (assigned at initialize()). */
   getOnPresenceUpdate(): EngineEventCallbacks['onPresenceUpdate'];
   /** The currently-registered onCallOutcome callback, if any (assigned at initialize()). */
   getOnCallOutcome(): EngineEventCallbacks['onCallOutcome'];
+}
+
+/** The subset of a Baileys `messages.update` entry this adapter reads. */
+interface BaileysMessageUpdate {
+  key?: { id?: string | null; remoteJid?: string | null };
+  update?: { status?: number | null; eventResponses?: BaileysEventResponse[] | null };
+}
+
+/** A decrypted RSVP as Baileys re-emits it under `update.eventResponses`. */
+interface BaileysEventResponse {
+  eventResponseMessageKey?: WAMessageKey | null;
+  senderTimestampMs?: number | { toNumber(): number } | null;
+  response?: {
+    response?: number | null;
+    timestampMs?: number | { toNumber(): number } | null;
+    extraGuestCount?: number | null;
+  } | null;
 }
 
 /** Every teardown clears the live-call map; counting those clears lets a reject in flight tell that its
@@ -877,9 +901,7 @@ export class BaileysEvents {
     return (isDelete && inGroup) || overlap(author(target), author(envelope));
   }
 
-  handleMessagesUpdate(
-    updates: Array<{ key?: { id?: string | null; remoteJid?: string | null }; update?: { status?: number | null } }>,
-  ): void {
+  handleMessagesUpdate(updates: BaileysMessageUpdate[]): void {
     for (const u of updates) {
       const status = mapBaileysStatus(u.update?.status);
       if (status && u.key?.id) {
@@ -888,7 +910,67 @@ export class BaileysEvents {
         const chatId = u.key.remoteJid ? this.host.toNeutralJid(u.key.remoteJid) : undefined;
         this.host.getOnMessageAck()?.(u.key.id, status, chatId);
       }
+      for (const rsvp of u.update?.eventResponses ?? []) {
+        void this.emitEventResponse(u.key, rsvp).catch(err =>
+          this.host.logger.warn('Failed to report an event response', {
+            msgId: u.key?.id,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
     }
+  }
+
+  /**
+   * An RSVP to a WhatsApp event. Baileys decrypts it itself while processing the inbound
+   * `encEventResponseMessage` (whose upsert the live path drops as non-content): it reads the event
+   * creation message's `messageSecret` through the socket's getMessage, which this adapter backs
+   * with the message store, and re-emits the plaintext as a `messages.update` of the CREATION
+   * message's key. An RSVP to an event the store does not hold cannot be decrypted and never
+   * arrives here. Decryption authenticates the responder, since the key is derived from their jid.
+   */
+  private async emitEventResponse(eventKey: BaileysMessageUpdate['key'], rsvp: BaileysEventResponse): Promise<void> {
+    const callback = this.host.getOnEventResponse();
+    const envelope = rsvp.eventResponseMessageKey;
+    if (!callback || !eventKey?.id || !eventKey.remoteJid || !envelope?.id) return;
+    const fromMe = envelope.fromMe === true;
+    // The creation key is the guest's view of the event (in a 1:1 chat its remoteJid is this
+    // account), so the chat comes from the RSVP's own key, which Baileys has put on our side.
+    const chatJid = envelope.remoteJid ?? eventKey.remoteJid;
+    // Same rule as a reaction: a 1:1 key names the chat partner, so the account's own answer is
+    // attributed to the account; group keys carry the responder as `participant`.
+    const responder = envelope.participant ?? (fromMe ? this.host.normalizedSelfJid() : chatJid);
+    if (!responder) return;
+    const event: EventResponseEvent = {
+      eventMessageId: eventKey.id,
+      chatId: this.host.toNeutralJid(chatJid),
+      responderId: this.host.toNeutralJid(responder),
+      fromMe,
+      response: mapBaileysEventResponseType(rsvp.response?.response),
+      responseMessageId: envelope.id,
+      timestamp: this.toEditUnixSeconds(
+        rsvp.senderTimestampMs ?? rsvp.response?.timestampMs,
+        Math.floor(Date.now() / 1000),
+      ),
+    };
+    const guests = rsvp.response?.extraGuestCount;
+    if (typeof guests === 'number' && Number.isFinite(guests)) event.extraGuestCount = guests;
+    // Named from the session's own contact store, like the sender of message.received, so an
+    // attendance list can be built from the RSVPs alone without a network read per answer.
+    const known = this.host.findContact(responder);
+    if (known?.name || known?.pushName) {
+      event.contact = {
+        ...(known.name ? { name: known.name } : {}),
+        ...(known.pushName ? { pushName: known.pushName } : {}),
+      };
+    }
+    const stored = await this.readStoredMessage(eventKey.id, 'reading the event an RSVP answers');
+    if (stored?.message) {
+      const b = await this.host.loadLib();
+      const name = b.normalizeMessageContent(stored.message)?.eventMessage?.name;
+      if (name) event.eventName = name;
+    }
+    callback(event);
   }
 
   /**

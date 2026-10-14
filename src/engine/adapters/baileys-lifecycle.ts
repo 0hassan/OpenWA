@@ -27,7 +27,7 @@ import {
 import { differentWaIds, type BaileysEvents } from './baileys-events';
 import type { BaileysHistory } from './baileys-history';
 import type { BaileysSessionStore } from './baileys-session-store';
-import { userPart } from '../identity/wa-id';
+import { chatKind, userPart } from '../identity/wa-id';
 
 /** Linked-device identity shown in WhatsApp (Settings → Linked Devices). The OS platform is
  * operator-configurable via BAILEYS_BROWSER_NAME; defaults to 'Ubuntu' because some accounts reject a
@@ -429,6 +429,20 @@ export class BaileysLifecycle {
         const stored = await this.host.config.messageStore?.getMessage(this.host.config.dbSessionId, key.id);
         if (!stored) {
           return undefined;
+        }
+        // An RSVP to an event this account posted in a 1:1 chat names the event by its key as the guest
+        // sees it, so its remoteJid is this account. Baileys rewrites reaction and poll keys to our side
+        // but not event keys, so our own 1:1 message asked for under our own jid is that same chat.
+        const bare = (jid: string): string => `${userPart(jid)}@${jid.split('@')[1]}`;
+        const asked = key.remoteJid ? bare(key.remoteJid) : undefined;
+        const me = this.sock?.user;
+        const askedByGuest =
+          !!asked &&
+          stored.key.fromMe === true &&
+          chatKind(stored.key.remoteJid ?? '') === 'individual' &&
+          [me?.id, me?.lid].some(own => !!own && bare(own) === asked);
+        if (askedByGuest) {
+          return stored.message ?? undefined;
         }
         const neutral = (jid: string): string => this.host.toNeutralJid(jid);
         const chat = [stored.key.remoteJid, stored.key.remoteJidAlt];
