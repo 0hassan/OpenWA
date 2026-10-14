@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cap the total bytes one storage import extracts at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.
 - Java SDK (next SDK release after 0.5.1): the request timeout also bounds the response body, so a stalled body raises `OpenWATimeoutError`.
+- Java SDK (next SDK release after 0.5.1): the default transport speaks HTTP/1.1, so calls to a gateway over plain `http://` no longer fail with `HTTP/1.1 header parser received no bytes`.
 - Keep a new dashboard template draft when an earlier template save finishes.
 - Stop the dashboard Chats page from marking the open chat read on a newly selected session.
 - Refuse bulk batches once shutdown begins, and answer `503` for a batch saved during shutdown instead of sending it.

@@ -1,6 +1,7 @@
 package com.rmyndharis.openwa.http;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,11 +12,16 @@ import com.rmyndharis.openwa.OpenWAClient;
 import com.rmyndharis.openwa.errors.OpenWAApiError;
 import com.rmyndharis.openwa.errors.OpenWATimeoutError;
 import com.sun.net.httpserver.HttpServer;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.Authenticator;
 import java.net.CookieHandler;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ProxySelector;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -23,6 +29,8 @@ import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -211,6 +219,57 @@ class DefaultHttpTransportTest {
             Thread.interrupted();
         }
         assertEquals(0, recording.started.get());
+    }
+
+    @Test
+    @Timeout(30)
+    void speaksHttp1ToAServerThatAnswersNothingToAnH2cUpgrade() throws Exception {
+        // The gateway's HTTP server hands a request that asks to upgrade to Socket.IO, which answers
+        // nothing when the path is not its own. The JDK client asks for h2c on a cleartext connection
+        // unless it is pinned to HTTP/1.1, and com.sun.net.httpserver ignores the header, so only a
+        // raw socket reproduces the server.
+        try (ServerSocket raw = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))) {
+            Thread serving = new Thread(() -> {
+                try {
+                    while (true) {
+                        try (Socket socket = raw.accept()) {
+                            String head = readHead(socket.getInputStream()).toLowerCase(Locale.ROOT);
+                            if (!head.contains("upgrade: h2c")) {
+                                socket.getOutputStream().write((
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                        + "Content-Length: 2\r\nConnection: close\r\n\r\n{}")
+                                    .getBytes(StandardCharsets.US_ASCII));
+                            }
+                        }
+                    }
+                } catch (IOException closed) {
+                    // the test ended
+                }
+            });
+            serving.setDaemon(true);
+            serving.start();
+            OpenWAClient plain = new OpenWAClient(ClientConfig.builder()
+                .baseUrl("http://127.0.0.1:" + raw.getLocalPort())
+                .apiKey("owa_k1_x")
+                .timeout(Duration.ofSeconds(5))
+                .build());
+
+            assertDoesNotThrow(() -> plain.requestVoid(HttpMethod.GET, "/api/health", null, null));
+        }
+    }
+
+    private static String readHead(InputStream in) throws IOException {
+        ByteArrayOutputStream head = new ByteArrayOutputStream();
+        int last4 = 0;
+        int b;
+        while ((b = in.read()) != -1) {
+            head.write(b);
+            last4 = (last4 << 8) | b;
+            if (last4 == 0x0d0a0d0a) {
+                break;
+            }
+        }
+        return head.toString(StandardCharsets.US_ASCII);
     }
 
     @Test

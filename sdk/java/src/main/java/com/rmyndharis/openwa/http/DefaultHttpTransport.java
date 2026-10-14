@@ -17,7 +17,13 @@ public final class DefaultHttpTransport implements HttpTransport {
     private final HttpClient client;
 
     public DefaultHttpTransport() {
-        this(HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build());
+        // HTTP/1.1 explicitly: the client defaults to HTTP/2 and, on a cleartext connection, asks to
+        // upgrade to it. A gateway answers that request with nothing at all (its HTTP server hands an
+        // Upgrade request to Socket.IO), so every call over http:// failed before it was ever sent.
+        this(HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build());
     }
 
     /** Lets a test observe whether an exchange was started. */
