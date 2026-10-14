@@ -975,7 +975,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       return;
     }
     this.releaseOwed.delete(id);
-    await this.ownership.release(id);
+    // Best-effort: the outcome of the start or the teardown that asks is already decided, and a claim that
+    // cannot be handed back lapses with its lease, which a peer then adopts. A failure here must not
+    // replace that outcome (a started session reported as failed, a stopped one as an error).
+    try {
+      await this.ownership.release(id);
+    } catch (error) {
+      this.logger.warn(`Could not hand back the claim of session ${id}; it lapses with its lease`, {
+        sessionId: id,
+        action: 'session_claim_release_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async getQRCode(id: string): Promise<{ qrCode: string; status: SessionStatus }> {

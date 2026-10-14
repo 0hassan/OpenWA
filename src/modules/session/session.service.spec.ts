@@ -1718,6 +1718,32 @@ describe('SessionService', () => {
       expect(ownership.release).toHaveBeenCalledTimes(1);
     });
 
+    it('start() keeps its own outcome when the claim the last start owes cannot be handed back', async () => {
+      const ownership = withOwnership();
+      ownership.release.mockRejectedValue(new Error('database unreachable'));
+      let finishFirstClaim: () => void = () => undefined;
+      ownership.claim
+        .mockImplementationOnce(() => new Promise<boolean>(resolve => (finishFirstClaim = () => resolve(true))))
+        .mockResolvedValue(true);
+      let launchSecond: () => void = () => undefined;
+      jest
+        .spyOn(lifecycle, 'start')
+        .mockImplementationOnce(
+          () => new Promise<Session>(resolve => (launchSecond = () => resolve(createMockSession()))),
+        )
+        .mockRejectedValueOnce(new BadRequestException('refused'));
+      jest.spyOn(lifecycle, 'isEngineActive').mockReturnValue(false);
+
+      const first = service.start('sess-uuid-1').catch((error: unknown) => error);
+      const second = service.start('sess-uuid-1');
+      await new Promise(resolve => setImmediate(resolve));
+      finishFirstClaim();
+      await first;
+      launchSecond();
+
+      await expect(second).resolves.toBeDefined();
+    });
+
     it('start() hands the claim back once when two overlapping starts both fail', async () => {
       const ownership = withOwnership();
       jest.spyOn(lifecycle, 'start').mockRejectedValue(new BadRequestException('refused'));
