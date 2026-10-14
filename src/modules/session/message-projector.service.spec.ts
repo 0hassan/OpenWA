@@ -821,6 +821,108 @@ describe('MessageProjector (inbound projection)', () => {
         expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.edited', expect.anything());
       });
 
+      it('keeps an edit from another chat out of the message while its row is not written', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'FORGED',
+          chatId: '15559998888@c.us',
+          fromMe: false,
+        } as never);
+        await drain();
+        releaseHook();
+        await drain();
+
+        expect(messageRepository.insert).toHaveBeenCalledTimes(1);
+        expect(updatesAfterInsert()).toEqual([]);
+        expect(webhookService.dispatch).not.toHaveBeenCalledWith(
+          SESSION_ID,
+          'message.received',
+          expect.objectContaining({ body: 'FORGED' }),
+        );
+      });
+
+      it('keeps an edit that claims to come from the account out of a message the counterparty sent', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'FORGED',
+          chatId: '15550001111@c.us',
+          fromMe: true,
+        } as never);
+        await drain();
+        releaseHook();
+        await drain();
+
+        expect(updatesAfterInsert()).toEqual([]);
+      });
+
+      it("keeps another member's edit out of a group message while its row is not written", async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        const group = '120363000000000001@g.us';
+        const gate = new Promise<void>(resolve => (releaseHook = resolve));
+        hookManager.execute.mockImplementationOnce(async (_event: string, data: unknown) => {
+          await gate;
+          return { continue: true, data };
+        });
+        projector.handleInboundMessage(
+          SESSION_ID,
+          engine,
+          makeIncoming({ chatId: group, from: group, isGroup: true, kind: 'group', author: '39900313301142@lid' }),
+        );
+        await new Promise(resolve => setImmediate(resolve));
+
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'genuine edit',
+          chatId: group,
+          fromMe: false,
+          author: '39900313301142@lid',
+        } as never);
+        // The latest recorded edit is the one written, so a forged one that was kept would win.
+        projector.applyMessageEditQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          body: 'FORGED',
+          chatId: group,
+          fromMe: false,
+          author: '195700218425410@lid',
+        } as never);
+        await drain();
+        releaseHook();
+        await drain();
+
+        expect(updatesAfterInsert()).toEqual([[where, { body: 'genuine edit' }]]);
+      });
+
+      it('keeps a reaction from another chat out of the message while its row is not written', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+
+        const storeReactions = jest.spyOn(
+          projector as unknown as { storeReactions: () => Promise<void> },
+          'storeReactions',
+        );
+        projector.applyReactionQueued(SESSION_ID, {
+          messageId: 'wamid.1',
+          chatId: '15559998888@c.us',
+          reaction: 'X',
+          senderId: '15559998888@c.us',
+        });
+        await drain();
+        releaseHook();
+        await drain();
+
+        expect(storeReactions).not.toHaveBeenCalled();
+      });
+
       it('lets a revoke win over an edit', async () => {
         const engine = makeEngine();
         engines.set(SESSION_ID, engine);

@@ -10,6 +10,7 @@ import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { buildMessageMetadata, REVOKED_ROW_PATCH, storableWaMessageId } from './message-row.mapper';
 import { MessageMutationProjector } from './message-mutation-projector';
+import { mutationTargetsForeignRow, type MutationSource, type StoredMessageRef } from './message-mutation-guard';
 import { updateMessageMetadata } from '../message/message-metadata';
 import { persistHistoryMessages } from './message-history-projector';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
@@ -97,6 +98,9 @@ interface InFlightEntry {
   // delivery shares the entry, and its payload must not outlive the slot that accounts for it.
   // Unset while the message is admitted but not yet emitted (see admitInbound).
   quote?: Pick<IncomingMessage, 'chatId' | 'body'>;
+  // Where the message lives and who wrote it, so a change recorded for it meanwhile is held to the same
+  // chat, direction and author rule as the row it will become (see mutationTargetsForeignRow).
+  ref?: StoredMessageRef;
   revoked?: boolean;
   // Set when the revoke came from the engine, so message.revoked went out for it.
   revokeAnnounced?: boolean;
@@ -433,7 +437,12 @@ export class MessageProjector {
   /** Record a message as not yet written; a re-fire of the same id keeps the changes recorded so far. */
   private trackInFlight(key: string, message: InboundMessageData) {
     const { revoked, revokeAnnounced, editedBody, ackStatus, reactions } = this.inboundInFlight.get(key) ?? {};
-    const inFlight = { quote: quoteOf(message), revoked, revokeAnnounced, editedBody, ackStatus, reactions };
+    const ref: StoredMessageRef = {
+      chatId: message.chatId,
+      direction: message.fromMe ? MessageDirection.OUTGOING : MessageDirection.INCOMING,
+      author: message.author,
+    };
+    const inFlight = { quote: quoteOf(message), ref, revoked, revokeAnnounced, editedBody, ackStatus, reactions };
     this.inboundInFlight.set(key, inFlight);
     return inFlight;
   }
@@ -1199,15 +1208,44 @@ export class MessageProjector {
   applyReactionQueued(id: string, event: ReactionEvent): void {
     // A message not written yet keeps the reaction for its row; the live event still goes out now.
     const inFlight = event.messageId ? this.inboundInFlight.get(`${id}:${event.messageId}`) : undefined;
-    if (inFlight) (inFlight.reactions ??= {})[event.senderId] = event.reaction ?? '';
+    if (inFlight && !this.foreignToInFlight(inFlight, { kind: 'reaction', chatId: event.chatId })) {
+      (inFlight.reactions ??= {})[event.senderId] = event.reaction ?? '';
+    }
     this.mutationProjector.applyReactionQueued(id, event);
   }
 
   /** Edit apply, queued on the per-message mutation chain — see MessageMutationProjector. */
   applyMessageEditQueued(id: string, message: EditedMessage): void {
     const inFlight = this.inboundInFlight.get(`${id}:${message.messageId}`);
-    if (inFlight) inFlight.editedBody = message.body;
+    if (
+      inFlight &&
+      !this.foreignToInFlight(inFlight, {
+        kind: 'edit',
+        chatId: message.chatId,
+        fromMe: message.fromMe,
+        author: message.author,
+      })
+    ) {
+      inFlight.editedBody = message.body;
+    }
     this.mutationProjector.applyMessageEditQueued(id, message);
+  }
+
+  /**
+   * Whether a change names a message of another chat, or one it may not change, judged against the
+   * message still waiting for its row. Recording it for the row would carry it into `message.received`
+   * and the insert, past the check the row's own update applies.
+   */
+  private foreignToInFlight(inFlight: InFlightEntry, source: MutationSource): boolean {
+    if (!inFlight.ref || !source.chatId) return false;
+    const foreign = mutationTargetsForeignRow(inFlight.ref, source);
+    if (foreign) {
+      this.logger.warn('Not keeping a change aimed at a message of another chat or sender', {
+        reason: foreign,
+        kind: source.kind,
+      });
+    }
+    return foreign !== null;
   }
 
   /** Queue a message-scoped mutation. A failed operation is isolated so later events still run. */
