@@ -17,7 +17,7 @@ import { executableLines } from './workflow-lines';
 
 const workflowDir = path.join(__dirname, '..', '..', '.github', 'workflows');
 
-type Step = { name?: string; run?: string; uses?: string; with?: unknown };
+type Step = { name?: string; run?: string; uses?: string; with?: unknown; env?: unknown };
 type Workflow = { jobs?: Record<string, { steps?: Step[] }> };
 
 function workflowOf(file: string): Workflow {
@@ -646,9 +646,7 @@ describe('the PHP SDK release keeps the mirror token away from the SDK test run'
     (workflowOf('php-sdk-release.yml') as unknown as { jobs: Record<string, PhpJob> }).jobs;
   const runsOf = (job: PhpJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
   const usesToken = (job: PhpJob): boolean =>
-    (job.steps ?? []).some(step =>
-      JSON.stringify((step as { env?: unknown }).env ?? {}).includes('PHP_SDK_SPLIT_TOKEN'),
-    );
+    (job.steps ?? []).some(step => JSON.stringify(step.env ?? {}).includes('PHP_SDK_SPLIT_TOKEN'));
 
   it('runs the tests in a job that holds no token, and the push in a job that needs it', () => {
     const entries = Object.entries(jobs());
