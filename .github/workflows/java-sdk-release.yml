@@ -111,12 +111,15 @@ jobs:
             exit 1
           fi
 
+      # No `cache: maven` here. The cache is written by jobs that run third-party test code (the verify
+      # job above and sdk-ci.yml on main), and this job executes the gpg and publishing plugins from the
+      # local repository with the signing key and the Central token in its environment, so a restored
+      # plugin jar would run with both. The plugins are resolved from Maven Central instead.
       - name: Set up JDK + signing key
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
           server-id: central
           server-username: MAVEN_CENTRAL_USERNAME
           server-password: MAVEN_CENTRAL_PASSWORD

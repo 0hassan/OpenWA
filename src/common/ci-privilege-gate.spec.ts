@@ -371,6 +371,60 @@ describe('a job that can mint a publish credential pins global npm installs and 
     expect(runs).not.toMatch(/\bnpm[ \t]+(?:ci|test|run|audit|pack|exec|x|rebuild)\b|\bnpx\b/);
     expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
   });
+
+  // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
+  // check), and the pinned npm refuses git specs by default, so a tarball is named by an absolute path.
+  it('js-sdk-release.yml: the publish step names the tarball in a form npm reads as a file', () => {
+    const runs = oidcJobRuns('js-sdk-release.yml')
+      .map(({ run }) => run)
+      .join('\n');
+    const target = /\bnpm publish\s+(?:-\S+\s+)*(\S+)/.exec(runs)?.[1] ?? '';
+    expect(target).toMatch(/^(?:"?\$\{?GITHUB_WORKSPACE\}?"?|)\/[^\s]*\.tgz$/);
+  });
+
+  // The caches a setup action restores are written by jobs that run third-party test code. A job that
+  // holds a publish credential executes what it restores, with that credential in its environment.
+  it.each(workflows.filter(file => /-sdk-release\.yml$/.test(file)))(
+    '%s: a job that holds a publish credential restores no cache',
+    file => {
+      const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as OidcWorkflow;
+      const holdsCredential = (def: OidcJob): boolean =>
+        grantsIdToken(def.permissions !== undefined ? def.permissions : workflow.permissions) ||
+        (def.steps ?? []).some(step => /\bsecrets\.(?!GITHUB_TOKEN\b)/.test(JSON.stringify([step.env, step.with])));
+      const offenders = Object.entries(workflow.jobs ?? {})
+        .filter(([, def]) => holdsCredential(def))
+        .flatMap(([job, def]) =>
+          (def.steps ?? [])
+            .filter(step => {
+              const inputs = (step.with ?? {}) as Record<string, unknown>;
+              return (step.uses ?? '').startsWith('actions/cache') || inputs.cache !== undefined;
+            })
+            .map(step => `${job}: ${step.uses ?? step.name ?? 'step'} restores a cache`),
+        );
+      expect(offenders).toEqual([]);
+    },
+  );
+
+  it('finds a cache restored beside a publish credential', () => {
+    const workflow: OidcWorkflow = {
+      jobs: {
+        publish: {
+          steps: [
+            {
+              uses: 'actions/setup-java@v6',
+              with: { cache: 'maven', 'gpg-private-key': '${{ secrets.GPG_PRIVATE_KEY }}' },
+            },
+          ],
+        },
+      },
+    };
+    const hits = Object.values(workflow.jobs ?? {}).filter(def =>
+      (def.steps ?? []).some(
+        step => /\bsecrets\./.test(JSON.stringify(step.with)) && (step.with as { cache?: string }).cache,
+      ),
+    );
+    expect(hits).toHaveLength(1);
+  });
 });
 
 /**

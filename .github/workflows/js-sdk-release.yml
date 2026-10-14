@@ -135,5 +135,7 @@ jobs:
 
       - name: Publish to npm (trusted publishing, provenance automatic)
         # No --provenance flag: npm attaches provenance on its own for a trusted-publisher release, and
-        # passing it is redundant. --access public is explicit because the package is scoped.
-        run: npm publish package/*.tgz --access public --ignore-scripts
+        # passing it is redundant. --access public is explicit because the package is scoped. The
+        # tarball is named by its absolute path because npm reads `package/file.tgz` as the GitHub
+        # shorthand user/repo, which the pinned npm refuses to fetch.
+        run: npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public --ignore-scripts
