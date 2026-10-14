@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `/events` WebSocket echoes a `requestId` only when it is a string of at most 128 characters; any other value is dropped from the reply.
 - A `/events` WebSocket `unsubscribe` whose `sessionId` is neither `*` nor a session id of at most 128 letters, digits and hyphens answers `INVALID_SESSION`, as `subscribe` does.
 - The Baileys engine refuses SVG input to its image decoder, so a sticker, profile picture or group picture sent as an SVG answers `400` and an outbound image's thumbnail skips it; raster images convert as before.
-- ffmpeg runs with only `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` from the gateway's environment, so no secret reaches it or a wrapper script behind `FFMPEG_PATH`.
+- The ffmpeg runs of the gateway itself (media conversion and the voice note waveform) start with only `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` from the gateway's environment, so no secret reaches them or a wrapper script behind `FFMPEG_PATH`.
 - The release workflow keeps its staging image when a gate fails on a good build, so a re-run of the failed jobs finds it; an abandoned release leaves one stray tag.
 - The PHP SDK release pushes its tag with git hooks disabled.
 - The JavaScript SDK release builds, tests and packs the tarball in a job without the publish credential, and a second job publishes that tarball; the Java SDK release runs its tests in a job without the Maven Central token and the signing key.
@@ -74,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop a request left over from before logout from reloading the dashboard login form.
 - Stop a dashboard Logs export from downloading rows after sign-out when its last page was throttled.
 - Stop reopening a just-saved dashboard template from loading its old values, which a second save wrote back.
-- Reach a chat message's reply, react and delete actions from the keyboard in the dashboard: the message bubbles are one tab stop, the arrow keys move between them, and the actions show while keyboard focus is inside a bubble.
+- Reach a chat message's reply, react and delete actions from the keyboard in the dashboard, with the message bubbles as one tab stop and the arrow keys moving between them.
 - Stop an operator ingress dead-letter redrive at its next row on shutdown, leaving the rows it did not reach unchanged.
 - Run a plugin's `onDisable` once when shutdown, uninstall or an update overlaps a disable already in progress.
 - Answer `503` and keep the previous version when shutdown begins before an update of a plugin the operator switched on has applied.
@@ -109,7 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop dashboard multi-page loads and a pending chat mark-as-read from sending requests after logout.
 - Keep a new dashboard login signed in when a request sent with the previous API key fails afterwards.
 - Enforce the plugin package size limit before reading `manifest.json`, and reject archive entries whose path starts with `/`.
-- Answer `400` instead of `500` when a plugin upload arrives under an unexpected multipart field name.
 - Refuse Baileys sticker conversions of more than 500 animation frames and run at most two conversions at once.
 - Stop pending webhook deliveries from holding over-cap inline media already omitted from their payload.
 - Resolve `./data/...` paths from `.env.generated` under `OPENWA_DATA_DIR` in host-side `backup.sh` and `restore.sh` runs.
@@ -118,7 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Leave no truncated archive in `BACKUP_DIR` when the final tar step of `backup.sh` fails, for example on a full volume.
 - Dead-letter undispatched ingress events instead of deleting them when they age out of the dedup window.
 - Keep a re-sent ingress delivery redrivable when an earlier dead letter for its id was already redriven.
-- Apply a contact's message edit and a member's reaction that WhatsApp sends encrypted on Baileys, which were dropped, so `message.edited` and `message.reaction` fire for them and the stored message takes the edited text.
+- Apply a contact's message edit and a reaction that WhatsApp sends encrypted on Baileys, which were dropped, so `message.edited` and `message.reaction` fire for them and the stored message takes the edited text.
 - Deliver Baileys API edit and revoke events to webhook and WebSocket consumers.
 - Emit Baileys API reaction updates, including reaction removal.
 - Apply current receiver configuration and session ownership to every webhook delivery attempt.
@@ -140,12 +139,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound `GET /api/search` to 1000 characters and 32 words, punctuation counted as a separator and a symbol or emoji that stands apart as a word, and run a whitespace-separated word said again once, so one request can no longer hold the event loop on SQLite for seconds.
 - Print the startup banner's API Docs URL only when Swagger is served, so a production boot no longer points at a `404`.
 - Decode numeric and common named character references in a Baileys link preview's title and description, so `&#8217;` and `&eacute;` no longer reach the recipient as written.
-- Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach, and have the patcher refuse such a tree, whichever file the interrupted install stopped at, instead of reporting version skew and leaving `.rej` files.
+- Log an error at whatsapp-web.js start when the message-id backport is only partly applied, naming the files it did not reach.
+- Have the whatsapp-web.js patcher refuse a partly patched tree, whichever file the interrupted install stopped at, instead of reporting version skew and leaving `.rej` files.
 - Handle an engine disconnect again when the session row read fails, so the session reconnects instead of staying registered with no reconnect armed.
 - Show the error a sandboxed plugin's worker threw before it died in the plugin's status and the log, instead of only its exit code.
 - Exit with status 1 when a failed boot's teardown stalls, where the process exited 0 once nothing else held the event loop open.
 - Fail the Docker availability calls after 10 s, so a daemon or socket proxy that accepts the connection and never answers no longer holds boot and every status poll.
-- Answer `400` from `PUT /api/infra/config` for a database or Redis port outside 1-65535 or a negative or fractional pool size, which the next boot refused, and store a blank host or user as its default.
+- Answer `400` from `PUT /api/infra/config` for a database or Redis port outside 1-65535 or a negative or fractional pool size, which the next boot refused.
+- Store a blank database host or user from `PUT /api/infra/config` as its default, where the next boot refused it.
 - Load a media conversion's input inside the ffmpeg concurrency gate, so parallel conversions by URL no longer hold every download in memory before the surplus is refused with `503`.
 - Keep a failed release of the session claims at shutdown from skipping the remaining shutdown steps; the claims lapse with their lease.
 - Stop a unique-constraint conflict on a webhook outbox, conversation mapping, status, template, bulk batch or message insert from rolling back other writes on SQLite's shared connection.
@@ -153,13 +154,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show an API key's name as text in its delete and revoke confirmation, where a name with a styled tag took the dashboard to its error screen.
 - Keep the dashboard's QR and pairing dialog open when its status read fails transiently, instead of closing it mid-scan.
 - Stop a dashboard backup export or media download answered after sign-out from saving its file.
-- Parse a dashboard message made of many code spans or code blocks in linear time and render a body over 4096 characters without links, so one long message no longer freezes the tab for seconds.
-- Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`, a `timeout` of 0 or infinity means no timeout, and a negative, NaN or non-number raises `ValueError`.
+- Parse a dashboard message made of many code spans or code blocks in linear time, so one long message no longer freezes the tab for seconds.
+- Render a dashboard message body over 4096 characters without links, so link detection no longer freezes the tab on a very long body.
+- Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`.
+- Python SDK (next SDK release after 0.5.1): a `timeout` of `None`, 0 or infinity means no timeout, an `httpx.Timeout` or a four-value tuple is passed through, and a negative, NaN or non-number raises `ValueError`.
 - Python SDK (next SDK release after 0.5.1): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
 - JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key.
-- Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`, a key outside visible ASCII is refused when the client is built without being repeated, and a logged `HttpRequestData` shows neither the key nor the body.
-- Go SDK (next SDK release after 0.5.1): `WithIdempotencyKey` sends the header only on the twelve routes that honor it, so `net/http` no longer sends another request again after a dropped connection, and an error answer from a proxy reads its own `message` or the status text.
-- PHP SDK (next SDK release after 0.5.1): an omitted participant list in `approveMembershipRequests` and `rejectMembershipRequests` goes out as `{}`, and an error body whose `error` is not a string maps to the SDK's exception instead of raising a `TypeError`.
+- Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`.
+- Java SDK (next SDK release after 0.5.1): a key or default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
+- Java SDK (next SDK release after 0.5.1): a logged `HttpRequestData` shows neither the key nor the body.
+- Go SDK (next SDK release after 0.5.1): `WithIdempotencyKey` sends the header only on the twelve routes that honor it, so a request to any other route is no longer re-sent by `net/http` after a dropped connection.
+- Go SDK (next SDK release after 0.5.1): an error answer from a proxy reads its own `message` or the status text.
+- PHP SDK (next SDK release after 0.5.1): an omitted participant list in `approveMembershipRequests` and `rejectMembershipRequests` goes out as `{}`.
+- PHP SDK (next SDK release after 0.5.1): an error body whose `error` is not a string maps to the SDK's exception instead of raising a `TypeError`.
 - Every SDK package ships the MIT license text from the next SDK release after 0.5.1.
 
 ### Documentation
@@ -213,7 +220,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ⚠️ **Breaking (API).** Once teardown begins, every request except `/api/health`, `/api/health/*`, the dashboard's HTML pages and CORS preflights answers `503` with `Connection: close`, `GET /api/infra/health` included, while a new `/events` handshake is still admitted until the server closes; probe `/api/health/live` for a check that survives teardown.
 - A compose file or pod spec of your own that drops all capabilities and starts the container as root must add `KILL` to the `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID` and `SETUID` that 0.24.0 shipped, or a stop never reaches the app: it runs out the grace period and exits `137`.
 - Rolling back to 0.24.0 while webhook outbox rows are in state `queued` strands them: 0.24.0 never replays that state and prunes it after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). The upgrade also deletes duplicate terminal `webhook_delivery_failures` rows, which a rollback does not restore.
-- ⚠️ **Breaking (API).** `PUT /api/infra/config` answers `400` for a database or Redis port outside 1-65535 and a negative or fractional pool size, which it used to store and the next boot refused.
+- ⚠️ **Breaking (API).** `PUT /api/infra/config` answers `400` for a database or Redis port outside 1-65535, a negative or fractional pool size and a local storage path the app cannot create or write, which it used to store and the next boot refused.
 - An `FFMPEG_PATH` wrapper script that reads an environment variable outside `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` no longer sees it; set what it needs inside the script.
 
 ## [0.24.0] - 2026-10-03
