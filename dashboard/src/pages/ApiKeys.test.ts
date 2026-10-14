@@ -570,3 +570,20 @@ test('deleting a key whose name carries markup shows the name as text', async ()
   assert.ok(dialog.textContent?.includes(name), 'the name was not shown as typed');
   assert.equal(dialog.querySelector('strong[style]'), null, 'the name became an element');
 });
+
+// The gateway refuses a list of more than 2000 chats with a 400, which a production gateway answers with a
+// bare "Bad Request"; the form says so before it is sent.
+test('a chat list past the gateway limit blocks Create and says how many it holds', async () => {
+  const { screen, fireEvent } = rtl;
+  const create = await openCreate();
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'crm-bot' } });
+  const numbers = Array.from({ length: 2001 }, (_, i) => String(628000000000 + i)).join('\n');
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), { target: { value: numbers } });
+
+  const alert = await screen.findByText(/Too many chats \(2001\): a key may list at most 2000/);
+  assert.ok(alert);
+  assert.equal(create.disabled, true, 'Create is live with a list the gateway refuses');
+
+  fireEvent.change(screen.getByLabelText('Chat access (optional)'), { target: { value: '6281234' } });
+  await rtl.waitFor(() => assert.equal(create.disabled, false));
+});

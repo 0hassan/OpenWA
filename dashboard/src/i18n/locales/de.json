@@ -703,7 +703,8 @@
     "chats": {
       "label": "Chat-Zugriff (optional)",
       "hint": "Ein Chat pro Zeile: eine Gruppen-ID mit @g.us, eine Kontakt-ID mit @c.us oder @lid oder eine Telefonnummer. Leer lassen für alle Chats. Ein auf Chats beschränkter Schlüssel kann nur die für solche Schlüssel freigegebenen Routen nutzen; sein Zugriff über den Events-WebSocket und MCP bleibt auf diese Chats beschränkt.",
-      "invalid": "Keine Chat-ID und keine Telefonnummer: {{value}}"
+      "invalid": "Keine Chat-ID und keine Telefonnummer: {{value}}",
+      "tooMany": "Zu viele Chats ({{count}}): Ein Schlüssel darf höchstens {{max}} auflisten."
     },
     "expiry": {
       "label": "Läuft ab am (optional)",
