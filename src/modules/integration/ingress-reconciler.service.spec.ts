@@ -172,6 +172,28 @@ describe('IngressReconcilerService.sweep', () => {
     expect(third.skipped).toBe(OPTS.batchSize);
   });
 
+  it('reads a row again on the next sweep when the read failed because the database was busy', async () => {
+    // Not a row that cannot be read: a lock or a dropped connection says nothing about its payload, and the
+    // delivery is one the reconciler exists to replay within minutes.
+    const id = await insertEvent();
+    const real = events.findOneBy.bind(events);
+    let failed = false;
+    jest.spyOn(events, 'findOneBy').mockImplementation(((where: never) => {
+      if (!failed) {
+        failed = true;
+        return Promise.reject(Object.assign(new Error('SQLITE_BUSY: database is locked'), { code: 'SQLITE_BUSY' }));
+      }
+      return real(where);
+    }) as never);
+
+    const first = await service.sweep(OPTS);
+    expect(first).toMatchObject({ replayed: 0, skipped: 1 });
+
+    const second = await service.sweep(OPTS);
+    expect(second).toMatchObject({ replayed: 1, failed: 0 });
+    expect((await stored(id)).dispatchState).toBe('dispatched');
+  });
+
   it('skips a pending row whose payload is gone (nothing to replay from) without burning its budget', async () => {
     const id = await insertEvent({ payload: null });
 

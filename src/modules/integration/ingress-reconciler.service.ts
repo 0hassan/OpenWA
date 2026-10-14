@@ -19,6 +19,7 @@ import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { IngressJobData } from '../queue/processors/ingress.processor';
 import { createLogger } from '../../common/services/logger.service';
+import { isTransientDbError } from '../../common/utils/db-errors';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
 
 export interface IngressReconcilerOptions {
@@ -189,7 +190,9 @@ export class IngressReconcilerService implements OnModuleInit, OnModuleDestroy {
             id,
             action: 'ingress_reconcile_row_unreadable',
           });
-          this.rememberUnreadable(id, now);
+          // Set aside only a row whose payload could not be read. A read that failed because the database
+          // said "not now" (a lock, a dropped connection) is looked at again by the next sweep, as before.
+          if (!isTransientDbError(err)) this.rememberUnreadable(id, now);
           stats.skipped++;
           continue;
         }
