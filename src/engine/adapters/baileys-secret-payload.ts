@@ -93,6 +93,9 @@ const WRAPPERS = [
   'viewOnceMessageV2Extension',
   'documentWithCaptionMessage',
   'editedMessage',
+  'associatedChildMessage',
+  'groupStatusMessage',
+  'groupStatusMessageV2',
 ] as const;
 
 /** The secret a message carries, at the top level or inside the wrappers a disappearing chat adds. */
