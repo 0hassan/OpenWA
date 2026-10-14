@@ -74,7 +74,8 @@ export class OpenWAClient {
       throw new Error('OpenWAClient: apiKey contains a control or non-Latin-1 character; check for a stray newline');
     }
     for (const [name, value] of Object.entries(options.defaultHeaders ?? {})) {
-      if (hasUnsendableChar(String(value))) {
+      // fetch trims spaces, tabs and line breaks at both ends of a value, so only what is left can be refused.
+      if (hasUnsendableChar(String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, ''))) {
         throw new Error(
           `OpenWAClient: defaultHeaders value for "${name}" contains a control or non-Latin-1 character; check for a stray newline`,
         );

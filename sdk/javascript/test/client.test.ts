@@ -475,9 +475,13 @@ describe('OpenWAClient', () => {
       expect(message).toContain(`"${name}"`);
       expect(message).not.toContain(value);
     }
-    // A tab, printable ASCII and a Latin-1 character are sent as before.
+    // A tab, printable ASCII and a Latin-1 character are sent as before, and a line break at either end of a
+    // value read from a file is what fetch trims.
     expect(
       () => new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', defaultHeaders: { 'X-Trace': 'a\tb caf\u00e9' } }),
+    ).not.toThrow();
+    expect(
+      () => new OpenWAClient({ baseUrl: 'http://x', apiKey: 'k', defaultHeaders: { 'X-Proxy-Token': 'tok\n' } }),
     ).not.toThrow();
   });
 
