@@ -11,9 +11,10 @@ import { PinChatDto } from './pin-chat.dto';
 import { SubscribePresenceDto } from './presence.dto';
 import { SendChatStateDto } from './send-chat-state.dto';
 
-// A chat id is stored in an indexed column; PostgreSQL refuses an index entry past about 2.7 KB, which
-// used to surface as a 500 where SQLite stored the value. The send routes bound it at 255, and so does
-// every other request body that names a chat.
+// The send routes store a chat id in an indexed column, and PostgreSQL refuses an index entry past about
+// 2.7 KB, which used to surface as a 500 where SQLite stored the value. They bound it at 255, and so does
+// every other request body that names a chat, so one limit holds across the API: a product send stores
+// the id like the send routes, and a chat action hands it to the engine.
 describe('chatId is bounded at 255 characters on the chat action bodies', () => {
   const exact = `${'1'.repeat(250)}@c.us`;
   const over = `${'1'.repeat(251)}@c.us`;

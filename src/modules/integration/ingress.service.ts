@@ -209,8 +209,8 @@ export class IngressService {
     // dead-lettered, and the deliveries were simply gone. Fall through to the body hash, which is
     // exactly the "provider supplied no id" case it already exists for.
     const headerId = req.headers[dedupHeader]?.trim();
-    // An id longer than the column holding it is no id the provider could have minted: it is stored under the
-    // unique index on PostgreSQL, which refuses a long entry with a 500, so such a header gets the body hash too.
+    // An id past 255 characters is no id a provider mints, and the unique index it is stored under refuses an
+    // entry past about 2.7 KB on PostgreSQL with a 500, so such a header gets the body hash too.
     const deliveryId =
       route.dedupOn === 'body' || !headerId || headerId.length > MAX_DELIVERY_ID_LENGTH
         ? deriveDeliveryId(req)
@@ -292,7 +292,7 @@ export class IngressService {
   }
 }
 
-/** The longest dedup header value taken as a delivery id; the column and its unique index hold 255 characters. */
+/** The longest dedup header value taken as a delivery id, kept far below the index entry limit of PostgreSQL. */
 const MAX_DELIVERY_ID_LENGTH = 255;
 
 /**
