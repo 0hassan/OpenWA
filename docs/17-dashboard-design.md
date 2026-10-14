@@ -491,8 +491,10 @@ The client lives in `src/services/api.ts`. A single `request<T>()` helper attach
 header from `sessionStorage`, then returns **the parsed JSON body as-is** — the backend sends the
 raw handler payload, so `request<Session[]>('/sessions')` resolves to a bare `Session[]`, not
 `{ data: Session[] }`. (A `204 No Content` resolves to `undefined`; a `401`, or a `403` because the
-key's `allowedIps` refuse this client, clears the stored key and redirects to login; any other `403`
-leaves the key in place.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookApi`,
+key's `allowedIps` refuse this client, clears the stored key and redirects to login, but only when the
+stored key is the one the request carried: a late answer for a key since replaced fails like any other
+error, and a keyless request answered after sign-out stays silent. Any other `403` leaves the key in
+place.) Endpoints are grouped into typed namespaces — `sessionApi`, `webhookApi`,
 `templateApi`, `apiKeyApi`, `auditApi`, `messageApi`, `infraApi`, `pluginsApi`, `statsApi`, ...
 
 ```typescript

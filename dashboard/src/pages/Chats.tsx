@@ -716,7 +716,7 @@ export function Chats() {
   // The threads cache at staleTime: Infinity, and this session's events were not delivered while
   // another session was selected or the page was away. Mark them stale on a mount or a session switch
   // so the open one refetches and the others do when opened, with or without a live feed (a
-  // chat-scoped key is refused one).
+  // chat-restricted key gets only its chats' message events).
   useEffect(() => {
     if (selectedSessionId) void queryClient.invalidateQueries({ queryKey: ['messages', selectedSessionId] });
   }, [selectedSessionId, queryClient]);
