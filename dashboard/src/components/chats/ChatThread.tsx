@@ -434,6 +434,7 @@ function ChatThread({
               key={msg.id}
               className={`message-bubble-wrapper ${isMe ? 'outgoing' : 'incoming'}`}
               data-wa-message-id={msg.waMessageId}
+              data-scroll-anchor=""
             >
               <div className="message-bubble-container">
                 <div
