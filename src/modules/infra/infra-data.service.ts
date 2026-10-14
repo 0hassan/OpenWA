@@ -939,9 +939,16 @@ export class InfraDataService {
         // this restore dropped would outlive it by up to 24 h, and a later restore that brings the id back
         // would answer a retried send with the old stored response instead of sending it. The claims of a
         // session the restore keeps stay: a retry of a send made before the restore still replays.
-        if (warnings.length === 0) {
+        // Asked first rather than caught: on PostgreSQL a statement that fails, a missing table included,
+        // aborts the whole import transaction, and every later statement then fails with it.
+        if (warnings.length === 0 && (await queryRunner.hasTable('send_idempotency_keys'))) {
           try {
-            await clearTable('send_idempotency_keys', ' WHERE "sessionId" NOT IN (SELECT "id" FROM sessions)');
+            // CAST: sessions.id is a uuid on PostgreSQL and the claim's sessionId a varchar, which `IN` does not
+            // compare.
+            await clearTable(
+              'send_idempotency_keys',
+              ' WHERE "sessionId" NOT IN (SELECT CAST("id" AS TEXT) FROM sessions)',
+            );
           } catch (error) {
             warnings.push(
               `Failed to drop the send idempotency claims of removed sessions: ${error instanceof Error ? error.message : String(error)}`,
