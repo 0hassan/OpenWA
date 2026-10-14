@@ -596,6 +596,25 @@ test('the stop that takes the place is found after an older page landed since th
   assert.equal(focusedMessage(), 'wamid.c');
 });
 
+// A refetch after a reconnect replaces the live copy of a message with its stored row, whose id differs,
+// so React remounts the bubble: the message is the same, and focus belongs on it.
+test('focus goes to the same message when its bubble is remounted under another key', () => {
+  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+    ...PROMPT,
+    id: `db-${n}`,
+    waMessageId: `wamid.${n}`,
+    metadata: undefined,
+  }));
+  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+  assert.ok(del);
+  del.focus();
+
+  rerenderWith([a, b, c].map(m => ({ ...m, id: `row-${m.waMessageId}` })));
+
+  assert.equal(focusedMessage(), 'wamid.2');
+});
+
 // Firefox and WebKit leave the focused element active for a frame after it stopped being focusable, so
 // the check after the commit finds focus still on the revoked bubble (jsdom never clears it): it has to be
 // moved to a stop then, not left for the focusout that follows, which only forgets it.

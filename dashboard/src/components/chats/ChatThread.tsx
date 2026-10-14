@@ -61,6 +61,10 @@ interface ChatThreadProps {
 // actions) plus the floating scroll-to-bottom button. The page owns the message query and the
 // scroll-position hook (its containerRef is handed down); reply/react/delete/lightbox intents go
 // back up as callbacks.
+/** The WhatsApp id of the message a bubble belongs to, which outlives the key React gives its element. */
+const waIdOf = (element: HTMLElement): string | null =>
+  element.closest('[data-wa-message-id]')?.getAttribute('data-wa-message-id') ?? null;
+
 function ChatThread({
   sessionId,
   activeChat,
@@ -129,7 +133,12 @@ function ChatThread({
   // the position of a reader who scrolled away is never touched (preventScroll). Focus a pointer brought
   // in is not recorded, so a mouse click on Delete moves nothing. The place is found from the bubble in the
   // document, not from an index taken at focus time, which an older page landing since would have moved.
-  const keyboardFocusRef = useRef<{ element: HTMLElement; bubble: HTMLElement; neighbors: HTMLElement[] } | null>(null);
+  const keyboardFocusRef = useRef<{
+    element: HTMLElement;
+    bubble: HTMLElement;
+    wa: string | null;
+    neighbors: Array<{ element: HTMLElement; wa: string | null }>;
+  } | null>(null);
   useEffect(() => {
     const held = keyboardFocusRef.current;
     if (!held) return;
@@ -145,10 +154,18 @@ function ChatThread({
     const stops = Array.from(
       messagesContainerRef.current?.querySelectorAll<HTMLElement>('[data-roving-message]') ?? [],
     );
+    // A bubble that left the document may be the same message under a new key (a refetch replaces the
+    // live copy of a message with its stored row): the WhatsApp id on its wrapper says so.
+    const byWa = (wa: string | null) => (wa ? stops.find(stop => waIdOf(stop) === wa) : undefined);
     const target = bubble.isConnected
       ? (stops.find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_FOLLOWING) ??
         [...stops].reverse().find(stop => bubble.compareDocumentPosition(stop) & bubble.DOCUMENT_POSITION_PRECEDING))
-      : held.neighbors.find(stop => stop.isConnected && stop.hasAttribute('data-roving-message'));
+      : (byWa(held.wa) ??
+        held.neighbors
+          .map(near =>
+            near.element.isConnected && near.element.hasAttribute('data-roving-message') ? near.element : byWa(near.wa),
+          )
+          .find(Boolean));
     target?.focus({ preventScroll: true });
   }, [messages, hasActions, messagesContainerRef]);
 
@@ -315,8 +332,10 @@ function ChatThread({
         }
         const stops = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[data-roving-message]'));
         const at = stops.indexOf(bubble);
-        const neighbors = [stops[at + 1], stops[at - 1]].filter((stop): stop is HTMLElement => Boolean(stop));
-        keyboardFocusRef.current = { element: target, bubble, neighbors };
+        const neighbors = [stops[at + 1], stops[at - 1]]
+          .filter((stop): stop is HTMLElement => Boolean(stop))
+          .map(stop => ({ element: stop, wa: waIdOf(stop) }));
+        keyboardFocusRef.current = { element: target, bubble, wa: waIdOf(bubble), neighbors };
       }}
       onBlur={event => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) keyboardFocusRef.current = null;
