@@ -590,16 +590,16 @@ with zero OpenWA surface. Baileys-only; whatsapp-web.js has no community API at 
 
 **Queries** (8)
 
-| Library method                 | OpenWA exposure                     |
-| ------------------------------ | ----------------------------------- |
-| `executeUSyncQuery`            | ❌ **not exposed**                  |
-| `fetchAccountReachoutTimelock` | ⚙️ internal wiring                  |
-| `fetchBlocklist`               | ✅ `getBlockedContacts`             |
-| `fetchDisappearingDuration`    | ❌ **not exposed**                  |
-| `fetchNewChatMessageCap`       | ❌ **not exposed**                  |
-| `fetchStatus`                  | ❌ **not exposed**                  |
-| `getUSyncDevices`              | ❌ **not exposed**                  |
-| `onWhatsApp`                   | ✅ `getNumberId`, `sendTextMessage` |
+| Library method                 | OpenWA exposure                                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `executeUSyncQuery`            | ❌ **not exposed**                                                                                                                                     |
+| `fetchAccountReachoutTimelock` | ⚙️ internal wiring                                                                                                                                     |
+| `fetchBlocklist`               | ✅ `getBlockedContacts`                                                                                                                                |
+| `fetchDisappearingDuration`    | ❌ **not exposed**                                                                                                                                     |
+| `fetchNewChatMessageCap`       | ❌ **not exposed**                                                                                                                                     |
+| `fetchStatus`                  | ❌ **not exposed**                                                                                                                                     |
+| `getUSyncDevices`              | ❌ **not exposed**                                                                                                                                     |
+| `onWhatsApp`                   | ✅ `getNumberId`, `checkNumberExists`, and the lookup a send to a phone number without a known LID makes first (`sendTextMessage` and the other sends) |
 
 **Profile, contacts & presence** (12)
 
@@ -908,8 +908,8 @@ adapter boundary — none silently stubs.
   whatsapp-web.js has no status-recipient argument, so `StatusPostOptions.recipients` is **not
   honored** — the post broadcasts to the account's status-privacy audience (a one-time warning is
   logged). All four go through the same warning (`wwebjs-status.ts`: `postTextStatus` directly, the
-  other three via `postMediaStatus`). The Baileys engine honors `recipients` (`statusJidList`). The
-  wwjs cells also depend on patch 🔧² (29.3.2).
+  other three via `postMediaStatus`). The Baileys engine requires `recipients` (`statusJidList`) and
+  answers `400` to a status post without any. The wwjs cells also depend on patch 🔧² (29.3.2).
 - **Media sends to a channel JID (wwjs) answer 501.** `sendImageMessage`, `sendVideoMessage`,
   `sendAudioMessage`, `sendDocumentMessage` and `sendStickerMessage` are ✅ on wwjs for chats and
   groups, but a `<id>@newsletter` recipient throws `ChannelMediaNotSupportedError` (a
@@ -934,9 +934,11 @@ adapter boundary — none silently stubs.
   animation is refused with a `400`), and everything else, **including `video/*` and
   `image/svg+xml`** (the adapter blocks SVG decoding), is refused with a `400`. So an
   animated-video sticker works on wwjs and answers `400` on Baileys, and so does an SVG, which
-  whatsapp-web.js hands to the page like any other `image/*`. ffmpeg is deliberately
-  not wired in on the Baileys side: the binary ships only in the Docker image, so depending on it
-  would make the same request succeed or fail depending on how the gateway was installed.
+  whatsapp-web.js hands to the page like any other `image/*`. Sticker conversion is deliberately
+  not wired to ffmpeg on the Baileys side: the binary ships only in the Docker image, so depending
+  on it would make the same request succeed or fail depending on how the gateway was installed. A
+  Baileys voice note's waveform does read its audio through ffmpeg when the binary is there; without
+  it the note goes out with flat bars.
 - **`deleteStatus` (baileys).** Baileys sends a status stanza, the revoke included, to exactly its
   `statusJidList`, so the revoke is addressed to the recipients the adapter remembered when it posted
   the status. It keeps them in memory for 24 hours, so a status this session did not post in the last
@@ -956,8 +958,14 @@ adapter boundary — none silently stubs.
   rebuilt this way carry timestamp `0` and no `lastMessage` until a message arrives. The transient
   reconnects Baileys runs on its own keep the list. whatsapp-web.js reads WhatsApp Web's own chat
   list and is unaffected.
-- **`getContactStatus` / `getContactStatuses` (wwjs).** `Status.type` is the `text|image|video`
-  union — audio/other story types collapse to `text`.
+- **`getContactStatus` / `getContactStatuses` (wwjs).** `Status.type` is the `text|image|video|voice`
+  union: a voice note reads back as `voice`, and any other story type collapses to `text`.
+- **`requestPairingCode` (wwjs) for a number that already has a linked session.** Both engines
+  return a code, but on whatsapp-web.js the request runs in the shared WhatsApp Web page and checks
+  no precondition: measured twice, a request for a number that already had a linked session was
+  followed within about a minute by WhatsApp revoking that device, whatsapp-web.js deleting its
+  credentials and the session returning to `qr_ready`. Baileys writes only its own credentials and
+  showed no such effect. Link by QR when the session of that number must stay up.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
   four `chatModify` actions (archive, clear, delete, unread) need the chat's last known message, which
   the patch carries. `sendSeen` without message ids is `readMessages([key])` for the newest _received_
