@@ -872,6 +872,15 @@ docker compose run --rm openwa-api npm run migration:run:prod
 > the TypeScript sources, both stripped by `npm ci --omit=dev` in the released image. The same holds for
 > the main chain: use `migration:run:main:prod`, not `migration:run:main`.
 
+On PostgreSQL the boot migrations run in one transaction, so an index build on a large table holds back
+writes to that table until the whole chain commits. On the Helm chart a boot that outlasts the startup
+probe (about 295 s) is killed, which rolls the build back and starts it again from nothing. Run the
+command above first, in a one-off container of the new image on the same database (a Kubernetes `Job` on
+Helm); the pods then find nothing to build. To avoid the write lock as well, build the index beforehand
+with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` under the same name and columns, and the migration skips
+it. A concurrent build that fails leaves an INVALID index under that name, which the migration also
+skips: check `pg_index.indisvalid` and drop the invalid index before building it again.
+
 ### Known Upgrade Hazards
 
 | Release  | Change                                                                                                                                                                                                                                                                                                                         | Action                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
