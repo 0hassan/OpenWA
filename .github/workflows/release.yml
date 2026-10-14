@@ -821,14 +821,16 @@ jobs:
   # with it: v0.10.5 published a GitHub Release while `latest`, `0.10` and `0.10.5` all vanished
   # from the registry, so `docker pull` failed for everyone until they were restored.
   #
-  # This lives in its own `if: always()` job — not inside promote — because the failure path is
-  # exactly when cleanup matters most: when boot-smoke or image-scan fails, promote is skipped and
-  # the staging tag would otherwise leak. On the happy path the release tags share the staging
-  # version, so the step below does not run at all (the deliberate retention documented above): the
-  # package-versions API is eventually consistent, and a read that does not list the new release
-  # tags yet would count the staging tag alone and delete the version just published. The same
-  # holds for a promote that failed after re-pointing some tags, so the step runs only when promote
-  # never ran, which is the one case where the staging tag is alone and gets removed.
+  # This lives in its own `if: always()` job — not inside promote — because the docker job can fail
+  # after pushing the staging tag, which would otherwise leak. On the happy path the release tags
+  # share the staging version, so the step below does not run at all (the deliberate retention
+  # documented above): the package-versions API is eventually consistent, and a read that does not
+  # list the new release tags yet would count the staging tag alone and delete the version just
+  # published. The same holds for a promote that failed after re-pointing some tags, so the step runs
+  # only when promote never ran. It also keeps the tag when the docker job succeeded and a gate
+  # (boot-smoke or image-scan) failed: "Re-run failed jobs" pulls that tag again, and with it deleted
+  # a flaky scan could only be recovered by rebuilding everything. That leaves one stray tag behind
+  # when the release is abandoned instead.
   cleanup-staging:
     name: Clean up the staging tag
     runs-on: ubuntu-latest
@@ -841,8 +843,9 @@ jobs:
       - name: Remove the staging tag (only when it is alone on its version)
         # Only when promote never ran: once it has started re-pointing tags, the version can carry
         # release tags that a stale read does not list yet. A failed or cancelled promote leaves the
-        # stray staging tag behind, the same retention as the happy path.
-        if: needs.promote.result == 'skipped'
+        # stray staging tag behind, the same retention as the happy path. And only when the docker job
+        # did not succeed: a gate that failed on top of a good staging image is re-run against it.
+        if: needs.promote.result == 'skipped' && needs.docker.result != 'success'
         # Best-effort: a failed tidy-up must not turn an otherwise successful release red.
         continue-on-error: true
         env:
