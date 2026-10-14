@@ -138,27 +138,61 @@ export class WebhookOutboxService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Unsettled rows older than the staleness window; queued jobs are checked before replay. */
-  async findStale(olderThan: Date, limit: number, afterId?: string): Promise<ReplayableDelivery[]> {
+  /**
+   * Unsettled rows older than the staleness window; queued jobs are checked before replay.
+   *
+   * A stored payload that does not parse (an imported or hand-edited row on SQLite, where it is text)
+   * fails the read of every page it sits in, so no row behind it would ever be replayed. When the page
+   * read fails it is read again row by row, an unreadable row is logged and skipped, and `onScanned`
+   * receives the last id the page covered so a caller's cursor passes the unreadable rows too.
+   */
+  async findStale(
+    olderThan: Date,
+    limit: number,
+    afterId?: string,
+    onScanned?: (lastId: string) => void,
+  ): Promise<ReplayableDelivery[]> {
     const pending = { state: In(['pending', 'queued']), payload: Not(IsNull()), createdAt: LessThan(olderThan) };
-    const rows = await this.outbox.find({
-      where: afterId
-        ? {
-            ...pending,
-            // Compare in SQL so PostgreSQL's sub-millisecond timestamps are never rounded through Date.
-            createdAt: And(
-              LessThan(olderThan),
-              Raw(
-                alias =>
-                  `(${alias}, "id") > (SELECT "createdAt", "id" FROM "webhook_outbox_events" WHERE "id" = :afterId)`,
-                { afterId },
-              ),
+    const where = afterId
+      ? {
+          ...pending,
+          // Compare in SQL so PostgreSQL's sub-millisecond timestamps are never rounded through Date.
+          createdAt: And(
+            LessThan(olderThan),
+            Raw(
+              alias =>
+                `(${alias}, "id") > (SELECT "createdAt", "id" FROM "webhook_outbox_events" WHERE "id" = :afterId)`,
+              { afterId },
             ),
-          }
-        : pending,
-      order: { createdAt: 'ASC', id: 'ASC' },
-      take: limit,
-    });
+          ),
+        }
+      : pending;
+    const order = { createdAt: 'ASC', id: 'ASC' } as const;
+    let rows: WebhookOutboxEvent[];
+    try {
+      rows = await this.outbox.find({ where, order, take: limit });
+    } catch (error) {
+      this.logger.warn('Reading a page of stranded deliveries failed; reading it row by row', {
+        error: error instanceof Error ? error.message : String(error),
+        action: 'webhook_outbox_page_unreadable',
+      });
+      const ids = await this.outbox.find({ select: { id: true }, where, order, take: limit });
+      rows = [];
+      for (const { id } of ids) {
+        try {
+          const row = await this.outbox.findOneBy({ id });
+          if (row) rows.push(row);
+        } catch (rowError) {
+          this.logger.error('A stranded delivery could not be read and is skipped', {
+            id,
+            error: rowError instanceof Error ? rowError.message : String(rowError),
+            action: 'webhook_outbox_row_unreadable',
+          });
+        }
+      }
+      const last = ids.at(-1);
+      if (last) onScanned?.(last.id);
+    }
     // A pending row always carries its payload; the guard is for a row whose payload was retired by
     // a concurrent close between the query and this read.
     return rows

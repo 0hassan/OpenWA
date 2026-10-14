@@ -11,7 +11,12 @@ describe('RedriveService', () => {
   let ingressEnqueue: jest.Mocked<Partial<IngressEnqueueService>>;
 
   beforeEach(() => {
-    repo = { find: jest.fn(), update: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(0) };
+    repo = {
+      find: jest.fn(),
+      findOneBy: jest.fn(),
+      update: jest.fn().mockResolvedValue(undefined),
+      count: jest.fn().mockResolvedValue(0),
+    };
     events = { update: jest.fn().mockResolvedValue(undefined) };
     ingressEnqueue = { enqueue: jest.fn().mockResolvedValue({ outcome: 'queued' }) };
   });
@@ -23,6 +28,22 @@ describe('RedriveService', () => {
       ingressEnqueue as IngressEnqueueService,
     );
   }
+
+  it('redrives the rows it can read when one stored payload does not parse', async () => {
+    const ingress = { headers: {}, query: {}, body: '{}', rawBody: '{}' };
+    const healthy = { id: 'f2', pluginId: 'p', instanceId: 'i', deliveryId: 'd2', payload: { route: 'r', ingress } };
+    // The window read fails as a whole; read again by id, the first row cannot be read and the second can.
+    (repo.find as jest.Mock)
+      .mockRejectedValueOnce(new SyntaxError('Unexpected token o in JSON at position 1'))
+      .mockResolvedValueOnce([{ id: 'f1' }, { id: 'f2' }]);
+    (repo.findOneBy as jest.Mock).mockRejectedValueOnce(new SyntaxError('bad json')).mockResolvedValueOnce(healthy);
+
+    const res = await makeSvc().redriveInstance('p', 'i', null);
+
+    expect(res.redriven).toBe(1);
+    expect(ingressEnqueue.enqueue).toHaveBeenCalledTimes(1);
+    expect(repo.update).toHaveBeenCalledWith({ id: 'f2' }, { redriven: true });
+  });
 
   it('re-enqueues non-redriven inbound failures for an instance and marks them redriven', async () => {
     const rows = [

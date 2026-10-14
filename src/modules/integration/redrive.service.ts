@@ -85,13 +85,37 @@ export class RedriveService implements OnModuleDestroy {
       redriven: false,
       ...(sessionIdFilter === null ? {} : { sessionId: sessionIdFilter }),
     };
-    const rows = await this.repo.find({
-      where,
-      // Failed replays increment attempts and move behind never-retried rows, preventing one permanent
-      // failure from livelocking the bounded window while keeping it redrivable.
-      order: { attempts: 'ASC', createdAt: 'ASC' },
-      take: REDRIVE_BATCH_SIZE,
-    });
+    // Failed replays increment attempts and move behind never-retried rows, preventing one permanent
+    // failure from livelocking the bounded window while keeping it redrivable.
+    const order = { attempts: 'ASC', createdAt: 'ASC' } as const;
+    let rows: IntegrationDeliveryFailure[];
+    try {
+      rows = await this.repo.find({ where, order, take: REDRIVE_BATCH_SIZE });
+    } catch (err) {
+      // A stored payload that does not parse (an imported or hand-edited dead letter) fails the read of
+      // the whole window, and it heads the window for good since it is never replayed, so every redrive
+      // of the instance would fail with it. Read the window again row by row and skip the unreadable one.
+      this.logger.warn('Reading the dead letters of an instance failed; reading them row by row', {
+        pluginId,
+        instanceId,
+        error: err instanceof Error ? err.message : String(err),
+        action: 'ingress_redrive_window_unreadable',
+      });
+      const ids = await this.repo.find({ select: { id: true }, where, order, take: REDRIVE_BATCH_SIZE });
+      rows = [];
+      for (const { id } of ids) {
+        try {
+          const row = await this.repo.findOneBy({ id });
+          if (row) rows.push(row);
+        } catch (rowError) {
+          this.logger.error('A dead letter could not be read and is skipped', {
+            id,
+            error: rowError instanceof Error ? rowError.message : String(rowError),
+            action: 'ingress_redrive_row_unreadable',
+          });
+        }
+      }
+    }
 
     let redriven = 0;
     for (const row of rows) {

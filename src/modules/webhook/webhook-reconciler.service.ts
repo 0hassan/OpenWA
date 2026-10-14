@@ -133,13 +133,19 @@ export class WebhookReconcilerService implements OnModuleInit, OnModuleDestroy {
     this.inFlight = new Promise(resolve => (settle = resolve));
     try {
       const cutoff = new Date(now.getTime() - opts.graceMs);
-      let rows = await this.outbox.findStale(cutoff, opts.batchSize, this.cursor);
-      if (rows.length === 0 && this.cursor) {
+      // The last id the page covered, which can lie beyond its last readable row: a row whose stored
+      // payload is unreadable is skipped, and the cursor must pass it or a page of them is read forever.
+      let scannedThrough: string | undefined;
+      const onScanned = (id: string): void => {
+        scannedThrough = id;
+      };
+      let rows = await this.outbox.findStale(cutoff, opts.batchSize, this.cursor, onScanned);
+      if (rows.length === 0 && !scannedThrough && this.cursor) {
         this.cursor = undefined;
-        rows = await this.outbox.findStale(cutoff, opts.batchSize);
+        rows = await this.outbox.findStale(cutoff, opts.batchSize, undefined, onScanned);
       }
       // Live jobs may occupy a whole page. Advance past them without spending their replay budget.
-      this.cursor = rows.at(-1)?.id;
+      this.cursor = scannedThrough ?? rows.at(-1)?.id;
       stats.scanned = rows.length;
       for (const row of rows) {
         if (this.stop.signal.aborted) break;

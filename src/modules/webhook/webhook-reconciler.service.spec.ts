@@ -233,6 +233,20 @@ describe('WebhookReconcilerService', () => {
     expect(stats).toMatchObject({ scanned: 1, skipped: 1, replayed: 0, failed: 0 });
   });
 
+  it('moves its cursor past rows a page read could not return, instead of reading them again', async () => {
+    // A page made only of rows whose stored payload is unreadable returns nothing, but it was scanned.
+    outbox.findStale.mockImplementationOnce((_cutoff, _limit, _after, onScanned?: (lastId: string) => void) => {
+      onScanned?.('row-9');
+      return Promise.resolve([]);
+    });
+
+    await service.sweep(OPTS);
+    expect(outbox.findStale).toHaveBeenCalledTimes(1);
+
+    await service.sweep(OPTS);
+    expect((outbox.findStale.mock.calls as unknown[][])[1][2]).toBe('row-9');
+  });
+
   it('never stacks a second pass on top of a slow one', async () => {
     let release: () => void = () => {};
     outbox.findStale.mockImplementation(
