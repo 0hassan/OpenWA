@@ -597,6 +597,10 @@ running teardown, so `onDisable` runs once; an unload that joins this way gets n
 its `ctx.storage` data dir (built-ins are protected and cannot be uninstalled). The unload path
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).
+Uninstall also hands every chat the plugin had taken over back to the bot. The plugin's integration
+instances, with their encrypted secrets, and its stored deliveries stay in the database, so a reinstall finds
+its provider webhooks still pointing at live instance ids; remove an instance for good with
+`DELETE /api/integration/plugins/:pluginId/instances/:instanceId`, which works with the plugin gone.
 
 **Context.** `PluginCapabilityContext.createPluginContext` (`src/core/plugins/plugin-capability-context.ts`) builds the `PluginContext` (§19.4): a per-plugin logger,
 `registerHook` (wrapped with the per-session activation gate), `registerWebhook`, the live
