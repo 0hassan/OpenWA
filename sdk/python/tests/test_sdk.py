@@ -326,6 +326,13 @@ class TestClientCore:
         with pytest.raises(ValueError, match="X-Trace") as raised:
             OpenWAClient(base_url="https://x", api_key="k", default_headers={"X-Trace": b"s3cret\n"})  # type: ignore[dict-item]
         assert "s3cret" not in str(raised.value)
+        # An httpx.Headers keeps a repeated name as separate lines, and so does the client.
+        repeated = OpenWAClient(
+            base_url="https://x",
+            api_key="k",
+            default_headers=httpx.Headers([("Cookie", "a=1"), ("Cookie", "b=2")]),
+        )
+        assert repeated._http._client.headers.get_list("Cookie") == ["a=1", "b=2"]
         for bad in (42, ["X-Trace"], [("X-Trace", "a", "b")]):
             with pytest.raises(ValueError, match="default_headers"):
                 OpenWAClient(base_url="https://x", api_key="k", default_headers=bad)  # type: ignore[arg-type]

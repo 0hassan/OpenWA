@@ -117,8 +117,11 @@ def clean_default_headers(default_headers: Any) -> httpx.Headers:
     """
     if default_headers is None:
         return httpx.Headers()
-    if isinstance(default_headers, Mapping):
-        pairs: list[Any] = list(default_headers.items())
+    if isinstance(default_headers, httpx.Headers):
+        # Its repeated names are lines of their own; `.items()` would join them into one.
+        pairs: list[Any] = list(default_headers.multi_items())
+    elif isinstance(default_headers, Mapping):
+        pairs = list(default_headers.items())
     else:
         try:
             pairs = list(default_headers)
