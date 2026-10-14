@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Index ingress dead letters by delivery id, so the reconciler's per-delivery checks stop scanning every dead letter of an instance; the first boot builds the index.
 - Replay stranded ingress events past one whose stored payload is not valid JSON, instead of failing every sweep on it.
 - Hand a chat back to the bot when the plugin instance that took it over is deleted, instead of silencing every other plugin on it.
 - Keep the sessions of a plugin's other enabled instances active when creating, disabling or deleting a session-scoped instance retires an operator-set `*`.

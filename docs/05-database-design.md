@@ -925,7 +925,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1787000000000-AddWebhookDeliveryFailurePayload.ts   # webhook_delivery_failures.payload (optional replay copy)
 ├── 1787100000000-AddSendIdempotencyKeys.ts   # send_idempotency_keys (opt-in send retry guard)
 ├── 1787200000000-DeduplicateTerminalWebhookFailures.ts   # one terminal record per webhook and idempotency key
-└── 1790812800000-AddMessageWindowIndexes.ts   # compound timestamp indexes for message-time pagination
+├── 1790812800000-AddMessageWindowIndexes.ts   # compound timestamp indexes for message-time pagination
+└── 1791100000000-AddIntegrationDeliveryFailureDeliveryIndex.ts   # (pluginId, instanceId, deliveryId) index for the dead-letter guards
 ```
 
 > [!NOTE]
