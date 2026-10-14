@@ -1201,6 +1201,80 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
   });
 
+  it("drops another member's encrypted edit of an original that finishes while the guard reads the store", async () => {
+    // Held reads of the target, in order: the original's own repeat check, the reveal's read, the guard's.
+    const reads: Array<(stored: WAMessage | null) => void> = [];
+    const getStoredMessage = (id: string): Promise<WAMessage | null> =>
+      id === 'ORIG1' && reads.length < 3 ? new Promise(resolve => reads.push(resolve)) : Promise.resolve(null);
+    const { events, onMessageEdited, recordMessageEdit } = setup({ getStoredMessage });
+    // Another member of the group, who holds the message's secret as a recipient of it, seals an edit.
+    const forged = editEnvelope({
+      participant: reactor,
+      sealed: seal('Message Edit', { target: 'ORIG1', author, modifier: reactor }, editPlain),
+    });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [forged] });
+    await flush();
+    expect(reads).toHaveLength(2);
+
+    reads[1](null); // the reveal reads nothing and decrypts from the copy in flight
+    await flush();
+    expect(reads).toHaveLength(3); // the guard's read is out now
+    reads[0](null); // the original finishes and leaves the in-flight map while it is
+    await flush();
+    reads[2](null);
+    await flush();
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+    expect(recordMessageEdit).not.toHaveBeenCalled();
+  });
+
+  it('holds a plain edit from another member to the same rule when the original finishes during the read', async () => {
+    const reads: Array<(stored: WAMessage | null) => void> = [];
+    const getStoredMessage = (id: string): Promise<WAMessage | null> =>
+      id === 'ORIG1' && reads.length < 2 ? new Promise(resolve => reads.push(resolve)) : Promise.resolve(null);
+    const { events, onMessageEdited } = setup({ getStoredMessage });
+    const plain = {
+      key: { id: 'ENV2', remoteJid: group, participant: reactor, fromMe: false },
+      messageTimestamp: 1_786_000_100,
+      message: { protocolMessage: editPlain.protocolMessage },
+    } as unknown as WAMessage;
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [plain] });
+    await flush();
+    expect(reads).toHaveLength(2); // the original's check and the guard's read
+    reads[0](null);
+    await flush();
+    reads[1](null);
+    await flush();
+
+    expect(onMessageEdited).not.toHaveBeenCalled();
+  });
+
+  it("still applies the author's own encrypted edit in the same interleaving", async () => {
+    const reads: Array<(stored: WAMessage | null) => void> = [];
+    const getStoredMessage = (id: string): Promise<WAMessage | null> =>
+      id === 'ORIG1' && reads.length < 3 ? new Promise(resolve => reads.push(resolve)) : Promise.resolve(null);
+    const { events, onMessageEdited } = setup({ getStoredMessage });
+
+    events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+    await flush();
+    events.handleMessagesUpsert({ type: 'notify', messages: [editEnvelope()] });
+    await flush();
+    reads[1](null);
+    await flush();
+    reads[0](null);
+    await flush();
+    reads[2](null);
+    await flush();
+
+    expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
+  });
+
   describe('leaves an encrypted edit unapplied when', () => {
     it.each([
       ['another member sealed it for the message', () => editEnvelope({ participant: reactor })],

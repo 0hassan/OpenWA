@@ -371,11 +371,11 @@ export class BaileysEvents {
   async applyHistoryRevoke(target: WAMessageKey, envelope: WAMessageKey): Promise<WAMessageKey | undefined> {
     if (!target.id) return undefined;
     const generation = this.storeGeneration;
-    const stored = await this.readStoredMessage(target.id, 'checking what a history revoke targets');
+    const found = await this.readTarget(target.id, 'checking what a history revoke targets');
     if (generation !== this.storeGeneration) return undefined;
-    const original = stored?.key ?? this.inboundInFlight.get(target.id)?.key ?? target;
+    const original = found?.key ?? target;
     if (!this.mayChange(original, envelope, true)) return undefined;
-    if (stored || this.inboundInFlight.has(target.id)) this.markDeletedForEveryone(target.id);
+    if (found) this.markDeletedForEveryone(target.id);
     this.changeStoredMessage(target.id, copy =>
       this.mayChange(copy.key, envelope, true) ? { ...copy, message: null } : null,
     );
@@ -807,6 +807,22 @@ export class BaileysEvents {
    * which is the price paid here deliberately, because a message nobody ever hears about cannot be
    * recovered at all. The persist side of the same store is already written this way.
    */
+  /**
+   * What an edit, revoke or reaction targets: the stored copy, or the one still being processed. The
+   * in-flight copy is taken BEFORE the store is read, because an original that finishes while the read is
+   * out has left the map and may have been written after the read began, which would find it in neither.
+   */
+  private async readTarget(
+    messageId: string,
+    purpose: string,
+  ): Promise<{ key: WAMessageKey; message: WAMessage['message'] } | null> {
+    const processing = this.inboundInFlight.get(messageId);
+    const stored = await this.readStoredMessage(messageId, purpose);
+    if (stored) return { key: stored.key, message: stored.message };
+    const inFlight = processing ?? this.inboundInFlight.get(messageId);
+    return inFlight ? { key: inFlight.key, message: inFlight.message } : null;
+  }
+
   private async readStoredMessage(messageId: string, purpose: string): Promise<WAMessage | null> {
     try {
       return (await this.host.getStoredMessage(messageId)) ?? null;
@@ -852,15 +868,7 @@ export class BaileysEvents {
         const editType = b.proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT;
         if (type !== editType && type !== 'MESSAGE_EDIT') return undefined;
       }
-      // Looked up before the store is read: an original that finishes while the read is out leaves the
-      // in-flight map and, if its row was written after the read began, is in neither place.
-      const processing = this.inboundInFlight.get(targetId);
-      const stored = await this.readStoredMessage(
-        targetId,
-        'reading the message an encrypted edit or reaction targets',
-      );
-      const inFlight = processing ?? this.inboundInFlight.get(targetId);
-      const original = stored ?? (inFlight ? { key: inFlight.key, message: inFlight.message } : undefined);
+      const original = await this.readTarget(targetId, 'reading the message an encrypted edit or reaction targets');
       const secret = messageSecretOf(original?.message);
       if (!original || !secret) {
         this.host.logger.debug('Cannot read an encrypted edit or reaction: the message it targets is not stored', {
@@ -946,8 +954,7 @@ export class BaileysEvents {
     // A message still being processed has no stored copy yet, but the projector may already hold it
     // (PostgreSQL), so its own key is checked instead.
     const original = targetId
-      ? ((await this.readStoredMessage(targetId, 'checking what an edit, revoke or reaction targets'))?.key ??
-        this.inboundInFlight.get(targetId)?.key)
+      ? (await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets'))?.key
       : undefined;
     if (!original) return false;
     const broadcast = kind === 'reaction' && !!original.remoteJid?.endsWith('@broadcast');
