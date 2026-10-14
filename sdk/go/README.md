@@ -96,9 +96,10 @@ func main() {
 res, err := client.Messages.SendText(ctx, sessionID, req)
 switch {
 case errors.Is(err, openwa.ErrConflict):
-	// 409 — engine not ready; retry once the session is "ready".
-	// A keyed send can also answer 409 for a pending or uncertain outcome;
-	// APIError.Code tells them apart ("Send idempotency" below says what to do).
+	// 409 — a conflicting state, typically a session that is not "ready" yet:
+	// retry once it is. A keyed send can also answer 409 for a pending or
+	// uncertain outcome; APIError.Code tells them apart ("Send idempotency"
+	// below says what to do).
 case errors.Is(err, openwa.ErrNotFound):
 	// 404 — unknown session/resource.
 case err != nil:

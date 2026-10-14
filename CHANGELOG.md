@@ -52,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bound each webhook and ingress queue command at 2 s once Redis has connected, so a Redis that stops answering falls back to direct delivery and inline dispatch instead of holding every dispatch and ingress request.
 - Keep the dashboard chat's scroll-to-bottom button in view while the reader is scrolled up, where it moved with the thread and was off screen.
-- Keep the dashboard chat reader's own scroll while an older page loads, where a scroll made in the meantime was undone and the scroll-to-bottom button could end far above the bottom.
+- Land the dashboard chat's scroll-to-bottom button at the bottom when an older page arrives meanwhile, where the animated jump could end far above it.
 - Refuse to save a local `storage.localPath` the app cannot create or write, where the next start refused to boot and the dashboard that could undo the save was down.
 - Answer `400` for a send route's or a product send's `chatId`, or a bulk `batchId`, over 255 characters, where PostgreSQL answered `500` once the value passed its index entry limit.
 - Answer `400` for a `chatId` over 255 characters in the request body of a chat action, as the send routes do, instead of handing it to the engine.
@@ -159,10 +159,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parse a dashboard message made of many code spans or code blocks in linear time, so one long message no longer freezes the tab for seconds.
 - Render a dashboard message body over 4096 characters without links, so link detection no longer freezes the tab on a very long body.
 - Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`.
-- Python SDK (next SDK release after 0.5.1): a `timeout` of `None`, 0 or infinity means no timeout, an `httpx.Timeout` or a four-value tuple is passed through with a 0 or infinite element leaving that operation without a limit, and a negative, NaN or non-number raises `ValueError`.
+- Python SDK (next SDK release after 0.5.1): a `timeout` of `None`, 0 or infinity means no timeout, a four-value tuple takes the same for each element, an `httpx.Timeout` is passed to httpx as given, and a negative, NaN or non-number raises `ValueError`.
 - Python SDK (next SDK release after 0.5.1): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
 - JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key, and the PHP client keeps its default header values out of a dump, an export and a cast as well.
 - Python and PHP SDKs (next SDK release after 0.5.1): the API key is trimmed, and one with a control or non-ASCII character is refused when the client is built, without repeating it.
+- JavaScript SDK (next SDK release after 0.5.1): the API key is trimmed, and a key or default header value with a control or non-Latin-1 character is refused when the client is built, naming the header and never repeating the value.
+- Go SDK (next SDK release after 0.5.1): the API key is trimmed, and one with a control character is refused when the client is built, without repeating it.
 - Python and PHP SDKs (next SDK release after 0.5.1): a default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
 - Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`.
 - Java SDK (next SDK release after 0.5.1): a key or default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.

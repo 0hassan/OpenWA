@@ -1633,8 +1633,9 @@ content on the API origin.
 **Errors:** `401` missing/invalid API key · `403` key not scoped to this session · `404`
 `No media stored for this message` — the message carries no media, `MEDIA_DOWNLOAD_ENABLED=false`
 or the media was above `MEDIA_DOWNLOAD_MAX_BYTES` when it was stored (the row holds a size-only
-marker), it was a URL-based API send (the gateway fetches those bytes at send time and never stores
-them), or the message is not in this gateway's history (e.g. history backfill, which is media-free)
+marker), it was a URL-based API send (the gateway stores none of those bytes, though on
+whatsapp-web.js the own-send echo may), or the message is not in this gateway's history (e.g. history
+backfill, which is media-free)
 
 Note: this is a three-path-segment route, so it never collides with the two-segment
 `GET /messages/:chatId/history` regardless of declaration order.
