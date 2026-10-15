@@ -492,6 +492,12 @@ describe('a job that can mint a publish credential pins global npm installs and 
     permissions: Record<string, string>;
     // Step `env`: each name with the values it may take.
     env: Record<string, Allowed[]>;
+    // Where and when the job runs, each held at the one value the workflow gives it. `runs-on` names the
+    // machine that executes the job beside the credential, which a self-hosted runner outlives, `needs` the
+    // jobs it follows, and `timeout-minutes` how long it may hold the credential.
+    runsOn: string;
+    needs: string[];
+    timeout: number;
   };
   // `workflowEnv` names what the workflow sets for every job; `defaults` is never allowed.
   type FileAllowList = { workflowEnv: string[]; jobs: Record<string, JobAllowList> };
@@ -520,6 +526,9 @@ describe('a job that can mint a publish credential pins global npm installs and 
     stepKeys: ['name', 'uses', 'run', 'with'],
     jobKeys: ['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
     permissions: { contents: 'read', 'id-token': 'write' },
+    runsOn: 'ubuntu-latest',
+    needs: ['build'],
+    timeout: 15,
   };
   // The npm that comes with the Node image cannot do trusted publishing, so the job installs one, pinned
   // to an exact release, and only then uploads the tarball its build job made.
@@ -642,6 +651,9 @@ describe('a job that can mint a publish credential pins global npm installs and 
         stepKeys: ['name', 'uses', 'id', 'with', 'env', 'run'],
         jobKeys: ['name', 'runs-on', 'timeout-minutes', 'permissions', 'needs', 'steps'],
         permissions: { packages: 'write', 'id-token': 'write', attestations: 'write' },
+        runsOn: 'ubuntu-latest',
+        needs: ['docker', 'boot-smoke', 'image-scan'],
+        timeout: 15,
         steps: IMAGE_PROMOTE,
         ...flatten(IMAGE_PROMOTE),
       },
@@ -691,6 +703,18 @@ describe('a job that can mint a publish credential pins global npm installs and 
         continue;
       }
       for (const key of Object.keys(def)) if (!list.jobKeys.includes(key)) found.push(`${job}: job key ${key}`);
+      // The keys that are allowed are held at their values.
+      const shown = (value: unknown): string => (typeof value === 'string' ? value : (JSON.stringify(value) ?? 'none'));
+      if (def['runs-on'] !== list.runsOn) {
+        found.push(`${job}: runs-on ${shown(def['runs-on'])}, expected ${list.runsOn}`);
+      }
+      const needs = [def.needs ?? []].flat() as unknown[];
+      if (JSON.stringify([...needs].sort()) !== JSON.stringify([...list.needs].sort())) {
+        found.push(`${job}: needs ${shown(def.needs)}, expected ${list.needs.join(', ')}`);
+      }
+      if (def['timeout-minutes'] !== list.timeout) {
+        found.push(`${job}: timeout-minutes ${shown(def['timeout-minutes'])}, expected ${list.timeout}`);
+      }
       // What the job holds is its own block, or the workflow's when it has none.
       const held = def.permissions !== undefined ? def.permissions : workflow.permissions;
       if (typeof held === 'string') {
@@ -884,8 +908,9 @@ describe('a job that can mint a publish credential pins global npm installs and 
   it('js-sdk-release.yml: names what the allow-list refuses in an id-token job', () => {
     // What the job is listed at, so that each case below departs from the list in one place only.
     const grant = { contents: 'read', 'id-token': 'write' };
+    const placed = { 'runs-on': 'ubuntu-latest', needs: 'build', 'timeout-minutes': 15 };
     const run = (commands: string): OidcWorkflow => ({
-      jobs: { publish: { permissions: grant, steps: [{ run: commands }] } },
+      jobs: { publish: { ...placed, permissions: grant, steps: [{ run: commands }] } },
     });
     for (const command of [
       'npm install',
@@ -918,6 +943,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     const withAction: OidcWorkflow = {
       jobs: {
         publish: {
+          ...placed,
           permissions: grant,
           steps: [{ uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' }, { uses: 'actions/cache@v4' }],
         },
@@ -931,7 +957,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     // what a job or the workflow sets for every step.
     const keyed = (job: Record<string, unknown>, workflow: Record<string, unknown> = {}): OidcWorkflow => ({
       ...workflow,
-      jobs: { publish: { permissions: grant, ...job } },
+      jobs: { publish: { ...placed, permissions: grant, ...job } },
     });
     const sha = '820762786026740c76f36085b0efc47a31fe5020';
     expect(
@@ -969,7 +995,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     expect(
       outsideAllowList({
         permissions: { ...grant, packages: 'write' },
-        jobs: { publish: { steps: [] } },
+        jobs: { publish: { ...placed, steps: [] } },
       }),
     ).toEqual(['publish: permission packages: write']);
     // A job without the grant is not the publish job.
@@ -1019,6 +1045,34 @@ describe('a job that can mint a publish credential pins global npm installs and 
     ['at the end of a line', `${line} # ${EXPRESSION}`],
   ];
   const inComment = (job: string, step: string): string => `${job}: step "${step}": a \${{ expression in a comment`;
+  // The keys that place a job, each departing from the list the way a change would: where it runs, the jobs
+  // it follows and how long it may run. `needs` is the list the job holds, and the others are one value.
+  const placing = (job: string, needs: string[]): Array<[string, Edit, string[]]> => [
+    [
+      'a self-hosted runner',
+      w => (jobOf(w, job)['runs-on'] = ['self-hosted', 'linux']),
+      [`${job}: runs-on ["self-hosted","linux"], expected ubuntu-latest`],
+    ],
+    [
+      'another hosted image',
+      w => (jobOf(w, job)['runs-on'] = 'macos-latest'),
+      [`${job}: runs-on macos-latest, expected ubuntu-latest`],
+    ],
+    ['no runner named', w => delete jobOf(w, job)['runs-on'], [`${job}: runs-on none, expected ubuntu-latest`]],
+    [
+      'a job it no longer follows',
+      w => (jobOf(w, job).needs = needs.slice(1)),
+      [`${job}: needs ${JSON.stringify(needs.slice(1))}, expected ${needs.join(', ')}`],
+    ],
+    [
+      'another job to follow',
+      w => (jobOf(w, job).needs = [...needs, 'other']),
+      [`${job}: needs ${JSON.stringify([...needs, 'other'])}, expected ${needs.join(', ')}`],
+    ],
+    ['no jobs to follow', w => delete jobOf(w, job).needs, [`${job}: needs none, expected ${needs.join(', ')}`]],
+    ['a longer timeout', w => (jobOf(w, job)['timeout-minutes'] = 120), [`${job}: timeout-minutes 120, expected 15`]],
+    ['no timeout', w => delete jobOf(w, job)['timeout-minutes'], [`${job}: timeout-minutes none, expected 15`]],
+  ];
 
   it('python-sdk-release.yml: names what the allow-list refuses in the publish job', () => {
     const steps = (workflow: OidcWorkflow): Step[] => stepsOf(workflow, 'publish');
@@ -1066,6 +1120,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
       ],
       ['a workflow env', w => (w.env = { PYTHONPATH: '.' }), ['workflow: env PYTHONPATH']],
       ['workflow defaults', w => (w.defaults = { run: { shell: 'python {0}' } }), ['workflow: defaults']],
+      ...placing('publish', ['build']),
       [
         'an expression in a script that is only a comment',
         w => void steps(w).push({ name: 'Note', run: `# ${EXPRESSION}` }),
@@ -1125,6 +1180,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
       ...lookalikes,
       ...strayBlanks,
       ['a step', w => void steps(w).push({ run: SCRIPT }), [`promote: ${SCRIPT}`]],
+      ...placing('promote', ['docker', 'boot-smoke', 'image-scan']),
       ...commented('set -euo pipefail').map(([where, text]): [string, Edit, string[]] => [
         `an expression in a comment ${where}`,
         w => swap(tag(w), 'set -euo pipefail', text),
@@ -1618,6 +1674,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     const publishLine = show(scriptOf(JS_PUBLISH, place(JS_PUBLISH, PUBLISH))[0]);
     const npmLine = show(scriptOf(JS_PUBLISH, place(JS_PUBLISH, NPM))[1]);
     expectRefused('js-sdk-release.yml', [
+      ...placing('publish', ['build']),
       ...commented(publishLine).map(([where, text]): [string, Edit, string[]] => [
         `an expression in a comment ${where} the publish`,
         w => swap(step(w, PUBLISH), publishLine, text),
