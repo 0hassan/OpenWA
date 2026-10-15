@@ -151,9 +151,10 @@ function ChatThread({
   } | null>(null);
   // The element that lost focus because the page did: another window took over, or a native dialog (the
   // delete confirmation) opened. It stays the active element and is given focus back with the page, with no
-  // relatedTarget and, in some engines, without :focus-visible, so the round trip neither drops what is held
-  // above nor re-classifies the focus that comes back. The blur arrives after confirm() has returned, so the
-  // handler that opened the dialog cannot put the place back itself.
+  // relatedTarget, and with :focus-visible only if the focus was a key's: a click's is not, however long the
+  // dialog stayed open. So the round trip neither drops what is held above nor re-classifies the focus that
+  // comes back. The blur arrives after confirm() has returned, so the handler that opened the dialog cannot put
+  // the place back itself.
   const deactivatedRef = useRef<EventTarget | null>(null);
   // When the pointer last went down anywhere in the page (performance.now()); see POINTER_FOCUS_WINDOW_MS. Not
   // only in the thread: the press that closes the lightbox is outside it, and the focus it gives back is one.
@@ -404,8 +405,12 @@ function ChatThread({
       }}
       onBlur={event => {
         if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-        // The page lost focus, not the element: it is still the active one and what it held is still true.
-        const pageLostFocus = event.relatedTarget === null && !document.hasFocus();
+        // The page lost focus, not the element: it is still the document's active element, and what it held
+        // is still true. A focus that went somewhere (a click on a blank area, Tab out of the thread, a script's
+        // blur) has cleared the active element by the time the blur is delivered, in every engine. This does
+        // not ask document.hasFocus(): Chrome delivers the blur of a confirm() after it returned with
+        // hasFocus() false, Firefox with it true.
+        const pageLostFocus = event.relatedTarget === null && document.activeElement === event.target;
         deactivatedRef.current = pageLostFocus ? event.target : null;
         if (!pageLostFocus) keyboardFocusRef.current = null;
       }}

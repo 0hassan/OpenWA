@@ -897,32 +897,62 @@ test('focus no pointer brought is held, and given back when the message is delet
   assert.equal(focusedMessage(), 'wamid.3');
 });
 
+/** Runs `fn` with `document.hasFocus()` answering `has`: false while another window or a dialog has focus. */
+function withPageFocus(has: boolean, fn: () => void): void {
+  Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => has });
+  try {
+    fn();
+  } finally {
+    delete (document as { hasFocus?: unknown }).hasFocus;
+  }
+}
+
+// What the thread sees when a native dialog (the delete confirmation) or another window takes the page's focus:
+// a blur with no relatedTarget, delivered after confirm() has returned, for the control that is still the
+// document's active element. What differs between engines is what document.hasFocus() answers at that moment:
+// stock Chrome 155 delivers it with false, stock Firefox 158 with true. Each test that follows runs in both.
+const PAGE_BLURS = [
+  { when: 'hasFocus() false at the blur', pageHasFocus: false },
+  { when: 'hasFocus() true at the blur', pageHasFocus: true },
+] as const;
+
+/** The blur a dialog causes: not a focus move, so the control stays the active element. */
+function blurForDialog(element: HTMLElement, pageHasFocus: boolean): void {
+  assert.ok(document.activeElement === element, 'the blur of a dialog is for the element that is still active');
+  withPageFocus(pageHasFocus, () => rtl.fireEvent.focusOut(element));
+}
+
 // The confirmation of a mouse click on Delete can stay open for longer than the window. The page's focus
-// coming back is not a script's: pointer mode stays, and nothing is held that a click did not bring.
-test('a dialog that outlasts the pointer window does not turn a click into keyboard focus', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const thread = container.querySelector<HTMLElement>('.room-messages');
-  assert.ok(thread);
-  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  const clock = holdClock();
+// coming back is not a script's: pointer mode stays, and nothing is held that a click did not bring. The click's
+// focus is not :focus-visible, and the blur the dialog causes is delivered in either order of PAGE_BLURS.
+for (const { when, pageHasFocus } of PAGE_BLURS) {
+  test(`a dialog that outlasts the pointer window does not turn a click into keyboard focus (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const thread = container.querySelector<HTMLElement>('.room-messages');
+    assert.ok(thread);
+    const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
+    const clock = holdClock();
 
-  rtl.fireEvent.pointerDown(del);
-  rtl.fireEvent.focusIn(del);
-  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
-  clock.advance(4000);
-  rtl.fireEvent.focusIn(del);
+    rtl.fireEvent.pointerDown(del);
+    focusVisibleOverride = false;
+    del.focus();
+    blurForDialog(del, pageHasFocus);
+    clock.advance(4000);
+    rtl.fireEvent.focusIn(del);
+    focusVisibleOverride = null;
 
-  assert.equal(thread.hasAttribute('data-pointer'), true);
-  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
-  assert.equal(focusedMessage(), 'body');
-});
+    assert.equal(thread.hasAttribute('data-pointer'), true);
+    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+    assert.equal(focusedMessage(), 'body');
+  });
+}
 
 test('focus that is moved elsewhere before a message was deleted stays there', () => {
   const first: ChatMessageView = { ...PROMPT, id: 'db-1', waMessageId: 'wamid.1', metadata: undefined };
@@ -964,157 +994,161 @@ test('focus that left the thread and was then lost is not taken back into it', (
   }
 });
 
-/** Runs `fn` with `document.hasFocus()` answering `false`, as it does while another window or a dialog has focus. */
-function whilePageUnfocused(fn: () => void): void {
-  Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => false });
-  try {
-    fn();
-  } finally {
-    delete (document as { hasFocus?: unknown }).hasFocus;
-  }
-}
-
-// A native dialog (the delete confirmation) or another window takes the page's focus: the focused control gets
-// a blur with no relatedTarget while the document reports no focus, and it is the active element again when
-// the page is. What was held for it must survive that, or the delete that follows finds nothing to give back
-// and the next Tab lands in the composer.
-test('focus held for a control survives the page losing focus, and is given back when the list changes', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  del.focus();
-
-  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
-  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
-
-  assert.equal(focusedMessage(), 'wamid.3');
-});
-
-// The focus given back with the page is not classified again: the place held for the keyboard is kept and
-// pointer mode is not entered, whether or not the engine calls that focus :focus-visible.
-test('focus given back with the page keeps what was held, whatever :focus-visible says', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const thread = container.querySelector<HTMLElement>('.room-messages');
-  assert.ok(thread);
-  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  del.focus();
-
-  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
-  focusVisibleOverride = false;
-  rtl.fireEvent.focusIn(del);
-  focusVisibleOverride = null;
-  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
-
-  assert.equal(focusedMessage(), 'wamid.3');
-  assert.equal(thread.hasAttribute('data-pointer'), false);
-});
-
-// The element the page took focus from is only forgiven for the round trip: if focus left the thread by
-// another route and the element is focused again later, that is a new focus and is classified as one.
-test('a later focus on a control the page once took focus from is classified again', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  const outside = document.createElement('input');
-  document.body.appendChild(outside);
-  try {
+// A native dialog or another window takes the page's focus: the focused control gets a blur with no
+// relatedTarget and is still the active element, and it is the active element again when the page is. What was
+// held for it must survive that, or the delete that follows finds nothing to give back and the next Tab lands in
+// the composer.
+for (const { when, pageHasFocus } of PAGE_BLURS) {
+  test(`focus held for a control survives the page losing focus, and is given back when the list changes (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
     del.focus();
-    whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
-    // The page never gave focus back to it; the reader moved on to a control outside the thread and returned.
-    outside.focus();
+
+    blurForDialog(del, pageHasFocus);
+    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+
+    assert.equal(focusedMessage(), 'wamid.3');
+  });
+
+  // The focus given back with the page is not classified again: the place held for the keyboard is kept and
+  // pointer mode is not entered, whether or not the engine calls that focus :focus-visible.
+  test(`focus given back with the page keeps what was held, whatever :focus-visible says (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const thread = container.querySelector<HTMLElement>('.room-messages');
+    assert.ok(thread);
+    const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
+    del.focus();
+
+    blurForDialog(del, pageHasFocus);
+    focusVisibleOverride = false;
+    rtl.fireEvent.focusIn(del);
+    focusVisibleOverride = null;
+    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+
+    assert.equal(focusedMessage(), 'wamid.3');
+    assert.equal(thread.hasAttribute('data-pointer'), false);
+  });
+
+  // The element the page took focus from is only forgiven for the round trip: if focus left the thread by
+  // another route and the element is focused again later, that is a new focus and is classified as one.
+  test(`a later focus on a control the page once took focus from is classified again (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
+    const outside = document.createElement('input');
+    document.body.appendChild(outside);
+    try {
+      del.focus();
+      blurForDialog(del, pageHasFocus);
+      // The page never gave focus back to it; the reader moved on to a control outside the thread and returned.
+      outside.focus();
+      del.focus();
+      rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+
+      assert.equal(focusedMessage(), 'wamid.3');
+    } finally {
+      outside.remove();
+    }
+  });
+
+  // The round trip ends when the page gives focus back. The control it was given back to is then an ordinary
+  // one: moving on to another message and returning to it is a new focus, held for it like any other.
+  test(`a control the page gave focus back to is classified again when the reader returns to it (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const [first, second] = bubblesOf(container);
+    const del = second.querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
+    del.focus();
+
+    blurForDialog(del, pageHasFocus);
+    rtl.fireEvent.focusIn(del);
+    first.focus();
     del.focus();
     rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
 
     assert.equal(focusedMessage(), 'wamid.3');
-  } finally {
-    outside.remove();
-  }
-});
+  });
 
-// The round trip ends when the page gives focus back. The control it was given back to is then an ordinary one:
-// moving on to another message and returning to it is a new focus, held for it like any other.
-test('a control the page gave focus back to is classified again when the reader returns to it', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const [first, second] = bubblesOf(container);
-  const del = second.querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  del.focus();
+  // Only the one control the page took focus from is forgiven. A focus that lands on another control while the
+  // page is still away is a new focus: what is held moves to it, or the place given back after the next change
+  // of the list is the stale one.
+  test(`a focus on another control after the page lost focus is classified, not taken for the return (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const [, second, third] = bubblesOf(container);
+    const del = second.querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
+    del.focus();
 
-  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
-  rtl.fireEvent.focusIn(del);
-  first.focus();
-  del.focus();
-  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+    blurForDialog(del, pageHasFocus);
+    third.focus();
+    rerenderWith([a, b, { ...c, type: 'revoked', body: '' }]);
 
-  assert.equal(focusedMessage(), 'wamid.3');
-});
+    assert.equal(focusedMessage(), 'wamid.2');
+  });
+}
 
-// Only the one control the page took focus from is forgiven. A focus that lands on another control while the
-// page is still away is a new focus: what is held moves to it, or the place given back after the next change
-// of the list is the stale one.
-test('a focus on another control after the page lost focus is classified, not taken for the return', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const [, second, third] = bubblesOf(container);
-  const del = second.querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  del.focus();
+// Focus that went somewhere is not the page's loss, whatever document.hasFocus() answers: the control has
+// stopped being the active element by the time the blur is delivered, as in every engine, and nothing is
+// held for it. This is what tells a click on a blank area from a dialog without reading the order in which the
+// engine delivers the dialog's blur.
+for (const { when, pageHasFocus } of PAGE_BLURS) {
+  test(`focus that went nowhere is not held (${when})`, () => {
+    const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
+      ...PROMPT,
+      id: `db-${n}`,
+      waMessageId: `wamid.${n}`,
+      metadata: undefined,
+    }));
+    const { container, rerenderWith } = renderThread('operator', [a, b, c]);
+    const thread = container.querySelector<HTMLElement>('.room-messages');
+    assert.ok(thread);
+    const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
+    assert.ok(del);
+    del.focus();
+    let activeAtBlur: Element | null = null;
+    thread.addEventListener('focusout', () => {
+      activeAtBlur = document.activeElement;
+    });
 
-  whilePageUnfocused(() => rtl.fireEvent.focusOut(del));
-  third.focus();
-  rerenderWith([a, b, { ...c, type: 'revoked', body: '' }]);
+    withPageFocus(pageHasFocus, () => del.blur());
 
-  assert.equal(focusedMessage(), 'wamid.2');
-});
-
-// Only the page's own loss is forgiven: the same blur while the page has focus is the focus going nowhere.
-test('focus that went nowhere while the page has focus is not held', () => {
-  const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
-    ...PROMPT,
-    id: `db-${n}`,
-    waMessageId: `wamid.${n}`,
-    metadata: undefined,
-  }));
-  const { container, rerenderWith } = renderThread('operator', [a, b, c]);
-  const del = bubblesOf(container)[1].querySelector<HTMLElement>('.action-btn:last-of-type');
-  assert.ok(del);
-  del.focus();
-
-  rtl.fireEvent.focusOut(del);
-  rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
-
-  assert.equal(focusedMessage(), 'body');
-});
+    assert.ok(activeAtBlur === document.body, 'the blur of a focus that went nowhere finds no active element');
+    rerenderWith([a, { ...b, type: 'revoked', body: '' }, c]);
+    assert.equal(focusedMessage(), 'body');
+  });
+}
 
 // Chats.css shows the actions while focus is inside a bubble, but a click focuses the bubble too, and
 // its menu would stay drawn over the message after the pointer left. The thread marks pointer use and the
