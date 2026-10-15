@@ -298,12 +298,30 @@ function ChatThread({
   // the whole room on every scroll). This small listener tracks only the boolean "user is far from
   // the bottom" so we can float the jump button.
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  // The failed older page is retried by scrolling up, which a reader at scrollTop 0 cannot do: a wheel turn,
+  // PageUp or Home there moves nothing and raises no scroll event. When the failure appears with the reader
+  // at 0 the thread is moved down by one pixel, so the next move up is a scroll. The write raises a scroll
+  // event of its own, which is not the reader asking again: its position is kept here for the listener below
+  // to skip. Once per failure, and never when the reader is anywhere else.
+  const olderFailed = !loadingMessages && !loadingOlderMessages && messagesError && messages.length > 0;
+  const nudgedTopRef = useRef<number | null>(null);
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!olderFailed || !hasMoreMessages || !el || el.scrollTop > 0) return;
+    el.scrollTop = 1;
+    nudgedTopRef.current = el.scrollTop > 0 ? el.scrollTop : null;
+  }, [olderFailed, hasMoreMessages, messagesContainerRef]);
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return undefined;
     const onScroll = (event?: Event) => {
       // 120px gap = a couple of message bubbles before counting as "scrolled up".
       setShowJumpToBottom(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+      const nudged = nudgedTopRef.current;
+      if (event && nudged !== null) {
+        nudgedTopRef.current = null;
+        if (el.scrollTop === nudged) return;
+      }
       const geometry = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
       if (
         shouldFetchOlderMessages({

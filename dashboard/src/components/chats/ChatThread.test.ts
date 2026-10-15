@@ -80,11 +80,18 @@ function renderThread(
   messages: ChatMessageView[] = [PROMPT],
   activeChat: Chat = CHAT,
   props: Partial<ComponentProps<typeof ChatThread>> = {},
-): { clicks: string[]; container: HTMLElement; rerenderWith: (next: ChatMessageView[]) => void } {
+): {
+  clicks: string[];
+  container: HTMLElement;
+  rerenderWith: (next: ChatMessageView[]) => void;
+  rerenderProps: (next: Partial<ComponentProps<typeof ChatThread>>) => void;
+} {
   window.sessionStorage.setItem('openwa_user_role', role);
   const clicks: string[] = [];
   const noop = () => {};
   const containerRef = createRef<HTMLDivElement>();
+  let current = props;
+  let shown = messages;
   const tree = (list: ChatMessageView[]) =>
     createElement(
       RoleProvider,
@@ -108,11 +115,22 @@ function renderThread(
         onClickButton: async (_message, button) => {
           clicks.push(button.id);
         },
-        ...props,
+        ...current,
       }),
     );
   const { container, rerender } = rtl.render(tree(messages));
-  return { clicks, container, rerenderWith: next => rerender(tree(next)) };
+  return {
+    clicks,
+    container,
+    rerenderWith: next => {
+      shown = next;
+      rerender(tree(shown));
+    },
+    rerenderProps: next => {
+      current = { ...current, ...next };
+      rerender(tree(shown));
+    },
+  };
 }
 
 test('a read-only key sees prompt choices disabled and no reply, react or delete actions', () => {
@@ -1422,6 +1440,137 @@ test('a failed older page renders the whole sentence and the retry instruction a
   const hint = pill.querySelector<HTMLElement>('.older-failure-hint');
   assert.equal(full?.textContent, "Couldn't load older messages. Scroll up to retry.");
   assert.equal(hint?.textContent, 'Scroll up to retry.');
+});
+
+// The failed older page is retried by scrolling up, and a reader parked at scrollTop 0 has nowhere to scroll:
+// a wheel turn, PageUp or Home there raises no scroll event. jsdom has no layout, so the thread is given a
+// position that clamps as a browser's does and raises its scroll event the way one does: later, once, and
+// only when the position changed. `writes` is what the page assigned, `deliver` is the frame that dispatches.
+function scrollerOf(thread: HTMLElement, start: number) {
+  const height = 2000;
+  const viewport = 400;
+  let top = start;
+  let pending = false;
+  const writes: number[] = [];
+  Object.defineProperties(thread, {
+    scrollHeight: { value: height, configurable: true },
+    clientHeight: { value: viewport, configurable: true },
+    scrollTop: {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        writes.push(value);
+        const next = Math.max(0, Math.min(value, height - viewport));
+        if (next === top) return;
+        top = next;
+        pending = true;
+      },
+    },
+  });
+  return {
+    writes,
+    top: () => top,
+    // The reader moves the thread: the same position change, not counted among the page's writes.
+    scrollTo(value: number) {
+      top = Math.max(0, Math.min(value, height - viewport));
+      pending = true;
+    },
+    deliver() {
+      if (!pending) return;
+      pending = false;
+      rtl.fireEvent.scroll(thread);
+    },
+  };
+}
+
+// A page that is out, then fails: the thread is mounted loading, given its geometry, and the failure lands.
+function threadWithOlderPageOut(start: number, props: Partial<ComponentProps<typeof ChatThread>> = {}) {
+  const requests = { count: 0 };
+  const rendered = renderThread('operator', [PROMPT], CHAT, {
+    hasMoreMessages: true,
+    loadingOlderMessages: true,
+    messagesError: false,
+    onLoadOlderMessages: () => {
+      requests.count += 1;
+    },
+    ...props,
+  });
+  const thread = rendered.container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const scroller = scrollerOf(thread, start);
+  const fail = () => rendered.rerenderProps({ loadingOlderMessages: false, messagesError: true });
+  return { ...rendered, requests, scroller, fail };
+}
+
+test('a failure that lands with the reader at the top moves the thread one pixel, and asks for no page', () => {
+  const { requests, scroller, fail } = threadWithOlderPageOut(0);
+  fail();
+  assert.deepEqual(scroller.writes, [1]);
+  assert.equal(scroller.top(), 1);
+  // The scroll event of that write is the page's own: it is not the reader asking again, and a request
+  // from it would fail again and nudge again without anyone touching the thread.
+  scroller.deliver();
+  assert.equal(requests.count, 0);
+});
+
+test('scrolling up from the nudged position retries the page, and a second failure can be retried again', () => {
+  const { requests, scroller, fail, rerenderProps } = threadWithOlderPageOut(0);
+  fail();
+  scroller.deliver();
+
+  scroller.scrollTo(0);
+  scroller.deliver();
+  assert.equal(requests.count, 1);
+
+  // The request is out, then fails like the first: the reader is at the top again and is moved again.
+  rerenderProps({ loadingOlderMessages: true });
+  assert.deepEqual(scroller.writes, [1]);
+  fail();
+  assert.deepEqual(scroller.writes, [1, 1]);
+  scroller.deliver();
+  assert.equal(requests.count, 1);
+
+  scroller.scrollTo(0);
+  scroller.deliver();
+  assert.equal(requests.count, 2);
+});
+
+test('a reader who has scrolled away from the top is not moved by a failure', () => {
+  // Under the threshold the next scroll retries as it is, so there is nothing to make room for.
+  for (const { start, next, retries } of [
+    { start: 400, next: 150, retries: 0 },
+    { start: 30, next: 10, retries: 1 },
+  ]) {
+    const { requests, scroller, fail } = threadWithOlderPageOut(start);
+    fail();
+    assert.deepEqual(scroller.writes, [], `a reader at ${start} was written to`);
+    assert.equal(scroller.top(), start);
+    scroller.scrollTo(next);
+    scroller.deliver();
+    assert.equal(requests.count, retries, `a scroll from ${start} to ${next}`);
+    rtl.cleanup();
+  }
+});
+
+test('the reader is moved once for a failure, not at every later render of it', () => {
+  const { scroller, fail, rerenderWith } = threadWithOlderPageOut(0);
+  fail();
+  scroller.deliver();
+  scroller.scrollTo(0);
+  rerenderWith([PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  assert.deepEqual(scroller.writes, [1]);
+});
+
+test('a page that is still loading, or that has no older page behind it, does not move the reader', () => {
+  // The error is set while the page is still out: the spinner is what is shown, not the failure.
+  const loading = threadWithOlderPageOut(0);
+  loading.rerenderProps({ messagesError: true });
+  assert.deepEqual(loading.scroller.writes, []);
+  rtl.cleanup();
+
+  const nothingOlder = threadWithOlderPageOut(0, { hasMoreMessages: false });
+  nothingOlder.fail();
+  assert.deepEqual(nothingOlder.scroller.writes, []);
 });
 
 // An own bubble is at the end of the pane, and the react icon of its pill is a few pixels from that end: a
