@@ -982,6 +982,50 @@ describe('MessageProjector (inbound projection)', () => {
         expect(updatesAfterInsert()).toEqual([[where, revokedPatch]]);
       });
 
+      // The REST delete names the chat its caller addressed: a message still arriving under another chat
+      // is not the one deleted, whichever id it carries.
+      it('does not take back a message arriving under another chat than the REST delete names', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+
+        await projector.recordRevoke(SESSION_ID, 'wamid.1', { kind: 'revoke', chatId: '15559998888@c.us' });
+        releaseHook();
+        await drain();
+
+        expect(messageRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ body: 'hello', type: 'text' }));
+        expect(updatesAfterInsert()).toEqual([]);
+      });
+
+      it('takes back a message arriving under the chat the REST delete names', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+
+        await projector.recordRevoke(SESSION_ID, 'wamid.1', { kind: 'revoke', chatId: '15550001111@c.us' });
+        releaseHook();
+        await drain();
+
+        expect(updatesAfterInsert()).toEqual([[where, revokedPatch]]);
+      });
+
+      it('does not give a message arriving under another chat the body of a REST edit that names a chat', async () => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        await received(engine);
+
+        await projector.recordOutboundMessageEdit(SESSION_ID, 'wamid.1', 'edited', {
+          kind: 'edit',
+          chatId: '15559998888@c.us',
+          fromMe: true,
+        });
+        releaseHook();
+        await drain();
+
+        expect(messageRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ body: 'hello' }));
+        expect(updatesAfterInsert()).toEqual([]);
+      });
+
       it('changes nothing after the insert when no revoke or edit arrived', async () => {
         const engine = makeEngine();
         engines.set(SESSION_ID, engine);
@@ -1151,6 +1195,73 @@ describe('MessageProjector (inbound projection)', () => {
       const guarded = { ...where, type: Not('revoked') };
       expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'late' });
       expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'later' });
+    });
+
+    // The table holds one row per id, which may be another chat's message. The engines refuse a REST call
+    // that names a chat the message is not in, but they judge their own copy, not this row.
+    describe('a REST call that names a chat', () => {
+      const own = '15550001111@c.us';
+      const other = '15559998888@c.us';
+
+      it('leaves a row of another chat alone when it deletes', async () => {
+        messageRepository.findOne.mockResolvedValue({ chatId: other, direction: 'incoming' });
+
+        await projector.recordRevoke(SESSION_ID, 'wamid.1', { kind: 'revoke', chatId: own });
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('clears the row of the chat it names when it deletes', async () => {
+        messageRepository.findOne.mockResolvedValue({ chatId: own, direction: 'incoming' });
+
+        await projector.recordRevoke(SESSION_ID, 'wamid.1', { kind: 'revoke', chatId: own });
+
+        expect(messageRepository.update).toHaveBeenCalledWith(where, revokedPatch);
+      });
+
+      it('clears a row stored under the other dialect of the chat it names', async () => {
+        messageRepository.findOne.mockResolvedValue({ chatId: '15550001111@s.whatsapp.net', direction: 'outgoing' });
+
+        await projector.recordRevoke(SESSION_ID, 'wamid.1', { kind: 'revoke', chatId: own });
+
+        expect(messageRepository.update).toHaveBeenCalledWith(where, revokedPatch);
+      });
+
+      it('leaves a row of another chat alone when it edits', async () => {
+        messageRepository.findOne.mockResolvedValue({ chatId: other, direction: 'outgoing' });
+
+        await projector.recordOutboundMessageEdit(SESSION_ID, 'wamid.1', 'edited', {
+          kind: 'edit',
+          chatId: own,
+          fromMe: true,
+        });
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('leaves a received message alone when it edits, as only the own messages can be', async () => {
+        messageRepository.findOne.mockResolvedValue({ chatId: own, direction: 'incoming' });
+
+        await projector.recordOutboundMessageEdit(SESSION_ID, 'wamid.1', 'edited', {
+          kind: 'edit',
+          chatId: own,
+          fromMe: true,
+        });
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+      });
+
+      it('writes the edit onto the row of the chat it names', async () => {
+        messageRepository.findOne.mockResolvedValue({ chatId: own, direction: 'outgoing' });
+
+        await projector.recordOutboundMessageEdit(SESSION_ID, 'wamid.1', 'edited', {
+          kind: 'edit',
+          chatId: own,
+          fromMe: true,
+        });
+
+        expect(messageRepository.update).toHaveBeenCalledWith({ ...where, type: Not('revoked') }, { body: 'edited' });
+      });
     });
 
     it('clears nothing when the engine gives no message id', async () => {

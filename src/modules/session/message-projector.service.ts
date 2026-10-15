@@ -873,14 +873,18 @@ export class MessageProjector {
    * before it cannot write content back afterwards. Used by the engine's revoke event and by the REST
    * delete. Best-effort like every stored-message mutation: never rejects, and resolves once the write
    * has run.
+   *
+   * With `source`, the caller has not had the stored row judge the revoke yet: the message still arriving
+   * is taken back only if the revoke agrees with it, and the row is cleared only if the revoke is not
+   * foreign to it. Without one, the revoke was judged by the caller (the engine's revoke event is).
    */
-  recordRevoke(sessionId: string, waMessageId: string): Promise<void> {
+  recordRevoke(sessionId: string, waMessageId: string, source?: MutationSource): Promise<void> {
     // A message not written yet takes the revoke once its row lands; the UPDATE below matches nothing.
     const inFlight = this.inboundInFlight.get(`${sessionId}:${waMessageId}`);
-    if (inFlight) this.holdRevoked(sessionId, inFlight);
+    if (inFlight && !(source && this.foreignToInFlight(inFlight, source))) this.holdRevoked(sessionId, inFlight);
     return new Promise(resolve =>
       this.enqueueMessageMutation(sessionId, waMessageId, () =>
-        this.revokeRow(sessionId, waMessageId).finally(resolve),
+        this.revokeRow(sessionId, waMessageId, true, source).finally(resolve),
       ),
     );
   }
@@ -893,12 +897,28 @@ export class MessageProjector {
 
   /**
    * Apply {@link REVOKED_ROW_PATCH}, then hand the cleared row to `message:persisted` so a plugin index
-   * keyed by row id drops the content too. Must run on the message's mutation chain.
+   * keyed by row id drops the content too. Must run on the message's mutation chain. The row is the
+   * table's one under the id, which another chat's message may hold: a `source` that the row proves
+   * foreign leaves it alone.
    */
-  private async revokeRow(sessionId: string, waMessageId: string, notify = true): Promise<void> {
+  private async revokeRow(
+    sessionId: string,
+    waMessageId: string,
+    notify = true,
+    source?: MutationSource,
+  ): Promise<void> {
     // An undefined condition is DROPPED from the where-clause, which would clear every row of the session.
     if (!waMessageId) return;
     try {
+      const reason = source && (await this.mutationProjector.foreignRowReason(sessionId, waMessageId, source));
+      if (reason) {
+        this.logger.warn('Dropping a revoke aimed at a message of another chat or sender', {
+          sessionId,
+          messageId: waMessageId,
+          reason,
+        });
+        return;
+      }
       const result = await this.messageRepository.update({ sessionId, waMessageId }, REVOKED_ROW_PATCH);
       if (!result?.affected || !notify) return;
       const row = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
@@ -1382,10 +1402,17 @@ export class MessageProjector {
   }
 
   /** Stored-row update for a REST outbound edit, on the same mutation chain — see MessageMutationProjector. */
-  recordOutboundMessageEdit(sessionId: string, messageId: string, body: string): Promise<void> {
+  recordOutboundMessageEdit(
+    sessionId: string,
+    messageId: string,
+    body: string,
+    source?: MutationSource,
+  ): Promise<void> {
+    // With a `source`, the message still arriving takes the edit only if it agrees with it, and the row
+    // only if it is not foreign to it, as for recordRevoke.
     const inFlight = this.inboundInFlight.get(`${sessionId}:${messageId}`);
-    if (inFlight) inFlight.editedBody = body;
-    return this.mutationProjector.recordOutboundMessageEdit(sessionId, messageId, body);
+    if (inFlight && !(source && this.foreignToInFlight(inFlight, source))) inFlight.editedBody = body;
+    return this.mutationProjector.recordOutboundMessageEdit(sessionId, messageId, body, source);
   }
 
   /**

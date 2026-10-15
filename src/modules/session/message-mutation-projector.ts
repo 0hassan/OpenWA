@@ -165,12 +165,27 @@ export class MessageMutationProjector {
    * same per-message mutation queue as the inbound edit/reaction paths so the two writers cannot
    * interleave (latest-write-wins holds across both directions). Same best-effort semantics as
    * applyMessageEdit: a missing row or a failed write must not fail the request — the engine edit
-   * already succeeded. Resolves once the queued write has run.
+   * already succeeded. Resolves once the queued write has run. The row is the table's one under the id,
+   * which another chat's message may hold: with a `source`, a row it proves foreign is left alone.
    */
-  async recordOutboundMessageEdit(sessionId: string, messageId: string, body: string): Promise<void> {
+  async recordOutboundMessageEdit(
+    sessionId: string,
+    messageId: string,
+    body: string,
+    source?: MutationSource,
+  ): Promise<void> {
     await new Promise<void>(resolve => {
       this.enqueueMessageMutation(sessionId, messageId, async () => {
         try {
+          const reason = source && (await this.foreignRowReason(sessionId, messageId, source));
+          if (reason) {
+            this.logger.warn('Not storing an edit aimed at a message of another chat or sender', {
+              sessionId,
+              messageId,
+              reason,
+            });
+            return;
+          }
           await this.messageRepository.update({ sessionId, waMessageId: messageId, type: Not('revoked') }, { body });
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
