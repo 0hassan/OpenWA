@@ -195,6 +195,19 @@ describe('a job that runs a repo script checks the repo out', () => {
  * go) is caught by the allow-list further down, which holds each id-token job (the two SDK publish jobs and
  * the image promote job) to the commands, actions, inputs and keys it names and refuses an id-token job it
  * has no list for.
+ *
+ * The allow-list reads a job as a set: a command, an action or an input value that is permitted anywhere is
+ * permitted everywhere, and a job could run one twice, run it before the check it follows, or hand a step the
+ * secret of another. Each job therefore also has a template: its steps one by one, in order, each with the
+ * exact keys, inputs, env and script lines it may carry. The job's own step list must equal it.
+ *
+ * To add, remove or reorder a step of one of these jobs on purpose, edit that job's template (JS_PUBLISH,
+ * PYTHON_PUBLISH or IMAGE_PROMOTE below), one entry per step in the order the steps run. That is the only
+ * edit: the set-level lists are derived from the templates, and the control cases further down find their
+ * steps and script lines in the templates by name and by text. A case that names a step it removes or
+ * renames is changed with it. A bump of an action to a newer commit, and a change to a comment, need no edit
+ * at all. While the step sequence itself is wrong the content of the steps is not compared, so the sequence
+ * is fixed first and the next failure then names the step.
  */
 describe('a job that can mint a publish credential pins global npm installs and runs no Python installer', () => {
   type Permissions = Record<string, string> | string | null | undefined;
@@ -394,7 +407,23 @@ describe('a job that can mint a publish credential pins global npm installs and 
   //
   // A string is an exact match; a RegExp is anchored by its author and used only where a line varies.
   type Allowed = string | RegExp;
+  // One step of an id-token job as it may appear. A step is identified by its `name`, or by its action when
+  // it has none, so a renamed step reads as one removed and another added.
+  type StepTemplate = {
+    name?: string;
+    // The action without its ref: the step must pin it to a 40-hex commit, whichever commit that is.
+    uses?: string;
+    id?: string;
+    // Exactly these inputs, each with the one value (or pattern) it may take.
+    with?: Record<string, Allowed>;
+    // Exactly these names, each with the one value (or pattern) it may take.
+    env?: Record<string, Allowed>;
+    // The executable lines of the script, in order, with nothing between them.
+    run?: Allowed[];
+  };
   type JobAllowList = {
+    // The job's whole step list, in the order the steps run.
+    steps: StepTemplate[];
     // Whole lines of a `run`, once comments and surrounding space are gone.
     commands: Allowed[];
     // Each action by name (it must be pinned to a commit), with the inputs it may be given and the values
@@ -409,11 +438,27 @@ describe('a job that can mint a publish credential pins global npm installs and 
     // is refused, a lesser one and a scope the job has dropped included, so a drop is seen here and not on
     // the tag run.
     permissions: Record<string, string>;
-    // Step `env`: each name with the one value it may take.
-    env: Record<string, string>;
+    // Step `env`: each name with the values it may take.
+    env: Record<string, Allowed[]>;
   };
   // `workflowEnv` names what the workflow sets for every job; `defaults` is never allowed.
   type FileAllowList = { workflowEnv: string[]; jobs: Record<string, JobAllowList> };
+
+  // The set view of a step list that the key-level check reads: every line, every input value and every env
+  // value some step may carry. Derived, so the template is the one place a step is edited and the two checks
+  // cannot disagree about what is permitted.
+  const flatten = (steps: StepTemplate[]): Pick<JobAllowList, 'commands' | 'actions' | 'env'> => {
+    const actions: JobAllowList['actions'] = {};
+    const env: JobAllowList['env'] = {};
+    for (const step of steps) {
+      if (step.uses !== undefined) {
+        const inputs = (actions[step.uses] ??= {});
+        for (const [key, value] of Object.entries(step.with ?? {})) (inputs[key] ??= []).push(value);
+      }
+      for (const [name, value] of Object.entries(step.env ?? {})) (env[name] ??= []).push(value);
+    }
+    return { commands: steps.flatMap(step => step.run ?? []), actions, env };
+  };
 
   // The three typographic dashes, named by code point: written out, a lookalike reads as a hyphen in a diff.
   const DASH_GLYPHS = [0x2013, 0x2014, 0x2015].map(code => String.fromCharCode(code));
@@ -423,39 +468,120 @@ describe('a job that can mint a publish credential pins global npm installs and 
     stepKeys: ['name', 'uses', 'run', 'with'],
     jobKeys: ['needs', 'runs-on', 'timeout-minutes', 'permissions', 'steps'],
     permissions: { contents: 'read', 'id-token': 'write' },
-    env: {},
   };
+  // The npm that comes with the Node image cannot do trusted publishing, so the job installs one, pinned
+  // to an exact release, and only then uploads the tarball its build job made.
+  const JS_PUBLISH: StepTemplate[] = [
+    { uses: 'actions/setup-node', with: { 'node-version': /^\d+$/ } },
+    {
+      name: 'Use an npm that supports trusted publishing',
+      run: [/^npm install -g npm@\d+\.\d+\.\d+$/, 'npm --version'],
+    },
+    { uses: 'actions/download-artifact', with: { name: 'js-sdk-package', path: 'package/' } },
+    {
+      name: 'Publish to npm (trusted publishing, provenance automatic)',
+      run: ['npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public --ignore-scripts'],
+    },
+  ];
   const JS_SDK_RELEASE: FileAllowList = {
     workflowEnv: [],
-    jobs: {
-      publish: {
-        ...SDK_PUBLISH_KEYS,
-        commands: [
-          /^npm install -g npm@\d+\.\d+\.\d+$/,
-          'npm --version',
-          'npm publish "$GITHUB_WORKSPACE"/package/*.tgz --access public --ignore-scripts',
-        ],
-        actions: {
-          'actions/setup-node': { 'node-version': [/^\d+$/] },
-          'actions/download-artifact': { name: ['js-sdk-package'], path: ['package/'] },
-        },
-      },
-    },
+    jobs: { publish: { ...SDK_PUBLISH_KEYS, steps: JS_PUBLISH, ...flatten(JS_PUBLISH) } },
   };
   // No `run` at all: the job downloads the distributions and the PyPA action uploads them.
+  const PYTHON_PUBLISH: StepTemplate[] = [
+    { uses: 'actions/download-artifact', with: { name: 'python-sdk-dist', path: 'sdk/python/dist/' } },
+    {
+      name: 'Publish to PyPI (trusted publishing)',
+      uses: 'pypa/gh-action-pypi-publish',
+      with: { 'packages-dir': 'sdk/python/dist' },
+    },
+  ];
   const PYTHON_SDK_RELEASE: FileAllowList = {
     workflowEnv: [],
-    jobs: {
-      publish: {
-        ...SDK_PUBLISH_KEYS,
-        commands: [],
-        actions: {
-          'actions/download-artifact': { name: ['python-sdk-dist'], path: ['sdk/python/dist/'] },
-          'pypa/gh-action-pypi-publish': { 'packages-dir': ['sdk/python/dist'] },
-        },
+    jobs: { publish: { ...SDK_PUBLISH_KEYS, steps: PYTHON_PUBLISH, ...flatten(PYTHON_PUBLISH) } },
+  };
+  // The re-point is safe only because of the order: log in, name the image, attest the tested digest, then
+  // move the tags, each checked to resolve to that digest, then verify what the public can pull. The first
+  // login names the registry (ghcr.io) with the run's own token; the second takes the Docker Hub default
+  // with a secret of its own, and a step of one never takes the other's value.
+  const IMAGE_PROMOTE: StepTemplate[] = [
+    { name: 'Set up Docker Buildx', uses: 'docker/setup-buildx-action' },
+    {
+      name: 'Login to GitHub Container Registry',
+      uses: 'docker/login-action',
+      with: { registry: 'ghcr.io', username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}' },
+    },
+    {
+      name: 'Login to Docker Hub',
+      uses: 'docker/login-action',
+      with: { username: '${{ secrets.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}' },
+    },
+    {
+      name: 'Resolve the image name to attest',
+      id: 'image',
+      env: { REPO: '${{ github.repository }}' },
+      run: ['echo "name=ghcr.io/${REPO,,}" >> "$GITHUB_OUTPUT"'],
+    },
+    {
+      name: 'Attest build provenance for the tested digest',
+      uses: 'actions/attest',
+      with: {
+        'subject-name': '${{ steps.image.outputs.name }}',
+        'subject-digest': '${{ needs.docker.outputs.digest }}',
       },
     },
-  };
+    {
+      name: 'Tag the smoke-tested image with the release tags',
+      env: {
+        REPO: '${{ github.repository }}',
+        REF_NAME: '${{ github.ref_name }}',
+        TAGS: '${{ needs.docker.outputs.tags }}',
+        EXPECTED_DIGEST: '${{ needs.docker.outputs.digest }}',
+      },
+      // The echoed messages carry an em dash; a line is compared as written, so it is named here too.
+      run: [
+        'set -euo pipefail',
+        'staging="ghcr.io/${REPO,,}:smoke-${{ github.run_id }}"',
+        'actual="$(docker buildx imagetools inspect "$staging" --format \'{{.Manifest.Digest}}\')"',
+        'if [ "$actual" != "$EXPECTED_DIGEST" ]; then',
+        `echo "::error::staging digest $actual != build digest $EXPECTED_DIGEST ${EM_DASH} refusing to promote untested content"`,
+        'exit 1',
+        'fi',
+        'promoted=0',
+        'while IFS= read -r tag; do',
+        '[ -n "$tag" ] || continue',
+        'if [[ "$REF_NAME" == *-* ]] && [[ "$tag" =~ :[0-9]+\\.[0-9]+$ ]]; then',
+        `echo "skipping $tag ${EM_DASH} minor tags are not promoted from a prerelease"`,
+        'continue',
+        'fi',
+        'echo "promoting -> $tag"',
+        'docker buildx imagetools create --tag "$tag" "$staging"',
+        'promoted_digest="$(docker buildx imagetools inspect "$tag" --format \'{{.Manifest.Digest}}\')"',
+        'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then',
+        'echo "::error::$tag resolved to $promoted_digest after promotion, expected $EXPECTED_DIGEST"',
+        'exit 1',
+        'fi',
+        'promoted=$((promoted + 1))',
+        'done <<< "$TAGS"',
+        'if [ "$promoted" -eq 0 ]; then',
+        `echo "::error::no release tags were produced by metadata-action ${EM_DASH} nothing was promoted"`,
+        'exit 1',
+        'fi',
+        'echo "promoted $promoted tag(s), all digest-identical to the tested build"',
+      ],
+    },
+    {
+      name: 'Verify the release tag resolves and is multi-arch',
+      env: { REPO: '${{ github.repository }}' },
+      run: [
+        'ref="ghcr.io/${REPO,,}:${GITHUB_REF#refs/tags/v}"',
+        'docker buildx imagetools inspect "$ref" | tee /tmp/inspect.txt',
+        'for want in linux/amd64 linux/arm64; do',
+        'grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }',
+        'done',
+      ],
+    },
+  ];
   // NODE_VERSION and DOCKER_PLATFORMS are the workflow's own env; no step of promote reads either.
   const IMAGE_RELEASE: FileAllowList = {
     workflowEnv: ['NODE_VERSION', 'DOCKER_PLATFORMS'],
@@ -464,57 +590,8 @@ describe('a job that can mint a publish credential pins global npm installs and 
         stepKeys: ['name', 'uses', 'id', 'with', 'env', 'run'],
         jobKeys: ['name', 'runs-on', 'timeout-minutes', 'permissions', 'needs', 'steps'],
         permissions: { packages: 'write', 'id-token': 'write', attestations: 'write' },
-        env: {
-          REPO: '${{ github.repository }}',
-          REF_NAME: '${{ github.ref_name }}',
-          TAGS: '${{ needs.docker.outputs.tags }}',
-          EXPECTED_DIGEST: '${{ needs.docker.outputs.digest }}',
-        },
-        actions: {
-          'docker/setup-buildx-action': {},
-          // The first login names the registry (ghcr.io) and the second takes the Docker Hub default.
-          'docker/login-action': {
-            registry: ['ghcr.io'],
-            username: ['${{ github.actor }}', '${{ secrets.DOCKERHUB_USERNAME }}'],
-            password: ['${{ secrets.GITHUB_TOKEN }}', '${{ secrets.DOCKERHUB_TOKEN }}'],
-          },
-          'actions/attest': {
-            'subject-name': ['${{ steps.image.outputs.name }}'],
-            'subject-digest': ['${{ needs.docker.outputs.digest }}'],
-          },
-        },
-        // The echoed messages carry an em dash; a line is compared as written, so it is named here too.
-        commands: [
-          'echo "name=ghcr.io/${REPO,,}" >> "$GITHUB_OUTPUT"',
-          'set -euo pipefail',
-          'staging="ghcr.io/${REPO,,}:smoke-${{ github.run_id }}"',
-          'actual="$(docker buildx imagetools inspect "$staging" --format \'{{.Manifest.Digest}}\')"',
-          'if [ "$actual" != "$EXPECTED_DIGEST" ]; then',
-          `echo "::error::staging digest $actual != build digest $EXPECTED_DIGEST ${EM_DASH} refusing to promote untested content"`,
-          'exit 1',
-          'fi',
-          'promoted=0',
-          'while IFS= read -r tag; do',
-          '[ -n "$tag" ] || continue',
-          'if [[ "$REF_NAME" == *-* ]] && [[ "$tag" =~ :[0-9]+\\.[0-9]+$ ]]; then',
-          `echo "skipping $tag ${EM_DASH} minor tags are not promoted from a prerelease"`,
-          'continue',
-          'echo "promoting -> $tag"',
-          'docker buildx imagetools create --tag "$tag" "$staging"',
-          'promoted_digest="$(docker buildx imagetools inspect "$tag" --format \'{{.Manifest.Digest}}\')"',
-          'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then',
-          'echo "::error::$tag resolved to $promoted_digest after promotion, expected $EXPECTED_DIGEST"',
-          'promoted=$((promoted + 1))',
-          'done <<< "$TAGS"',
-          'if [ "$promoted" -eq 0 ]; then',
-          `echo "::error::no release tags were produced by metadata-action ${EM_DASH} nothing was promoted"`,
-          'echo "promoted $promoted tag(s), all digest-identical to the tested build"',
-          'ref="ghcr.io/${REPO,,}:${GITHUB_REF#refs/tags/v}"',
-          'docker buildx imagetools inspect "$ref" | tee /tmp/inspect.txt',
-          'for want in linux/amd64 linux/arm64; do',
-          'grep -q "$want" /tmp/inspect.txt || { echo "MISSING PLATFORM: $want"; exit 1; }',
-          'done',
-        ],
+        steps: IMAGE_PROMOTE,
+        ...flatten(IMAGE_PROMOTE),
       },
     },
   };
@@ -526,6 +603,14 @@ describe('a job that can mint a publish credential pins global npm installs and 
 
   const allows = (list: Allowed[], value: string): boolean =>
     list.some(item => (typeof item === 'string' ? item === value : item.test(value)));
+
+  // The executable lines of a script, one per entry. Only a space and a tab come off: trim() would also drop
+  // characters the shell reads as a word.
+  const scriptLines = (run: string | undefined): string[] =>
+    executableLines(run ?? '')
+      .split('\n')
+      .map(text => text.replace(/^[ \t]+|[ \t]+$/g, ''))
+      .filter(Boolean);
 
   const outsideAllowList = (source: string | OidcWorkflow, allowed: FileAllowList = JS_SDK_RELEASE): string[] => {
     const jobs = oidcJobs(source);
@@ -560,7 +645,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
         for (const key of Object.keys(step)) if (!list.stepKeys.includes(key)) found.push(`${job}: step key ${key}`);
         if (list.stepKeys.includes('env')) {
           for (const [name, value] of Object.entries((step.env ?? {}) as Record<string, unknown>)) {
-            if (!Object.hasOwn(list.env, name) || list.env[name] !== String(value)) {
+            if (!Object.hasOwn(list.env, name) || !allows(list.env[name], String(value))) {
               found.push(`${job}: step env ${name}`);
             }
           }
@@ -577,13 +662,103 @@ describe('a job that can mint a publish credential pins global npm installs and 
             }
           }
         }
-        // Only a space and a tab come off: trim() would also drop characters the shell reads as a word.
-        for (const line of executableLines(step.run ?? '')
-          .split('\n')
-          .map(text => text.replace(/^[ \t]+|[ \t]+$/g, ''))) {
-          if (line && !allows(list.commands, line)) found.push(`${job}: ${line}`);
+        for (const line of scriptLines(step.run)) {
+          if (!allows(list.commands, line)) found.push(`${job}: ${line}`);
         }
       }
+    }
+    return found;
+  };
+
+  const STEP_KEYS = ['name', 'uses', 'id', 'with', 'env', 'run'];
+  const NOTHING = 'a step without a name or an action';
+  const show = (value: Allowed): string => (typeof value === 'string' ? value : String(value));
+
+  // An id-token job's steps against its template: the same steps, in the same order, each exactly once, and
+  // then each step's own keys, inputs, env and script lines. The content of the steps is compared only once
+  // the sequence is right, so a move, a duplicate or a removal is named as such and not as a run of
+  // mismatches behind it.
+  const outsideStepTemplate = (source: string | OidcWorkflow, allowed: FileAllowList): string[] => {
+    const found: string[] = [];
+    for (const [job, def] of oidcJobs(source)) {
+      const template = Object.hasOwn(allowed.jobs, job) ? allowed.jobs[job].steps : undefined;
+      if (!template) {
+        found.push(`${job}: no step template`);
+        continue;
+      }
+      const steps = def.steps ?? [];
+      const have = steps.map(step =>
+        step.name !== undefined ? String(step.name) : typeof step.uses === 'string' ? step.uses.split('@')[0] : NOTHING,
+      );
+      const want = template.map(step => step.name ?? step.uses ?? NOTHING);
+      const times = (names: string[], name: string): number => names.filter(item => item === name).length;
+      const counted = [...new Set([...have, ...want])].flatMap(name => {
+        const [n, m] = [times(have, name), times(want, name)];
+        if (n === m) return [];
+        if (m === 0) return [`${job}: step "${name}" is not in the template`];
+        if (n === 0) return [`${job}: step "${name}" is missing`];
+        return [`${job}: step "${name}" appears ${n} times, expected ${m}`];
+      });
+      if (counted.length > 0) {
+        found.push(...counted);
+        continue;
+      }
+      if (have.some((name, i) => name !== want[i])) {
+        have.forEach((name, i) => {
+          if (name !== want[i]) found.push(`${job}: step ${i + 1} is "${name}", expected "${want[i]}"`);
+        });
+        continue;
+      }
+      steps.forEach((step, i) => {
+        const wanted = template[i];
+        const where = `${job} step ${i + 1} "${want[i]}"`;
+        const record = step as Record<string, unknown>;
+        const keys = STEP_KEYS.filter(key => wanted[key as keyof StepTemplate] !== undefined);
+        for (const key of Object.keys(record)) if (!keys.includes(key)) found.push(`${where}: step key ${key}`);
+        for (const key of keys) if (record[key] === undefined) found.push(`${where}: no ${key}`);
+        const text = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value));
+        if (wanted.uses !== undefined && record.uses !== undefined) {
+          const action = /^([^@\s]+)@[0-9a-f]{40}$/.exec(text(record.uses))?.[1];
+          if (action !== wanted.uses) {
+            found.push(`${where}: uses ${text(record.uses)}, expected ${wanted.uses} at a commit`);
+          }
+        }
+        if (wanted.id !== undefined && record.id !== undefined && record.id !== wanted.id) {
+          found.push(`${where}: id ${text(record.id)}, expected ${wanted.id}`);
+        }
+        // Exactly the keys of the template, each with the one value it may take.
+        const exact = (kind: 'with' | 'env', expected: Record<string, Allowed> | undefined): void => {
+          if (expected === undefined || record[kind] === undefined) return;
+          const given = record[kind];
+          if (typeof given !== 'object' || given === null) {
+            found.push(`${where}: ${kind} is not a mapping`);
+            return;
+          }
+          for (const [key, value] of Object.entries(given)) {
+            if (!Object.hasOwn(expected, key)) {
+              found.push(`${where}: ${kind} ${key}`);
+            } else if (!allows([expected[key]], String(value))) {
+              found.push(`${where}: ${kind} ${key}: ${String(value)}, expected ${show(expected[key])}`);
+            }
+          }
+          for (const key of Object.keys(expected)) {
+            if (!Object.hasOwn(given, key)) found.push(`${where}: ${kind} ${key} is missing`);
+          }
+        };
+        exact('with', wanted.with);
+        exact('env', wanted.env);
+        if (wanted.run !== undefined && record.run !== undefined) {
+          const lines = scriptLines(step.run);
+          const script = wanted.run;
+          const at = lines.findIndex((line, k) => k >= script.length || !allows([script[k]], line));
+          if (at !== -1) {
+            const expected = at < script.length ? show(script[at]) : 'the script to end';
+            found.push(`${where}: run line ${at + 1}: ${lines[at]}, expected ${expected}`);
+          } else if (lines.length < script.length) {
+            found.push(`${where}: run ends after line ${lines.length}, expected ${show(script[lines.length])}`);
+          }
+        }
+      });
     }
     return found;
   };
@@ -618,6 +793,27 @@ describe('a job that can mint a publish credential pins global npm installs and 
 
   it.each(workflows)('%s: an id-token job runs only what its allow-list names', file => {
     expect(outsideAllowList(file, ALLOW_LISTS[file] ?? { workflowEnv: [], jobs: {} })).toEqual([]);
+  });
+
+  it.each(workflows)('%s: an id-token job holds the steps of its template, in order', file => {
+    expect(outsideStepTemplate(file, ALLOW_LISTS[file] ?? { workflowEnv: [], jobs: {} })).toEqual([]);
+  });
+
+  // Non-vacuity: a template that is empty beside a job with no steps would pass the check above.
+  it('has a template as long as the step list of each id-token job', () => {
+    const lengths = Object.entries(ALLOW_LISTS).flatMap(([file, list]) =>
+      oidcJobs(file).map(([job, def]) => ({
+        job: `${file}:${job}`,
+        template: list.jobs[job].steps.length,
+        steps: (def.steps ?? []).length,
+      })),
+    );
+    expect(lengths.map(entry => entry.job)).toEqual([
+      'js-sdk-release.yml:publish',
+      'python-sdk-release.yml:publish',
+      'release.yml:promote',
+    ]);
+    expect(lengths.filter(entry => entry.template === 0 || entry.template !== entry.steps)).toEqual([]);
   });
 
   it('js-sdk-release.yml: names what the allow-list refuses in an id-token job', () => {
@@ -952,6 +1148,419 @@ describe('a job that can mint a publish credential pins global npm installs and 
         ['docker: no allow-list'],
       ],
     ]);
+  });
+
+  // The template is shown on the workflows as they ship: each case edits a copy in memory and the message
+  // names the step it lands on. A case marked blind is one the set-level list accepts as well, so only the
+  // template refuses it.
+  type TemplateCase = [label: string, edit: Edit, expected: string[], blind?: boolean];
+  const expectOutsideTemplate = (file: string, cases: TemplateCase[]): void => {
+    const against = (edit: Edit): string[] => {
+      const copy = JSON.parse(JSON.stringify(loadOidcWorkflow(file))) as OidcWorkflow;
+      edit(copy);
+      return outsideStepTemplate(copy, ALLOW_LISTS[file]);
+    };
+    expect(against(() => undefined)).toEqual([]);
+    for (const [label, edit, expected, blind] of cases) {
+      expect([label, against(edit)]).toEqual([label, expected]);
+      if (blind) expect([label, shipped(file, edit)]).toEqual([label, []]);
+    }
+  };
+  const exchange = (job: string, a: number, b: number): Edit => {
+    return w => {
+      const steps = stepsOf(w, job);
+      [steps[a], steps[b]] = [steps[b], steps[a]];
+    };
+  };
+  // Two lines of a script traded places; the edit throws if either is not the line the case expects there.
+  const exchangeLines = (step: Step, a: [number, Allowed], b: [number, Allowed]): void => {
+    const lines = (step.run ?? '').split('\n');
+    expect(allows([a[1]], lines[a[0]])).toBe(true);
+    expect(allows([b[1]], lines[b[0]])).toBe(true);
+    [lines[a[0]], lines[b[0]]] = [lines[b[0]], lines[a[0]]];
+    step.run = lines.join('\n');
+  };
+  // The control cases find a step by its name (its action when it has none) and a script line by its text in
+  // the template, so adding, removing or reordering other steps moves nothing under them.
+  const place = (template: StepTemplate[], name: string): number => {
+    const found = template.findIndex(step => (step.name ?? step.uses) === name);
+    expect(found).toBeGreaterThan(-1);
+    return found;
+  };
+  const scriptOf = (template: StepTemplate[], step: number): Allowed[] => template[step].run ?? [];
+  // The 1-based number of a line in the script of one step.
+  const lineNo = (template: StepTemplate[], step: number, line: string): number => {
+    const found = scriptOf(template, step).indexOf(line);
+    expect(found).toBeGreaterThan(-1);
+    return found + 1;
+  };
+  // What two steps that traded places are reported as, in the order of their positions.
+  const traded = (job: string, a: [number, string], b: [number, string]): string[] =>
+    (
+      [
+        [a[0], b[1], a[1]],
+        [b[0], a[1], b[1]],
+      ] as Array<[number, string, string]>
+    )
+      .sort((x, y) => x[0] - y[0])
+      .map(([at, found, wanted]) => `${job}: step ${at + 1} is "${found}", expected "${wanted}"`);
+
+  it('python-sdk-release.yml: names the step of the publish job that a change lands on', () => {
+    const steps = (w: OidcWorkflow): Step[] => stepsOf(w, 'publish');
+    const DOWNLOAD = 'actions/download-artifact';
+    const UPLOAD = 'Publish to PyPI (trusted publishing)';
+    const [download, upload] = [DOWNLOAD, UPLOAD].map(name => place(PYTHON_PUBLISH, name));
+    expectOutsideTemplate('python-sdk-release.yml', [
+      [
+        'the upload ahead of the download',
+        exchange('publish', download, upload),
+        traded('publish', [download, DOWNLOAD], [upload, UPLOAD]),
+        true,
+      ],
+      [
+        'the upload twice',
+        w => void steps(w).push({ ...steps(w)[upload] }),
+        [`publish: step "${UPLOAD}" appears 2 times, expected 1`],
+        true,
+      ],
+      [
+        'the download removed',
+        w => void steps(w).splice(download, 1),
+        [`publish: step "${DOWNLOAD}" is missing`],
+        true,
+      ],
+      [
+        'the upload renamed',
+        w => (steps(w)[upload].name = 'Upload'),
+        [`publish: step "Upload" is not in the template`, `publish: step "${UPLOAD}" is missing`],
+        true,
+      ],
+      [
+        'the upload by another owner under the same name',
+        w => (steps(w)[upload].uses = `someone/gh-action-pypi-publish@${SHA}`),
+        [
+          `publish step ${upload + 1} "${UPLOAD}": uses someone/gh-action-pypi-publish@${SHA}, expected ${PYTHON_PUBLISH[upload].uses ?? ''} at a commit`,
+        ],
+      ],
+      [
+        'a step that is not in the template',
+        w => void steps(w).push({ run: SCRIPT }),
+        ['publish: step "a step without a name or an action" is not in the template'],
+      ],
+    ]);
+  });
+
+  it('js-sdk-release.yml: names the step of the publish job that a change lands on', () => {
+    const steps = (w: OidcWorkflow): Step[] => stepsOf(w, 'publish');
+    const SETUP = 'actions/setup-node';
+    const NPM = 'Use an npm that supports trusted publishing';
+    const DOWNLOAD = 'actions/download-artifact';
+    const PUBLISH = 'Publish to npm (trusted publishing, provenance automatic)';
+    const [setup, npm, download, publish] = [SETUP, NPM, DOWNLOAD, PUBLISH].map(name => place(JS_PUBLISH, name));
+    const npmRun = scriptOf(JS_PUBLISH, npm);
+    const lastNpm = show(npmRun[npmRun.length - 1]);
+    const publishLine = show(scriptOf(JS_PUBLISH, publish)[0]);
+    expectOutsideTemplate('js-sdk-release.yml', [
+      [
+        'the publish ahead of the npm it needs',
+        exchange('publish', npm, publish),
+        traded('publish', [npm, NPM], [publish, PUBLISH]),
+        true,
+      ],
+      [
+        'the download twice',
+        w => void steps(w).splice(download + 1, 0, { ...steps(w)[download] }),
+        [`publish: step "${DOWNLOAD}" appears 2 times, expected 1`],
+        true,
+      ],
+      ['the npm install removed', w => void steps(w).splice(npm, 1), [`publish: step "${NPM}" is missing`], true],
+      [
+        'a permitted line twice in the step',
+        w => (steps(w)[npm].run = `${steps(w)[npm].run ?? ''}${lastNpm}\n`),
+        [`publish step ${npm + 1} "${NPM}": run line ${npmRun.length + 1}: ${lastNpm}, expected the script to end`],
+        true,
+      ],
+      [
+        'the permitted lines in the other order',
+        w => exchangeLines(steps(w)[npm], [0, npmRun[0]], [1, npmRun[1]]),
+        [`publish step ${npm + 1} "${NPM}": run line 1: ${show(npmRun[1])}, expected ${show(npmRun[0])}`],
+        true,
+      ],
+      [
+        'the publish with another flag',
+        w => swap(steps(w)[publish], '--access public', '--access restricted'),
+        [
+          `publish step ${publish + 1} "${PUBLISH}": run line 1: ${publishLine.replace('--access public', '--access restricted')}, expected ${publishLine}`,
+        ],
+      ],
+      [
+        'the download inputs given as a string',
+        w => (steps(w)[download].with = 'name: js-sdk-package'),
+        [`publish step ${download + 1} "${DOWNLOAD}": with is not a mapping`],
+      ],
+      [
+        'a node version of another shape',
+        w => (inputsOf(steps(w)[setup])['node-version'] = 'latest'),
+        [
+          `publish step ${setup + 1} "${SETUP}": with node-version: latest, expected ${show(JS_PUBLISH[setup].with?.['node-version'] ?? '')}`,
+        ],
+      ],
+    ]);
+  });
+
+  it('release.yml: names the step of the promote job that a change lands on', () => {
+    const steps = (w: OidcWorkflow): Step[] => stepsOf(w, 'promote');
+    const BUILDX = 'Set up Docker Buildx';
+    const GHCR = 'Login to GitHub Container Registry';
+    const HUB = 'Login to Docker Hub';
+    const RESOLVE = 'Resolve the image name to attest';
+    const ATTEST = 'Attest build provenance for the tested digest';
+    const TAG = 'Tag the smoke-tested image with the release tags';
+    const VERIFY = 'Verify the release tag resolves and is multi-arch';
+    const [buildx, ghcr, hub, resolve, attest, tag, verify] = [BUILDX, GHCR, HUB, RESOLVE, ATTEST, TAG, VERIFY].map(
+      name => place(IMAGE_PROMOTE, name),
+    );
+    const at = (n: number, name: string): string => `promote step ${n + 1} "${name}"`;
+    const GITHUB_TOKEN = '${{ secrets.GITHUB_TOKEN }}';
+    const HUB_TOKEN = '${{ secrets.DOCKERHUB_TOKEN }}';
+    const HUB_USER = '${{ secrets.DOCKERHUB_USERNAME }}';
+    const ACTOR = '${{ github.actor }}';
+    const PROMOTING = 'echo "promoting -> $tag"';
+    const CREATE = 'docker buildx imagetools create --tag "$tag" "$staging"';
+    const COMPARE = 'if [ "$promoted_digest" != "$EXPECTED_DIGEST" ]; then';
+    const STAGING_COMPARE = 'if [ "$actual" != "$EXPECTED_DIGEST" ]; then';
+    const tagRun = scriptOf(IMAGE_PROMOTE, tag);
+    const verifyRun = scriptOf(IMAGE_PROMOTE, verify);
+    // The line that follows PROMOTING is the one an inserted line displaces.
+    const afterPromoting = tagRun[lineNo(IMAGE_PROMOTE, tag, PROMOTING)];
+    expectOutsideTemplate('release.yml', [
+      [
+        'the attest step after the re-point',
+        exchange('promote', attest, tag),
+        traded('promote', [attest, ATTEST], [tag, TAG]),
+        true,
+      ],
+      [
+        'the two logins in the other order',
+        exchange('promote', ghcr, hub),
+        traded('promote', [ghcr, GHCR], [hub, HUB]),
+        true,
+      ],
+      [
+        'the re-point step twice',
+        w => void steps(w).push({ ...steps(w)[tag] }),
+        [`promote: step "${TAG}" appears 2 times, expected 1`],
+        true,
+      ],
+      [
+        'the attest step twice',
+        w => void steps(w).splice(attest, 0, { ...steps(w)[attest] }),
+        [`promote: step "${ATTEST}" appears 2 times, expected 1`],
+        true,
+      ],
+      ['the Docker Hub login removed', w => void steps(w).splice(hub, 1), [`promote: step "${HUB}" is missing`], true],
+      ['the attest step removed', w => void steps(w).splice(attest, 1), [`promote: step "${ATTEST}" is missing`], true],
+      [
+        'the two login passwords swapped',
+        w => {
+          inputsOf(steps(w)[ghcr]).password = HUB_TOKEN;
+          inputsOf(steps(w)[hub]).password = GITHUB_TOKEN;
+        },
+        [
+          `${at(ghcr, GHCR)}: with password: ${HUB_TOKEN}, expected ${GITHUB_TOKEN}`,
+          `${at(hub, HUB)}: with password: ${GITHUB_TOKEN}, expected ${HUB_TOKEN}`,
+        ],
+        true,
+      ],
+      [
+        'both logins given the same password',
+        w => (inputsOf(steps(w)[hub]).password = GITHUB_TOKEN),
+        [`${at(hub, HUB)}: with password: ${GITHUB_TOKEN}, expected ${HUB_TOKEN}`],
+        true,
+      ],
+      [
+        'the Docker Hub login given the registry login name',
+        w => (inputsOf(steps(w)[hub]).username = ACTOR),
+        [`${at(hub, HUB)}: with username: ${ACTOR}, expected ${HUB_USER}`],
+        true,
+      ],
+      [
+        'the registry login given the Docker Hub name',
+        w => (inputsOf(steps(w)[ghcr]).username = HUB_USER),
+        [`${at(ghcr, GHCR)}: with username: ${HUB_USER}, expected ${ACTOR}`],
+        true,
+      ],
+      [
+        'a registry on the Docker Hub login',
+        w => (inputsOf(steps(w)[hub]).registry = 'ghcr.io'),
+        [`${at(hub, HUB)}: with registry`],
+        true,
+      ],
+      [
+        'the registry dropped from the first login',
+        w => delete inputsOf(steps(w)[ghcr]).registry,
+        [`${at(ghcr, GHCR)}: with registry is missing`],
+      ],
+      [
+        'the attest subject name changed',
+        w => (inputsOf(steps(w)[attest])['subject-name'] = '${{ needs.docker.outputs.digest }}'),
+        [
+          `${at(attest, ATTEST)}: with subject-name: \${{ needs.docker.outputs.digest }}, expected \${{ steps.image.outputs.name }}`,
+        ],
+      ],
+      [
+        'another action under the name of the builder step',
+        w => (steps(w)[buildx].uses = `docker/login-action@${SHA}`),
+        [
+          `${at(buildx, BUILDX)}: uses docker/login-action@${SHA}, expected ${IMAGE_PROMOTE[buildx].uses ?? ''} at a commit`,
+        ],
+        true,
+      ],
+      [
+        'the builder step renamed',
+        w => (steps(w)[buildx].name = 'Builder'),
+        [`promote: step "Builder" is not in the template`, `promote: step "${BUILDX}" is missing`],
+        true,
+      ],
+      [
+        'the image step with another id',
+        w => ((steps(w)[resolve] as Step & { id?: string }).id = 'name'),
+        [`${at(resolve, RESOLVE)}: id name, expected ${IMAGE_PROMOTE[resolve].id ?? ''}`],
+        true,
+      ],
+      [
+        'an env on a login step',
+        w => (steps(w)[ghcr].env = { REPO: '${{ github.repository }}' }),
+        [`${at(ghcr, GHCR)}: step key env`],
+        true,
+      ],
+      [
+        'the digest handed to the verify step',
+        w =>
+          (steps(w)[verify].env = {
+            ...(steps(w)[verify].env as object),
+            EXPECTED_DIGEST: '${{ needs.docker.outputs.digest }}',
+          }),
+        [`${at(verify, VERIFY)}: env EXPECTED_DIGEST`],
+        true,
+      ],
+      ['the env dropped from the verify step', w => delete steps(w)[verify].env, [`${at(verify, VERIFY)}: no env`]],
+      [
+        'an exit inside the loop',
+        w => swap(steps(w)[tag], PROMOTING, `${PROMOTING}\nexit 1`),
+        [
+          `${at(tag, TAG)}: run line ${lineNo(IMAGE_PROMOTE, tag, PROMOTING) + 1}: exit 1, expected ${show(afterPromoting)}`,
+        ],
+        true,
+      ],
+      [
+        'a continue ahead of the re-point',
+        w => swap(steps(w)[tag], CREATE, `continue\n${CREATE}`),
+        [`${at(tag, TAG)}: run line ${lineNo(IMAGE_PROMOTE, tag, CREATE)}: continue, expected ${CREATE}`],
+        true,
+      ],
+      [
+        'a fi after the verify script',
+        w => (steps(w)[verify].run = `${steps(w)[verify].run ?? ''}fi\n`),
+        [`${at(verify, VERIFY)}: run line ${verifyRun.length + 1}: fi, expected the script to end`],
+        true,
+      ],
+      [
+        'the promoted digest compared as the staging digest',
+        w => swap(steps(w)[tag], COMPARE, STAGING_COMPARE),
+        [`${at(tag, TAG)}: run line ${lineNo(IMAGE_PROMOTE, tag, COMPARE)}: ${STAGING_COMPARE}, expected ${COMPARE}`],
+        true,
+      ],
+      [
+        'the first lines of the script in the other order',
+        w => exchangeLines(steps(w)[tag], [0, tagRun[0]], [1, tagRun[1]]),
+        [`${at(tag, TAG)}: run line 1: ${show(tagRun[1])}, expected ${show(tagRun[0])}`],
+        true,
+      ],
+      [
+        'the verify script cut short',
+        w => swap(steps(w)[verify], show(verifyRun[verifyRun.length - 1]), ''),
+        [
+          `${at(verify, VERIFY)}: run ends after line ${verifyRun.length - 1}, expected ${show(verifyRun[verifyRun.length - 1])}`,
+        ],
+      ],
+      [
+        'a step that is not in the template',
+        w => void steps(w).push({ run: SCRIPT }),
+        ['promote: step "a step without a name or an action" is not in the template'],
+      ],
+      [
+        'the grant on another job',
+        w => (jobOf(w, 'docker').permissions = { packages: 'write', 'id-token': 'write' }),
+        ['docker: no step template'],
+      ],
+    ]);
+  });
+
+  // What the template must not refuse: an action moved to a newer commit, and a comment written or reworded.
+  // The edits are made on the text of the real files, because a comment does not survive being parsed.
+  describe('the step template accepts a bumped action and a changed comment', () => {
+    const textOf = (file: string): string => fs.readFileSync(path.join(workflowDir, file), 'utf8');
+    const BUMPED = 'f'.repeat(40);
+    const PIN = /@[0-9a-f]{40}( # v[\w.]+)/g;
+    const refusedAfter = (
+      file: string,
+      edit: (text: string) => string,
+    ): { found: string[]; workflow: OidcWorkflow } => {
+      const edited = edit(textOf(file));
+      expect(edited).not.toBe(textOf(file));
+      const workflow = yaml.load(edited) as OidcWorkflow;
+      const list = ALLOW_LISTS[file];
+      return { found: [...outsideAllowList(workflow, list), ...outsideStepTemplate(workflow, list)], workflow };
+    };
+
+    it.each(Object.keys(ALLOW_LISTS))('%s: a Dependabot bump of every action is accepted', file => {
+      const { found, workflow } = refusedAfter(file, text => text.replace(PIN, `@${BUMPED} # v99.1.0`));
+      // Non-vacuity: every action of the id-token job carries the new commit, so the bump landed.
+      const pinned = oidcJobSteps(workflow).flatMap(({ step }) => (step.uses === undefined ? [] : [step.uses]));
+      expect(pinned.length).toBeGreaterThan(0);
+      expect(pinned.filter(uses => !uses.endsWith(`@${BUMPED}`))).toEqual([]);
+      expect(found).toEqual([]);
+    });
+
+    it('release.yml: a comment in the script, after a line and in the file is accepted', () => {
+      const { found, workflow } = refusedAfter('release.yml', text =>
+        text
+          .replace(
+            '          set -euo pipefail\n',
+            '          # fail on any error, unset variable or failed pipe stage\n          set -euo pipefail\n',
+          )
+          .replace(
+            'docker buildx imagetools create --tag "$tag" "$staging"\n',
+            'docker buildx imagetools create --tag "$tag" "$staging" # the re-point\n',
+          )
+          .replace('# Dual-publish: the same boot-tested', '# Dual-publish, reworded: the same boot-tested'),
+      );
+      // Non-vacuity: both comments are in the script the checker reads.
+      const script = stepsOf(workflow, 'promote')
+        .map(step => step.run ?? '')
+        .join('\n');
+      expect(script).toContain('# fail on any error');
+      expect(script).toContain('"$staging" # the re-point');
+      expect(found).toEqual([]);
+    });
+
+    it('js-sdk-release.yml: a comment after the version check is accepted', () => {
+      const { found, workflow } = refusedAfter('js-sdk-release.yml', text =>
+        text.replace('          npm --version\n', '          npm --version # the pinned release\n'),
+      );
+      expect(
+        stepsOf(workflow, 'publish').filter(step => (step.run ?? '').includes('npm --version # the pinned release')),
+      ).toHaveLength(1);
+      expect(found).toEqual([]);
+    });
+
+    it('python-sdk-release.yml: a reworded comment is accepted', () => {
+      const { found } = refusedAfter('python-sdk-release.yml', text =>
+        text.replace('No checkout and no install: this job only', 'There is no checkout and no install: this job only'),
+      );
+      expect(found).toEqual([]);
+    });
   });
 
   // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
