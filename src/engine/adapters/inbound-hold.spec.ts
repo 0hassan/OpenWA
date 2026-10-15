@@ -773,6 +773,30 @@ describe('Baileys inbound messages held for storage', () => {
       expect(h.rows).toEqual([seeded()]);
     });
 
+    // The copy the change was judged foreign to is gone when the hold ends, wiped with the account or not
+    // readable, and no conflict removed it: the key it was judged by stands, as it does for a delivery in flight.
+    it('drops a change judged foreign to a copy that is gone when the hold ends, and was not removed as a conflict', async () => {
+      const h = heldProjector({ unique: true });
+      const release = h.stall('X');
+      const store = memoryStore();
+      const onMessageEdited = jest.fn(h.callbacks.onMessageEdited);
+      const { events } = build(4, { ...h.callbacks, onMessageEdited }, store);
+
+      upsert(events, text('X', CHAT_B));
+      await flush();
+      expect(store.copies.get('X')?.key.remoteJid).toBe(CHAT_B);
+      upsert(events, editFrom('628333@s.whatsapp.net', 'FORGED_ENV', 'forged'));
+      await flush();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+
+      store.copies.clear();
+      release();
+      await flush();
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(h.rows).toEqual([expect.objectContaining({ waMessageId: 'X', chatId: CHAT_B })]);
+    });
+
     // The delivery is not stored, and the session has no receipt for it, until its processing is over (the
     // limiter queue, the repeat check, a download). A change that arrives meanwhile is judged against the key
     // the delivery arrived under, which cannot say which message the id names.

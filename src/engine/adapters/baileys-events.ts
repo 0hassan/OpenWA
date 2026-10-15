@@ -1118,7 +1118,8 @@ export class BaileysEvents {
     inbound?: { ticket?: InboundTicket; yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R> },
   ): Promise<boolean> {
     if (!targetId) return false;
-    // The key of the delivery in flight a wait was for, and the removals of this id counted when it began.
+    // The key a wait was for (the delivery in flight, or the copy the change read as foreign to), and the
+    // removals of this id counted when it began.
     let waitedFor: { key: WAMessageKey; removals: number } | undefined;
     // When the wait for the id's hold runs out, however many deliveries hold it in turn.
     let heldUntil: number | undefined;
@@ -1128,9 +1129,9 @@ export class BaileysEvents {
       // A message still being processed has no stored copy yet, but the projector may already hold it
       // (PostgreSQL), so its own key is checked instead.
       const found = await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets');
-      // Without a stored copy the key of the delivery that was being processed stands (it may never have
-      // been stored: no store, a failed write), unless a conflicting copy went since the wait for it began:
-      // then that delivery was not the message the id names, and nothing says which one is.
+      // Without a stored copy the key the wait was for stands (a delivery that may never have been stored: no
+      // store, a failed write; or a copy gone since), unless a conflicting copy went since the wait for it
+      // began: then that delivery was not the message the id names, and nothing says which one is.
       const removedSince = waitedFor !== undefined && this.removalsOf(targetId) !== waitedFor.removals;
       const original =
         found && !found.processing ? found.key : removedSince ? undefined : (found?.key ?? waitedFor?.key);
@@ -1140,8 +1141,10 @@ export class BaileysEvents {
       if (hold) {
         // The session has not said yet whether the delivery that stored this copy is the message it holds
         // under the id or a duplicate of another one, so the copy cannot judge the change. Parked until it
-        // has, when a conflicting copy is gone and the real author's change is judged by what remains.
-        if (processing) waitedFor ??= { key: original, removals };
+        // has, when a conflicting copy is gone and the real author's change is judged by what remains. The
+        // key it was judged by is remembered either way: a copy that is gone by then, wiped or unreadable
+        // and not removed as a conflict, leaves that key to stand.
+        waitedFor ??= { key: original, removals };
         heldUntil ??= Date.now() + BaileysEvents.OUTCOME_HOLD_MS;
         const left = heldUntil - Date.now();
         if (left > 0 && (await this.parkUntil(hold.ended, left, inbound))) continue;
