@@ -2340,7 +2340,7 @@ Delete a message (for everyone by default); also clears the stored record and fl
 
 **Response** `200`
 
-After the engine delete, the stored message's body and `metadata` (inline media, quote, reactions) are cleared, its archived-media pointer is removed, and its `type` is set to `revoked`, the same as when the engine reports a revoke (`message.revoked`). The archived file itself is deleted later by the chat-media orphan sweep, once it has stayed unreferenced for the sweep's grace window. Note the `200` status (via `@HttpCode`).
+After the engine delete, the stored message's body and `metadata` (inline media, quote, reactions) are cleared, its archived-media pointer is removed, and its `type` is set to `revoked`, the same as when the engine reports a revoke (`message.revoked`). The archived file itself is deleted later by the chat-media orphan sweep, once it has stayed unreferenced for the sweep's grace window. If the stored row under that id belongs to another chat than `chatId`, it is left as it is and the request still answers `200`. Note the `200` status (via `@HttpCode`).
 
 ```json
 { "success": true }
@@ -2375,7 +2375,7 @@ Edit the text of a message sent by this account; also updates the stored record'
 
 **Response** `200`
 
-Both fields describe the edited message rather than the edit itself, on both engines: `messageId` is the id you passed, and `timestamp` is the time that message was originally sent, since an edit does not move a message in the chat.
+Both fields describe the edited message rather than the edit itself, on both engines: `messageId` is the id you passed, and `timestamp` is the time that message was originally sent, since an edit does not move a message in the chat. If the stored row under that id belongs to another chat than `chatId`, or is not a message the account sent, its body is left as it is and the response is the same.
 
 ```json
 { "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1760000000 }
