@@ -1272,11 +1272,14 @@ describe('a job that can mint a publish credential pins global npm installs and 
     };
   };
   // Two lines of a script traded places; the edit throws if either is not the line the case expects there.
+  // Lines are counted among those that carry a command, so a comment written between two of them moves none.
   const exchangeLines = (step: Step, a: [number, Allowed], b: [number, Allowed]): void => {
     const lines = (step.run ?? '').split('\n');
-    expect(allows([a[1]], lines[a[0]])).toBe(true);
-    expect(allows([b[1]], lines[b[0]])).toBe(true);
-    [lines[a[0]], lines[b[0]]] = [lines[b[0]], lines[a[0]]];
+    const carrying = lines.flatMap((line, i) => (scriptLines(line).length > 0 ? [i] : []));
+    const [from, to] = [carrying[a[0]], carrying[b[0]]];
+    expect(allows([a[1]], lines[from])).toBe(true);
+    expect(allows([b[1]], lines[to])).toBe(true);
+    [lines[from], lines[to]] = [lines[to], lines[from]];
     step.run = lines.join('\n');
   };
   // The control cases find a step by its name (its action when it has none) and a script line by its text in
@@ -1594,6 +1597,14 @@ describe('a job that can mint a publish credential pins global npm installs and 
         ['docker: no step template'],
       ],
     ]);
+  });
+
+  // The cases above name lines by their place among the lines that carry a command, so a comment written
+  // between two of them, which the template accepts, does not turn a case into a failure of its own.
+  it('trades the lines that carry a command whatever comments sit between them', () => {
+    const step: Step = { run: 'first\n# a note\n\nsecond\nthird\n' };
+    exchangeLines(step, [0, 'first'], [1, 'second']);
+    expect(step.run).toBe('second\n# a note\n\nfirst\nthird\n');
   });
 
   it('js-sdk-release.yml: names what the allow-list refuses in the publish job', () => {
