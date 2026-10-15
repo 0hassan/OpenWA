@@ -129,7 +129,10 @@ function ChatThread({
             : event.key === 'End'
               ? stops[stops.length - 1]
               : undefined;
-    if (!target) return;
+    // No stop to move to, or the bubble that already holds focus (Home on the first message, End on the last):
+    // the key is the browser's, which scrolls the thread, as ArrowUp and ArrowDown past the ends do. Taking it
+    // would leave a reader on the first message no way to ask for an older page with Home.
+    if (!target || target === event.currentTarget) return;
     event.preventDefault();
     target.focus();
   };

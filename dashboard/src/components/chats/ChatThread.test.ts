@@ -552,6 +552,34 @@ test('arrow keys, Home and End are consumed and reach the stops from the middle 
   assert.equal(rtl.fireEvent.keyDown(bubbles[1], { key: 'a' }), true);
 });
 
+// On the first message there is nowhere further for Home to go, and on the last none for End: the browser
+// scrolls the thread then, as it does for ArrowUp and ArrowDown past the ends, so Home asks for an older page
+// as the other keys do. Focus stays where it is.
+test('Home on the first message and End on the last are left to the browser, and keep focus', () => {
+  const messages = ['a', 'b', 'c'].map((id): ChatMessageView => ({
+    ...PROMPT,
+    id: `db-${id}`,
+    waMessageId: `wamid.${id}`,
+    metadata: undefined,
+  }));
+  const { container } = renderThread('operator', messages);
+  const bubbles = bubblesOf(container);
+
+  bubbles[0].focus();
+  assert.equal(rtl.fireEvent.keyDown(bubbles[0], { key: 'Home' }), true);
+  assert.equal(focusedMessage(), 'wamid.a');
+  assert.equal(rtl.fireEvent.keyDown(bubbles[0], { key: 'ArrowUp' }), true);
+
+  bubbles[2].focus();
+  assert.equal(rtl.fireEvent.keyDown(bubbles[2], { key: 'End' }), true);
+  assert.equal(focusedMessage(), 'wamid.c');
+  assert.equal(rtl.fireEvent.keyDown(bubbles[2], { key: 'ArrowDown' }), true);
+
+  // From any other message the key still moves to the end it names.
+  assert.equal(rtl.fireEvent.keyDown(bubbles[2], { key: 'Home' }), false);
+  assert.equal(focusedMessage(), 'wamid.a');
+});
+
 // Deleting removes the buttons that hold focus, so focus would fall to the page and the next Tab would
 // land in the composer.
 test('keyboard focus stays in the thread when the focused message is deleted', () => {
