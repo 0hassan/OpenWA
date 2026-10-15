@@ -414,10 +414,12 @@ describe('every npm tree is audited and kept current', () => {
   });
 
   type ReleaseStep = { run?: string; 'continue-on-error'?: unknown; 'working-directory'?: string };
-  const releaseAudits = (file: string, job: string) => {
-    const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
-      jobs: Record<string, { defaults?: { run?: { 'working-directory'?: string } }; steps: ReleaseStep[] }>;
-    };
+  type ReleaseWorkflow = {
+    jobs: Record<string, { defaults?: { run?: { 'working-directory'?: string } }; steps: ReleaseStep[] }>;
+  };
+  const releaseWorkflow = (file: string): ReleaseWorkflow =>
+    yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as ReleaseWorkflow;
+  const auditsOf = (workflow: ReleaseWorkflow, job: string) => {
     const cwd = workflow.jobs[job].defaults?.run?.['working-directory'] ?? '';
     return workflow.jobs[job].steps.flatMap((step, index) =>
       executableLines(step.run ?? '')
@@ -428,6 +430,7 @@ describe('every npm tree is audited and kept current', () => {
         ),
     );
   };
+  const releaseAudits = (file: string, job: string) => auditsOf(releaseWorkflow(file), job);
 
   // A tag starts only its own release workflow, so each one audits the trees it publishes: the image
   // carries the root and the dashboard, the npm package is built from the SDK. Exact, so moving a
@@ -445,14 +448,55 @@ describe('every npm tree is audited and kept current', () => {
   });
 
   // `npm audit` reads the lockfile alone, so a high advisory stops the build job before `npm ci`
-  // runs any of the toolchain.
-  it('js-sdk-release.yml audits the SDK before it installs it', () => {
-    const [audit] = releaseAudits('js-sdk-release.yml', 'build');
-    const install = jobSteps('js-sdk-release.yml', 'build').findIndex(step =>
-      /^npm ci\b/.test(executableLinesConservative(step.run ?? '').trim()),
+  // runs any of the toolchain. Every step that may install, on any line of its script and not only as the
+  // whole of one, comes after the audit, so the install is read exactly.
+  // `npm ci`, `npm install`, `npm i` and `npm add`, with options before the subcommand (`npm --prefix x ci`).
+  const INSTALL = /\bnpm(?:[ \t]+-\S+(?:[ \t]+[^\s-]\S*)?)*[ \t]+(?:ci|install|i|add)\b/;
+  const installProblems = (workflow: ReleaseWorkflow, job: string): string[] => {
+    const audit = auditsOf(workflow, job)[0]?.index ?? -1;
+    const installs = workflow.jobs[job].steps.flatMap((step, index) =>
+      INSTALL.test(executableLines(step.run ?? '')) ? [index] : [],
     );
-    expect(install).toBeGreaterThan(-1);
-    expect(audit.index).toBeLessThan(install);
+    return [
+      ...(audit === -1 ? ['no audit step'] : []),
+      ...(installs.length === 0 ? ['no install step'] : []),
+      ...installs.filter(index => index <= audit).map(index => `step ${index + 1} may install before the audit`),
+    ];
+  };
+
+  it('js-sdk-release.yml audits the SDK before it installs it', () => {
+    expect(installProblems(releaseWorkflow('js-sdk-release.yml'), 'build')).toEqual([]);
+  });
+
+  it('js-sdk-release.yml: refuses an install that may run before the audit', () => {
+    const copy = (): ReleaseWorkflow =>
+      JSON.parse(JSON.stringify(releaseWorkflow('js-sdk-release.yml'))) as ReleaseWorkflow;
+    const auditAt = auditsOf(copy(), 'build')[0].index;
+    const early = (run: string): ReleaseWorkflow => {
+      const workflow = copy();
+      workflow.jobs.build.steps.splice(auditAt, 0, { run });
+      return workflow;
+    };
+    const before = [`step ${auditAt + 1} may install before the audit`];
+    // After another command of the same script, and as the second command of a line.
+    for (const run of [
+      'echo start\nnpm ci',
+      'cd . && npm install',
+      'npm i left-pad',
+      'echo x; npm ci --ignore-scripts',
+      'npm --prefix . ci',
+      'npm --no-fund --loglevel silent add left-pad',
+      'if true; then\n  npm ci\nfi',
+    ]) {
+      expect([run, installProblems(early(run), 'build')]).toEqual([run, before]);
+    }
+    // Words that only look like one, and a comment, are not an install.
+    for (const run of ['npm run install-hooks', 'npm pack # npm ci', '# npm ci']) {
+      expect([run, installProblems(early(run), 'build')]).toEqual([run, []]);
+    }
+    const none = copy();
+    none.jobs.build.steps = none.jobs.build.steps.filter(step => !/npm ci/.test(step.run ?? ''));
+    expect(installProblems(none, 'build')).toEqual(['no install step']);
   });
 
   // The clients that are not npm packages publish runtime dependencies of their own, and the audit steps
@@ -489,22 +533,52 @@ describe('every npm tree is audited and kept current', () => {
  * --engine-strict on exactly the lanes the test step runs on.
  */
 describe('the JavaScript SDK tests run only on a Node their toolchain supports', () => {
+  type LaneStep = { run?: string; if?: string };
+  const lane = (file: string, job: string): LaneStep[] =>
+    (
+      yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
+        jobs: Record<string, { steps: LaneStep[] }>;
+      }
+    ).jobs[job].steps;
+  // A line of its own anywhere in a script counts, read exactly: `echo start` above `npm ci` in one run is
+  // still an install, and a step that may run the tests is held to the lane as well.
+  const engineStrictProblems = (steps: LaneStep[]): string[] => {
+    const lines = (step: LaneStep): string => executableLines(step.run ?? '');
+    const installs = steps.filter(step => /^[ \t]*npm ci\b/m.test(lines(step)));
+    const tests = steps.filter(step => /^[ \t]*npm test\b/m.test(lines(step)));
+    if (installs.length !== 1) return [`${installs.length} steps may install, expected 1`];
+    if (tests.length !== 1) return [`${tests.length} steps may run the tests, expected 1`];
+    const gate = tests[0].if;
+    const want = gate ? `npm ci --engine-strict=\${{ ${gate} }}` : 'npm ci --engine-strict';
+    return [
+      ...(installs[0].if === undefined ? [] : ['the install has a condition of its own']),
+      ...(installs[0].run === want ? [] : [`the install is ${installs[0].run ?? ''}, expected ${want}`]),
+    ];
+  };
+
   it.each([
     ['sdk-ci.yml', 'javascript'],
     ['js-sdk-release.yml', 'build'],
   ])('%s %s installs under --engine-strict wherever it runs npm test', (file, job) => {
-    const steps = (
-      yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
-        jobs: Record<string, { steps: Array<{ run?: string; if?: string }> }>;
-      }
-    ).jobs[job].steps;
-    const installs = steps.filter(step => /^npm ci\b/.test(step.run ?? ''));
-    const tests = steps.filter(step => step.run === 'npm test');
-    expect(installs).toHaveLength(1);
-    expect(tests).toHaveLength(1);
-    expect(installs[0].if).toBeUndefined();
-    const gate = tests[0].if;
-    expect(installs[0].run).toBe(gate ? `npm ci --engine-strict=\${{ ${gate} }}` : 'npm ci --engine-strict');
+    expect(engineStrictProblems(lane(file, job))).toEqual([]);
+  });
+
+  it.each([
+    ['sdk-ci.yml', 'javascript'],
+    ['js-sdk-release.yml', 'build'],
+  ])('%s %s: refuses a second install, or tests that run beside one without the flag', (file, job) => {
+    const copy = (): LaneStep[] => JSON.parse(JSON.stringify(lane(file, job))) as LaneStep[];
+    const second = copy();
+    second.unshift({ run: 'echo start\nnpm ci' });
+    expect(engineStrictProblems(second)).toEqual(['2 steps may install, expected 1']);
+    const tests = copy();
+    tests.push({ run: 'echo start\nnpm test' });
+    expect(engineStrictProblems(tests)).toEqual(['2 steps may run the tests, expected 1']);
+    const loose = copy();
+    for (const step of loose) if (/^[ \t]*npm ci\b/m.test(step.run ?? '')) step.run = 'npm ci';
+    expect(engineStrictProblems(loose)).toEqual([
+      expect.stringMatching(/^the install is npm ci, expected npm ci --engine-strict/),
+    ]);
   });
 });
 

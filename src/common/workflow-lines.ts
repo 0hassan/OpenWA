@@ -43,6 +43,7 @@
  *     image-scan ref output, promote decision lines                        both          is there, is the only one
  *     check:audit requires the audit                                       both          is there, every one
  *     audit trees                                                          exact         order, uniqueness
+ *     audit before install, engine-strict install                          exact         order, uniqueness
  *     attest before every re-point                                         both          is there, every one
  */
 export function executableLines(run: string): string {
