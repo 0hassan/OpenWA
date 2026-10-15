@@ -75,9 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drop a Baileys edit, revoke or reaction from another chat, an edit from the wrong author, or a one-to-one revoke from the other side, aimed at a message still being downloaded, on SQLite too.
 - Drop a Baileys message that reuses the id of one still being downloaded under another chat or sender, so it cannot take the id or stand in for the original when a later delete is judged.
 - Drop the stored copy of a Baileys message that reuses the id of a message the gateway already holds under another chat, sender or direction, and hold an edit, delete or reaction that reads as foreign to that copy until the gateway has settled the message, so the real message's change is no longer ignored as foreign; a reusing message deleted by its sender while it downloads on SQLite, or skipped as ephemeral, is never settled and keeps its copy.
-- A Baileys revoke from the chat of a delivery that reuses the id of a message stored under another chat, or sent by the account in a one-to-one chat, no longer clears that stored message or announces `message.revoked` for it; a contact who knew the id could erase it, on SQLite and PostgreSQL.
-- A message whose insert lost to the row of another message under the same id no longer writes its pending revoke, edit, reaction or ack onto that row.
-- The REST message delete and edit leave a stored row of another chat that holds the message id alone.
 - Warn at storage export when a file is larger than the per-entry import cap `STORAGE_IMPORT_MAX_BYTES`.
 - Refuse a `PORT` with surrounding whitespace at boot instead of binding a port the image healthcheck cannot probe.
 - Skip or cancel the Baileys version lookup of a session stopped while it connects, so no proxy dispatcher outlives it.
@@ -237,6 +234,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rolling back to 0.24.0 while webhook outbox rows are in state `queued` strands them: 0.24.0 never replays that state and prunes it after `WEBHOOK_OUTBOX_RETENTION_DAYS` (default 7). The upgrade also deletes duplicate terminal `webhook_delivery_failures` rows, which a rollback does not restore.
 - ⚠️ **Breaking (API).** `PUT /api/infra/config` answers `400` for a database or Redis port outside 1-65535, a negative or fractional pool size and a local storage path the app cannot create or write, which it used to store and the next boot refused.
 - An `FFMPEG_PATH` wrapper script that reads an environment variable outside `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `HOME`, `TMPDIR`, `TEMP`, `TMP`, `LANG`, `LC_ALL` and `SystemRoot` no longer sees it; set what it needs inside the script.
+
+### Security
+
+- Baileys: a revoke from the chat of a delivery that reuses the id of a message stored under another chat, or sent by the account in a one-to-one chat, no longer clears that stored message or announces `message.revoked` for it; a contact who knew the id could erase it, on SQLite and PostgreSQL.
+- Baileys: a message whose insert lost to the stored row of another message under the same id no longer writes its pending revoke, edit, reaction or ack onto that row; a contact who reused the id could clear, edit or react to a message of another chat.
+- Baileys: the REST message delete and edit no longer clear or edit a stored message of another chat that holds the same id; a call naming a chat where a contact had reused the id could reach it.
 
 ## [0.24.0] - 2026-10-03
 
