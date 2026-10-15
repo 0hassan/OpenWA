@@ -345,7 +345,8 @@ export class MessageProjector {
    * ticket (PostgreSQL), the hook chain starts in the chat's arrival order and the commit takes the
    * turn admitInbound reserved; whatever path returns early drops the ticket. The receipt, for an
    * engine that wants to know what became of its message, settles once the commit ends (see
-   * {@link InboundOutcome}); there is none when the message is not committed at all.
+   * {@link InboundOutcome}). There is none when the engine is no longer live or the message is skipped as
+   * ephemeral; one that settles with nothing says nothing, as when the hook chain failed.
    */
   handleInboundMessage(
     id: string,
@@ -373,8 +374,15 @@ export class MessageProjector {
       // The status store holds the payload until the ingest settles.
       turn?.holdUntil(ingest);
       // Its own table takes the status whatever the id, and a story is never a row of `messages`: one
-      // that finds a message there under its id reuses that id.
-      return { settled: ingest.then(() => this.judgeRepeat(id, message)) };
+      // that finds a message there under its id reuses that id. Only an engine that keeps its own copy of
+      // a message reads the outcome, so the lookup is made when it is asked for, and once.
+      let judged: Promise<InboundOutcome | undefined> | undefined;
+      const judge = (): Promise<InboundOutcome | undefined> => ingest.then(() => this.judgeRepeat(id, message));
+      return {
+        get settled(): Promise<InboundOutcome | undefined> {
+          return (judged ??= judge());
+        },
+      };
     }
     if (this.shouldSkipEphemeralMessage(id, message)) return;
     this.logger.debug(`Message received from ${message.from}`, {

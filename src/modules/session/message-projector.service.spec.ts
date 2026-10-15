@@ -1771,6 +1771,20 @@ describe('MessageProjector (inbound projection)', () => {
       expect(projector.handleInboundMessage(SESSION_ID, retired, makeIncoming())).toBeUndefined();
     });
 
+    it('answers nothing for an ephemeral message it skips', () => {
+      process.env.STORE_EPHEMERAL_MESSAGES = 'false';
+      try {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+
+        expect(
+          projector.handleInboundMessage(SESSION_ID, engine, makeIncoming({ ephemeralDuration: 86400 })),
+        ).toBeUndefined();
+      } finally {
+        delete process.env.STORE_EPHEMERAL_MESSAGES;
+      }
+    });
+
     it('settles with nothing when the hook chain fails', async () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
@@ -1805,6 +1819,24 @@ describe('MessageProjector (inbound projection)', () => {
 
         await expect(receipt?.settled).resolves.toEqual({ conflict: true });
         expect(statusStore.ingest).toHaveBeenCalledTimes(1);
+      });
+
+      it('looks its id up when the outcome is asked for, and once, not for an engine that ignores it', async () => {
+        statusStore.ingest.mockResolvedValue({ row: {}, created: true });
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+
+        const receipt = projector.handleInboundMessage(
+          SESSION_ID,
+          engine,
+          makeIncoming({ ...status, author: '15550001111@c.us' }),
+        );
+        await flush();
+        expect(statusStore.ingest).toHaveBeenCalledTimes(1);
+        expect(messageRepository.findOne).not.toHaveBeenCalled();
+
+        await expect(Promise.all([receipt?.settled, receipt?.settled])).resolves.toEqual([undefined, undefined]);
+        expect(messageRepository.findOne).toHaveBeenCalledTimes(1);
       });
 
       it('reports nothing for a story no message shares an id with', async () => {
