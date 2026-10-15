@@ -1090,9 +1090,11 @@ export class BaileysEvents {
   /**
    * Whether an edit, revoke or reaction names a stored message it cannot touch: one in another chat,
    * or, with `checkAuthor`, one somebody else sent. WhatsApp clients ignore such a message, but Baileys
-   * emits it as-is and the projector updates the stored row by id alone, so a contact who knows an id
-   * could rewrite or erase that message. A message still being processed is checked against the key
-   * it arrived under. Fails open: with no original at all, or ids that cannot be compared (see
+   * emits it as-is, so a contact who knows an id could rewrite or erase that message. The projector
+   * judges the stored row it would change as well, by the same rule (see mutationTargetsForeignRow) and
+   * also for messages older than the store read here; this check keeps the adapter's own handling of the
+   * event off a message it proves foreign. A message still being processed is checked against the key it
+   * arrived under. Fails open: with no original at all, or ids that cannot be compared (see
    * {@link differentWaIds}), the event goes through as it always has.
    *
    * The copy a change reads as foreign to may be a duplicate of a message the session holds under
