@@ -99,8 +99,8 @@ function ChatThread({
 
   // The message actions sit behind hover, so a keyboard user reaches them through the bubble that carries
   // them: the bubbles are one tab stop (the focused message, else the newest), the arrow keys move between
-  // them, and the actions show while keyboard focus is inside a bubble (Chats.css). Links, previews and
-  // buttons inside a message stay stops of their own.
+  // them, and the actions show while focus is inside a bubble, unless a pointer brought it (Chats.css).
+  // Links, previews and buttons inside a message stay stops of their own.
   const hasActions = useCallback(
     (message: ChatMessageView) => canWrite && message.type !== 'revoked' && Boolean(message.waMessageId),
     [canWrite],

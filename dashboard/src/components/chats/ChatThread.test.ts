@@ -1153,7 +1153,7 @@ for (const { when, pageHasFocus } of PAGE_BLURS) {
 // Chats.css shows the actions while focus is inside a bubble, but a click focuses the bubble too, and
 // its menu would stay drawn over the message after the pointer left. The thread marks pointer use and the
 // stylesheet reveals on focus only without the mark. jsdom has no layout, so the selectors are pinned.
-test('a click marks pointer use, a key press clears it, and the stylesheet reveals on keyboard focus only', () => {
+test('a pointer press marks pointer use, a key press clears it, and focus reveals the actions only without the mark', () => {
   const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
   const thread = container.querySelector<HTMLElement>('.room-messages');
   assert.ok(thread);
@@ -1170,7 +1170,10 @@ test('a click marks pointer use, a key press clears it, and the stylesheet revea
   ]) {
     const rule = css.split('\n').find(line => line.includes(target));
     assert.ok(rule, `${target} reveals the menu on focus`);
-    assert.ok(rule.includes('.room-messages:not([data-pointer])'), `${target} is gated on keyboard modality`);
+    assert.ok(
+      rule.includes('.room-messages:not([data-pointer])'),
+      `${target} reveals only while the pointer mark is off`,
+    );
   }
 });
 
