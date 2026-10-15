@@ -948,33 +948,37 @@ describe('Baileys inbound messages held for storage', () => {
         );
       });
 
-      it('lets the delivery take its limiter slot back when its room frees, while the change waits', async () => {
-        process.env.INBOUND_MEDIA_CONCURRENCY = '1';
-        process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '1000';
-        const h = heldProjector({ unique: true });
-        h.rows.push(seeded());
-        const { events, emitted } = build(1, h.callbacks, memoryStore());
-        const release = h.stall('H');
+      // The park gives up what the change holds, whichever kind it is: it is announced as nothing, and the
+      // delivery it waits for needs its slot and its turn back.
+      it.each(kinds)(
+        'lets the delivery take its limiter slot back when its room frees, while a %s waits',
+        async kind => {
+          process.env.INBOUND_MEDIA_CONCURRENCY = '1';
+          process.env.MEDIA_DOWNLOAD_TIMEOUT_MS = '1000';
+          const h = heldProjector({ unique: true });
+          h.rows.push(seeded());
+          const { events, emitted } = build(1, h.callbacks, memoryStore());
+          const release = h.stall('H');
 
-        upsert(events, media('H', 'hold@s.whatsapp.net'));
-        await flush();
-        // X asks for the room H holds until its row is written, and gives its only limiter slot up meanwhile.
-        upsert(events, media('X', CHAT_B));
-        await flush();
-        upsert(events, change('edit', CHAT_A, 'REAL_ENV'));
-        await flush();
-        expect(emitted).toEqual(['H']);
-        expect(h.rows).toEqual([seeded()]);
+          upsert(events, media('H', 'hold@s.whatsapp.net'));
+          await flush();
+          // X asks for the room H holds until its row is written, and gives its only limiter slot up meanwhile.
+          upsert(events, media('X', CHAT_B));
+          await flush();
+          upsert(events, change(kind, CHAT_A, 'REAL_ENV'));
+          await flush();
+          expect(emitted).toEqual(['H']);
+          expect(h.rows).toEqual([seeded()]);
 
-        release();
-        await flush();
-        expect(emitted).toEqual(['H', 'X']);
-        expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(
-          expect.objectContaining({ chatId: CHAT_A, body: 'fixed' }),
-        );
-      });
+          release();
+          await flush();
+          expect(emitted).toEqual(['H', 'X']);
+          expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(expect.objectContaining({ chatId: CHAT_A }));
+          expect(effect(h, kind)).toEqual(landed[kind]);
+        },
+      );
 
-      it('keeps no limiter slot while the change waits for the answer', async () => {
+      it.each(kinds)('keeps no limiter slot while a %s waits for the answer', async kind => {
         process.env.INBOUND_MEDIA_CONCURRENCY = '1';
         const h = heldProjector({ unique: true });
         h.rows.push(seeded());
@@ -983,22 +987,21 @@ describe('Baileys inbound messages held for storage', () => {
 
         upsert(events, text('X', CHAT_B));
         await flush();
-        upsert(events, change('edit', CHAT_A, 'REAL_ENV'));
+        upsert(events, change(kind, CHAT_A, 'REAL_ENV'));
         await flush();
         // The only slot is free for what arrives next, though the change has not been judged.
         upsert(events, text('N', CHAT_C));
         await flush();
         expect(h.inserted()).toContain('N');
-        expect(h.rows.find(r => r.waMessageId === 'X')?.body).toBe('the real one');
+        expect(effect(h, kind)).toEqual(untouched(kind, true));
 
         release();
         await flush();
-        expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(
-          expect.objectContaining({ chatId: CHAT_A, body: 'fixed' }),
-        );
+        expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(expect.objectContaining({ chatId: CHAT_A }));
+        expect(effect(h, kind)).toEqual(landed[kind]);
       });
 
-      it('does not hold back the later messages of its own chat', async () => {
+      it.each(kinds)('does not hold back the later messages of its own chat while a %s waits', async kind => {
         const h = heldProjector({ unique: true });
         h.rows.push(seeded());
         const { store, open } = holdingReads([1]);
@@ -1006,14 +1009,15 @@ describe('Baileys inbound messages held for storage', () => {
 
         upsert(events, text('X', CHAT_B));
         await flush();
-        upsert(events, change('edit', CHAT_A, 'REAL_ENV'), text('F', CHAT_A));
+        upsert(events, change(kind, CHAT_A, 'REAL_ENV'), text('F', CHAT_A));
         await flush();
 
         expect(h.hookStarts).toContain('F');
         expect(h.inserted()).toContain('F');
         open(1);
         await flush();
-        expect(h.rows[0]).toEqual(expect.objectContaining({ waMessageId: 'X', body: 'fixed' }));
+        expect(h.rows[0]).toEqual(expect.objectContaining({ waMessageId: 'X', chatId: CHAT_A }));
+        expect(effect(h, kind)).toEqual(landed[kind]);
       });
 
       // The host keeps no copy and cannot remove one, so the key the delivery arrived under judges the change,

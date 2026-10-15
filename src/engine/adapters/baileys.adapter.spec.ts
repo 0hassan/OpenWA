@@ -9710,27 +9710,35 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'REUSED' }));
       });
 
-      it('gives up its place in the chat order while it waits, as no change is ever announced there', async () => {
-        const ticket = () => ({ reserve: jest.fn(() => false), holdUntil: jest.fn(), drop: jest.fn(), revoked: false });
-        const delivery = ticket();
-        const change = ticket();
-        const tickets = [delivery, change];
-        await startWith({
-          admitInbound: jest.fn(() => tickets.shift()),
-          onMessage: jest.fn(() => ({ settled: answer().promise })),
-          onMessageEdited: jest.fn(),
-        });
-        const open = holdReads([1]);
-        deliverReuse();
-        await settleAll();
-        realEdit();
-        await settleAll();
+      it.each(kinds)(
+        'gives up its place in the chat order while a %s waits, as no change is ever announced there',
+        async kind => {
+          const ticket = () => ({
+            reserve: jest.fn(() => false),
+            holdUntil: jest.fn(),
+            drop: jest.fn(),
+            revoked: false,
+          });
+          const delivery = ticket();
+          const change = ticket();
+          const tickets = [delivery, change];
+          await startWith({
+            admitInbound: jest.fn(() => tickets.shift()),
+            onMessage: jest.fn(() => ({ settled: answer().promise })),
+            ...sessionCallbacks(),
+          });
+          const open = holdReads([1]);
+          deliverReuse();
+          await settleAll();
+          changeFrom(kind, PEER);
+          await settleAll();
 
-        expect(change.drop).toHaveBeenCalledTimes(1);
-        expect(delivery.drop).not.toHaveBeenCalled();
-        open(1);
-        await settleAll();
-      });
+          expect(change.drop).toHaveBeenCalledTimes(1);
+          expect(delivery.drop).not.toHaveBeenCalled();
+          open(1);
+          await settleAll();
+        },
+      );
 
       describe('that does not finish', () => {
         beforeEach(() => {
