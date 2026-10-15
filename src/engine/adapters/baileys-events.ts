@@ -336,10 +336,16 @@ export class BaileysEvents {
    * copy of such an id may be a duplicate the session is about to call another message's (the real one
    * lives in its table only), so a change that reads as foreign to it is the session's to judge, which
    * it does against the row (see targetsForeignMessage). An entry lasts at most OUTCOME_HOLD_MS. It begins
-   * when the delivery is handed on: a change that arrives while the delivery is still being processed
-   * (limiter wait, media download) is judged against the key it arrived under, as before.
+   * when the delivery is handed on. A change that arrives while the delivery is still being processed
+   * (limiter wait, repeat check, media download) and reads as foreign to its key waits for that processing
+   * to end, then is judged again with this hold in place.
    */
   private readonly outcomesPending = new Map<string, number>();
+
+  /** How many changes wait for a delivery to be processed (see awaitDelivery); the rest are judged at once. */
+  private changesParked = 0;
+
+  private static readonly CHANGES_PARKED_LIMIT = 64;
 
   /**
    * How many conflicting copies have been removed from the store. A read of the store that was out
@@ -626,7 +632,9 @@ export class BaileysEvents {
         const pm = normalizedRoot?.protocolMessage;
         if (pm?.type === b.proto.Message.ProtocolMessage.Type.REVOKE) {
           // A group admin may revoke anyone's message, so only the chat is checked there.
-          if (await this.targetsForeignMessage(pm.key?.id, msg.key, !remoteJid.endsWith('@g.us'))) return;
+          if (await this.targetsForeignMessage(pm.key?.id, msg.key, !remoteJid.endsWith('@g.us'), undefined, opts)) {
+            return;
+          }
           const from = msg.key.fromMe === true ? this.host.normalizedSelfJid() : chatJid;
           const to = msg.key.fromMe === true ? chatJid : this.host.normalizedSelfJid();
           const revoked: RevokedMessage = {
@@ -659,7 +667,7 @@ export class BaileysEvents {
           return;
         }
         if (pm?.type === b.proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
-          if (await this.targetsForeignMessage(pm.key?.id, msg.key, true)) return;
+          if (await this.targetsForeignMessage(pm.key?.id, msg.key, true, undefined, opts)) return;
           // MESSAGE_EDIT wraps the message's latest content. Normalize that INNER content separately
           // so captions, type, PTT, media presence and mentions describe the edited value rather than
           // the outer protocol envelope.
@@ -723,7 +731,7 @@ export class BaileysEvents {
       // --- reactionMessage: don't emit onMessage ---
       if (contentType === 'reactionMessage') {
         const rm = normalizedRoot?.reactionMessage;
-        if (await this.targetsForeignMessage(rm?.key?.id, msg.key, false, 'reaction')) return;
+        if (await this.targetsForeignMessage(rm?.key?.id, msg.key, false, 'reaction', opts)) return;
         const event: ReactionEvent = {
           messageId: rm?.key?.id ?? '',
           chatId: this.host.toNeutralJid(chatJid),
@@ -926,16 +934,17 @@ export class BaileysEvents {
    * What an edit, revoke or reaction targets: the stored copy, or the one still being processed. The
    * in-flight copy is taken BEFORE the store is read, because an original that finishes while the read is
    * out has left the map and may have been written after the read began, which would find it in neither.
+   * `processing` settles once that copy's processing has, and is set only when the copy is the in-flight one.
    */
   private async readTarget(
     messageId: string,
     purpose: string,
-  ): Promise<{ key: WAMessageKey; message: WAMessage['message'] } | null> {
+  ): Promise<{ key: WAMessageKey; message: WAMessage['message']; processing?: Promise<void> } | null> {
     const processing = this.inboundInFlight.get(messageId);
     const stored = await this.readStoredMessage(messageId, purpose);
     if (stored) return { key: stored.key, message: stored.message };
     const inFlight = processing ?? this.inboundInFlight.get(messageId);
-    return inFlight ? { key: inFlight.key, message: inFlight.message } : null;
+    return inFlight ? { key: inFlight.key, message: inFlight.message, processing: inFlight.done } : null;
   }
 
   /**
@@ -1061,8 +1070,11 @@ export class BaileysEvents {
    * or, with `checkAuthor`, one somebody else sent. WhatsApp clients ignore such a message, but Baileys
    * emits it as-is and the projector updates the stored row by id alone, so a contact who knows an id
    * could rewrite or erase that message. A message still being processed is checked against the key
-   * it arrived under. Fails open: with no original at all, or ids that cannot be compared (see
-   * {@link differentWaIds}), the event goes through as it always has.
+   * it arrived under, but only once its processing has ended when that key reads the change as foreign:
+   * the delivery may be a duplicate of a message the session holds under another chat, and until it has
+   * been stored its key proves nothing about which of the two the change names (see awaitDelivery).
+   * Fails open: with no original at all, or ids that cannot be compared (see {@link differentWaIds}),
+   * the event goes through as it always has.
    *
    * A reaction to a message the account sent to a broadcast list is exempt: Baileys files the
    * own-device copy under the list jid (`<id>@broadcast`), while each recipient reacts from their 1:1
@@ -1076,28 +1088,86 @@ export class BaileysEvents {
     key: WAMessageKey,
     checkAuthor: boolean,
     kind?: 'reaction',
+    inbound?: { ticket?: InboundTicket; yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R> },
   ): Promise<boolean> {
     if (!targetId) return false;
-    for (let attempt = 0; ; attempt++) {
+    // The key of the delivery in flight a wait was for, and the removals counted when it began.
+    let waitedFor: { key: WAMessageKey; removals: number } | undefined;
+    let reread = false;
+    for (;;) {
       const removals = this.copyRemovals;
       // A message still being processed has no stored copy yet, but the projector may already hold it
       // (PostgreSQL), so its own key is checked instead.
-      const original = (await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets'))?.key;
+      const found = await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets');
+      // Nothing to read once the delivery was processed means it was never stored (no store, a failed
+      // write), so the key it arrived under still stands, unless a conflicting copy went meanwhile: then
+      // the delivery was not the message the id names.
+      const original =
+        found?.key ?? (waitedFor && this.copyRemovals === waitedFor.removals ? waitedFor.key : undefined);
       if (!original || !this.readsAsForeign(original, key, checkAuthor, kind)) return false;
       // The session has not said yet whether the delivery that stored this copy is the message it holds
       // under the id or a duplicate of another one. Its own judgement stands in: it holds the message and
       // checks the change against its key and against the stored row, and the stored copy does not.
       if (this.outcomesPending.has(targetId)) return false;
+      // No copy is stored yet, only the key of the delivery being processed, and the real message may be
+      // one the store never held (the session has it by row), so this key cannot say which of the two the
+      // change names. Judged again once the delivery has been stored and handed on, which is when the
+      // hold above and the removal of a conflicting copy answer it. Only a delivery the session reports
+      // on counts: a status post is held by no entry there, and an own send gets no receipt.
+      if (!waitedFor && found?.processing && original.remoteJid !== 'status@broadcast' && original.fromMe !== true) {
+        waitedFor = { key: original, removals };
+        if (await this.awaitDelivery(found.processing, inbound)) continue;
+      }
       // A conflicting copy went while the store was read, and the read may have returned it: it ends the
       // hold only once removed, so the read is the one that can no longer be told from the real copy. Read
       // again, with the copy gone, rather than drop the real author's change against it.
-      if (attempt === 0 && this.copyRemovals !== removals) continue;
+      if (!reread && this.copyRemovals !== removals) {
+        reread = true;
+        continue;
+      }
       this.host.logger.warn('Dropping an edit, revoke or reaction aimed at a message from another chat or author', {
         msgId: key.id ?? 'unknown',
         targetId,
         remoteJid: key.remoteJid,
       });
       return true;
+    }
+  }
+
+  /**
+   * Park a change until the delivery it reads as foreign to has been processed: at most three media
+   * download deadlines (a wait for room in the session, then the download), and never more than
+   * CHANGES_PARKED_LIMIT changes at once. Resolves true once it did wait, false when it was not parked.
+   * A parked change holds nothing the delivery needs. It gives up its inbound slot, which the delivery
+   * may have to take back after waiting for room, and its place in its chat's order, which a change
+   * never uses (it is not announced as a message), so it neither starves the delivery nor holds back the
+   * messages that follow it in the chat.
+   */
+  private async awaitDelivery(
+    done: Promise<void>,
+    inbound?: { ticket?: InboundTicket; yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R> },
+  ): Promise<boolean> {
+    if (this.changesParked >= BaileysEvents.CHANGES_PARKED_LIMIT) return false;
+    this.changesParked++;
+    try {
+      inbound?.ticket?.drop();
+      const wait = (): Promise<void> =>
+        new Promise<void>(resolve => {
+          let wake: (() => void) | null = resolve;
+          // Whichever comes first; the reaction left on a delivery that never settles holds nothing.
+          const end = (): void => {
+            clearTimeout(timer);
+            wake?.();
+            wake = null;
+          };
+          const timer = setTimeout(end, 3 * inboundMediaTimeoutMs());
+          timer.unref();
+          done.then(end, end);
+        });
+      await (inbound?.yieldSlot ? inbound.yieldSlot(wait) : wait());
+      return true;
+    } finally {
+      this.changesParked--;
     }
   }
 

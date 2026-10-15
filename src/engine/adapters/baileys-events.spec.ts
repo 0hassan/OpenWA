@@ -1294,6 +1294,69 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
   });
 
+  describe("another member's encrypted edit of an original still being processed", () => {
+    // The original's own repeat check is the first read of the store. The store keeps what is put into it, so
+    // a read made after the original was processed finds its copy.
+    const withHeldReads = (held: number[], answered: Promise<{ conflict?: boolean } | undefined>) => {
+      const opens = new Map<number, () => void>();
+      const gates = new Map<number, Promise<void>>();
+      for (const index of held) gates.set(index, new Promise<void>(resolve => opens.set(index, resolve)));
+      let copy: WAMessage | null = null;
+      let reads = 0;
+      const setups = setup({
+        getStoredMessage: async (id: string) => {
+          if (id !== 'ORIG1') return null;
+          const seen = copy;
+          await gates.get(++reads);
+          return seen;
+        },
+        putStoredMessage: (msg: WAMessage) => {
+          copy = msg;
+          return Promise.resolve();
+        },
+        getOnMessage: () => jest.fn(() => ({ settled: answered })),
+      });
+      return { ...setups, open: (index: number) => opens.get(index)!() };
+    };
+    const forged = (): WAMessage =>
+      editEnvelope({
+        participant: reactor,
+        sealed: seal('Message Edit', { target: 'ORIG1', author, modifier: reactor }, editPlain),
+      });
+
+    it('is held until the original is stored, then left to the session while the original has no answer', async () => {
+      const { events, onMessageEdited, open } = withHeldReads([1], new Promise(() => undefined));
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+      await flush();
+      events.handleMessagesUpsert({ type: 'notify', messages: [forged()] });
+      await flush();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+
+      open(1);
+      await flush();
+      expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
+    });
+
+    it('is dropped once the original is stored and answered as the message', async () => {
+      // Reads, in order: the original's repeat check, the reveal's, the guard's, and the guard's second.
+      const answered = Promise.resolve({ conflict: false });
+      const { events, onMessageEdited, recordMessageEdit, open } = withHeldReads([1, 4], answered);
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+      await flush();
+      events.handleMessagesUpsert({ type: 'notify', messages: [forged()] });
+      await flush();
+      open(1);
+      await flush();
+      open(4);
+      await flush();
+
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(recordMessageEdit).not.toHaveBeenCalled();
+    });
+  });
+
   describe('leaves an encrypted edit unapplied when', () => {
     it.each([
       ['another member sealed it for the message', () => editEnvelope({ participant: reactor })],
