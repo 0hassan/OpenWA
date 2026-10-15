@@ -20,6 +20,30 @@
  *   found. Use it for a check that something IS run, by substring or by a pattern that is not anchored
  *   at the end. It is never a stand-in for the exact reading elsewhere: it would hide the `curl` in
  *   `echo x<U+00A0>#; curl y | sh`, and turn `npm test<U+00A0># || true` into a clean `npm test`.
+ *
+ * The question a site asks picks the reading. "Is it run" reads conservatively; a count, a first occurrence,
+ * an order, a rule every occurrence must obey and a line compared whole read exactly, and a check that asks
+ * both says so by running both. A site that is added or changed goes in this table.
+ *
+ *   ci-privilege-gate.spec.ts
+ *     invoked scripts: non-root smoke, backup smoke, a Python installer    conservative  is it run
+ *     id-token jobs hold `npm publish` and `imagetools create`             conservative  is it run
+ *     id-token allow-lists, templates, installers, `${{` in a comment      exact         every line it may run
+ *     publish tarball, `npm pack` and `npm publish` order, `python -m build` exact       first occurrence
+ *     java deploy line                                                     both          is there, every one
+ *     branch tag: the smoke runs, the last step runs the re-point          conservative  is it run
+ *     branch tag: which steps may re-point                                 exact         every one that may
+ *     branch tag: the metadata-action tag rules                            exact         must not be there
+ *     dashboard unit tests: one step runs them, all that may are bounded   both          is there, every one
+ *     PHP mirror: who runs phpunit, the push line                          both          is there, every one
+ *     PHP mirror: what the job holding the token may run                   exact         every one that may
+ *   release-gate-parity.spec.ts
+ *     gate commands and whole steps compared with ci.yml                   exact         line equality
+ *     postgres lane names its spec, verify-published, engine libraries     conservative  is it run
+ *     image-scan ref output, promote decision lines                        both          is there, is the only one
+ *     check:audit requires the audit                                       both          is there, every one
+ *     audit trees                                                          exact         order, uniqueness
+ *     attest before every re-point                                         both          is there, every one
  */
 export function executableLines(run: string): string {
   return withoutComments(run, /[ \t;&|(]/);

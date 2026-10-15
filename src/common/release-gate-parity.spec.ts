@@ -191,6 +191,8 @@ describe('release gate jobs can stop the publish jobs', () => {
     expect(executableLinesConservative(resolve?.run ?? '')).toContain(
       'echo "ref=ghcr.io/${REPO,,}:smoke-${{ github.run_id }}" >> "$GITHUB_OUTPUT"',
     );
+    // Written once: a later write to the same output wins, so none may be hidden behind a '#'.
+    expect(executableLines(resolve?.run ?? '').split('GITHUB_OUTPUT')).toHaveLength(2);
   });
 
   // Promotion re-points tags, and is safe only because every one of them is checked to resolve to the
@@ -310,19 +312,50 @@ describe('one prerelease rule across the GitHub Release and the image channels',
  */
 describe('the release and weekly audits fail when the audit cannot run', () => {
   type AuditStep = { run?: string; env?: Record<string, unknown> };
-  const auditSteps = (file: string): AuditStep[] => {
-    const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
-      jobs?: Record<string, { steps?: AuditStep[] }>;
-    };
-    return Object.values(workflow.jobs ?? {})
+  type AuditWorkflow = { jobs?: Record<string, { steps?: AuditStep[] }> };
+  const auditWorkflow = (file: string): AuditWorkflow =>
+    yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as AuditWorkflow;
+  // The steps that run the audit as a reading sees it. Both are used, for different questions: a step that
+  // CERTAINLY runs it (conservative) has to be there, and every step that MAY run it (exact) is held to the
+  // rule, or an extra one written as `echo x<U+00A0>#; npm run check:audit` takes the skip unseen.
+  const auditSteps = (workflow: AuditWorkflow, read: (run: string) => string): AuditStep[] =>
+    Object.values(workflow.jobs ?? {})
       .flatMap(job => job.steps ?? [])
-      .filter(step => executableLinesConservative(step.run ?? '').includes('npm run check:audit'));
-  };
+      .filter(step => read(step.run ?? '').includes('npm run check:audit'));
+  const unrequired = (workflow: AuditWorkflow): string[] => [
+    ...(auditSteps(workflow, executableLinesConservative).length === 0 ? ['no step certainly runs the audit'] : []),
+    ...auditSteps(workflow, executableLines)
+      .filter(step => step.env?.CHECK_AUDIT_REQUIRED !== '1')
+      .map(() => 'a step that may run the audit does not require it'),
+  ];
 
   it.each(['release.yml', 'security-scan.yml'])('%s requires the audit', file => {
-    const steps = auditSteps(file);
-    expect(steps.length).toBeGreaterThan(0);
-    expect(steps.filter(step => step.env?.CHECK_AUDIT_REQUIRED !== '1')).toEqual([]);
+    expect(unrequired(auditWorkflow(file))).toEqual([]);
+  });
+
+  it.each(['release.yml', 'security-scan.yml'])('%s: refuses an audit step that does not require it', file => {
+    const copy = (): AuditWorkflow => JSON.parse(JSON.stringify(auditWorkflow(file))) as AuditWorkflow;
+    const anyJob = (workflow: AuditWorkflow): AuditStep[] => Object.values(workflow.jobs ?? {})[0].steps ?? [];
+    // Each blank the shell reads as part of a word: the `#` after it is no comment, so the audit after the `;`
+    // runs, with the skip.
+    for (const code of [0xa0, 0x3000, 0xfeff, 0x2028]) {
+      const blank = String.fromCharCode(code);
+      const extra = copy();
+      anyJob(extra).push({ run: `echo x${blank}#; npm run check:audit` });
+      expect([code, unrequired(extra)]).toEqual([code, ['a step that may run the audit does not require it']]);
+    }
+    // The same line behind a space is a comment, and the real step with its requirement taken off is not.
+    const comment = copy();
+    anyJob(comment).push({ run: 'echo x # npm run check:audit' });
+    expect(unrequired(comment)).toEqual([]);
+    const lax = copy();
+    for (const step of auditSteps(lax, executableLines)) step.env = { CHECK_AUDIT_REQUIRED: '0' };
+    expect(unrequired(lax)).toEqual(['a step that may run the audit does not require it']);
+    // A step that only names the audit behind such a blank and a `#` is no audit: one must really run.
+    const named = copy();
+    for (const step of auditSteps(named, executableLines))
+      step.run = `echo x${String.fromCharCode(0xa0)}# npm run check:audit`;
+    expect(unrequired(named)).toContain('no step certainly runs the audit');
   });
 
   it('docs/10 describes the weekly audit as required, not as the merge job', () => {
@@ -333,9 +366,10 @@ describe('the release and weekly audits fail when the audit cannot run', () => {
   });
 
   it('ci.yml keeps the skip for merges', () => {
-    const steps = auditSteps('ci.yml');
-    expect(steps.length).toBeGreaterThan(0);
-    expect(steps.some(step => step.env?.CHECK_AUDIT_REQUIRED !== undefined)).toBe(false);
+    const ci = auditWorkflow('ci.yml');
+    expect(auditSteps(ci, executableLinesConservative).length).toBeGreaterThan(0);
+    // Every step that may run it, not only one that certainly does.
+    expect(auditSteps(ci, executableLines).some(step => step.env?.CHECK_AUDIT_REQUIRED !== undefined)).toBe(false);
   });
 });
 
@@ -472,20 +506,61 @@ describe('released images carry a verifiable build-provenance attestation', () =
   const grant = (perms: Perms, key: string): string | undefined =>
     typeof perms === 'object' && perms !== null ? perms[key] : undefined;
 
-  // Attesting first means a failed attestation leaves no release tag published.
+  // Attesting first means a failed attestation leaves no release tag published. Every step that MAY re-point
+  // a tag (exact) follows the attestation, and one CERTAINLY does (conservative); a re-point written as
+  // `echo x<U+00A0>#; docker buildx imagetools create ...` is a command that runs, so it is held to the order.
+  const attestProblems = (steps: AttestStep[]): string[] => {
+    const attest = steps.findIndex(step =>
+      /^actions\/attest(?:-build-provenance)?@[0-9a-f]{40}\b/.test(step.uses ?? ''),
+    );
+    const certain = steps.some(step => executableLinesConservative(step.run ?? '').includes('imagetools create'));
+    const may = steps.flatMap((step, i) => (executableLines(step.run ?? '').includes('imagetools create') ? [i] : []));
+    return [
+      ...(attest === -1 ? ['no attest step'] : []),
+      ...(certain ? [] : ['no step certainly re-points the tags']),
+      ...may.filter(i => i <= attest).map(i => `step ${i + 1} may re-point a tag before the attestation`),
+    ];
+  };
+
   it('promote attests the tested digest before re-pointing the release tags', () => {
     const promote = jobs().promote;
     const steps = promote?.steps ?? [];
     expect(steps.length).toBeGreaterThan(1);
+    expect(attestProblems(steps)).toEqual([]);
     const attest = steps.findIndex(step =>
       /^actions\/attest(?:-build-provenance)?@[0-9a-f]{40}\b/.test(step.uses ?? ''),
     );
-    const retag = steps.findIndex(step => executableLinesConservative(step.run ?? '').includes('imagetools create'));
-    expect(attest).toBeGreaterThan(-1);
-    expect(retag).toBeGreaterThan(attest);
     expect(steps[attest].with?.['subject-digest']).toContain('needs.docker.outputs.digest');
     expect(grant(promote?.permissions, 'id-token')).toBe('write');
     expect(grant(promote?.permissions, 'attestations')).toBe('write');
+  });
+
+  it('refuses a re-point that may run before the attestation, or that is only named', () => {
+    const copy = (): AttestStep[] => JSON.parse(JSON.stringify(jobs().promote?.steps ?? [])) as AttestStep[];
+    const attestAt = copy().findIndex(step => (step.uses ?? '').startsWith('actions/attest'));
+    const REPOINT = 'docker buildx imagetools create --tag t s';
+    for (const code of [0xa0, 0x3000, 0xfeff, 0x2028]) {
+      const steps = copy();
+      steps.splice(attestAt, 0, { run: `echo x${String.fromCharCode(code)}#; ${REPOINT}` });
+      expect([code, attestProblems(steps)]).toEqual([
+        code,
+        [`step ${attestAt + 1} may re-point a tag before the attestation`],
+      ]);
+    }
+    // The attestation moved behind the re-point.
+    const moved = copy();
+    moved.push(...moved.splice(attestAt, 1));
+    expect(attestProblems(moved)).toEqual([
+      expect.stringMatching(/^step \d+ may re-point a tag before the attestation$/),
+    ]);
+    // A re-point that is only named behind a blank and a `#` is no re-point at all.
+    const named = copy();
+    for (const step of named) {
+      if (executableLines(step.run ?? '').includes('imagetools create')) {
+        step.run = `echo x${String.fromCharCode(0xa0)}# ${REPOINT}`;
+      }
+    }
+    expect(attestProblems(named)).toEqual(['no step certainly re-points the tags']);
   });
 
   // The signing grant stays on the one job that needs it, away from the build and test jobs.

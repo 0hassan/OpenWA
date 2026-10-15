@@ -1778,12 +1778,32 @@ describe('a job that can mint a publish credential pins global npm installs and 
 
   // npm reads `dir/file.tgz` as the GitHub shorthand user/repo (hosted-git-info is tried before the file
   // check), and the pinned npm refuses git specs by default, so a tarball is named by an absolute path.
-  it('js-sdk-release.yml: the publish step names the tarball in a form npm reads as a file', () => {
-    const runs = oidcJobRuns('js-sdk-release.yml', executableLinesConservative)
+  const publishTarget = (source: string | OidcWorkflow): string => {
+    // The first publish the shell may run is the one held to the form, so the lines are read exactly.
+    const runs = oidcJobRuns(source)
       .map(({ run }) => run)
       .join('\n');
-    const target = /\bnpm publish\s+(?:-\S+\s+)*(\S+)/.exec(runs)?.[1] ?? '';
-    expect(target).toMatch(/^(?:"?\$\{?GITHUB_WORKSPACE\}?"?|)\/[^\s]*\.tgz$/);
+    return /\bnpm publish\s+(?:-\S+\s+)*(\S+)/.exec(runs)?.[1] ?? '';
+  };
+  const FILE_FORM = /^(?:"?\$\{?GITHUB_WORKSPACE\}?"?|)\/[^\s]*\.tgz$/;
+
+  it('js-sdk-release.yml: the publish step names the tarball in a form npm reads as a file', () => {
+    expect(publishTarget('js-sdk-release.yml')).toMatch(FILE_FORM);
+  });
+
+  it('js-sdk-release.yml: refuses a first publish that names a path npm reads as a repository', () => {
+    const copy = (run: string): OidcWorkflow => {
+      const workflow = JSON.parse(JSON.stringify(loadOidcWorkflow('js-sdk-release.yml'))) as OidcWorkflow;
+      stepsOf(workflow, 'publish').unshift({ run });
+      return workflow;
+    };
+    // A `#` after a blank the shell does not skip is no comment, so the publish after the `;` runs first.
+    for (const blank of [...BLANK_LOOKALIKES, String.fromCharCode(0x2028)]) {
+      expect(publishTarget(copy(`echo x${blank}#; npm publish package/x.tgz`))).not.toMatch(FILE_FORM);
+    }
+    expect(publishTarget(copy('npm publish package/x.tgz'))).not.toMatch(FILE_FORM);
+    // Behind a space it is a comment, which is not a publish.
+    expect(publishTarget(copy('echo x # npm publish package/x.tgz'))).toMatch(FILE_FORM);
   });
 
   // The caches a setup action restores are written by jobs that run third-party test code. A job that
@@ -1897,9 +1917,8 @@ describe('a publish job takes the artifact its build job uploads', () => {
   const indexOfUses = (job: FlowJob, action: string): number =>
     (job.steps ?? []).findIndex(step => (step.uses ?? '').startsWith(`${action}@`));
   const dirOf = (target: string | undefined): string => (target ?? '').replace(/\/+$/, '');
-  // Only a presence reading is made of it: the publish line is read for the tarball it names.
-  const runsOf = (job: FlowJob): string =>
-    (job.steps ?? []).map(step => executableLinesConservative(step.run ?? '')).join('\n');
+  // Read exactly: the first publish line the shell may run is the one that has to name the artifact.
+  const runsOf = (job: FlowJob): string => (job.steps ?? []).map(step => executableLines(step.run ?? '')).join('\n');
 
   it('js-sdk-release.yml: the tarball npm pack writes is the one the publish step names', () => {
     const { build, publish } = jobsOf('js-sdk-release.yml');
@@ -1920,9 +1939,7 @@ describe('a publish job takes the artifact its build job uploads', () => {
     expect(target).toBe(
       `"$GITHUB_WORKSPACE"/${dirOf(download.with?.path)}/${path.posix.basename(upload.with?.path ?? '')}`,
     );
-    const publishAt = (publish.steps ?? []).findIndex(step =>
-      /^npm publish\b/m.test(executableLinesConservative(step.run ?? '')),
-    );
+    const publishAt = (publish.steps ?? []).findIndex(step => /^npm publish\b/m.test(executableLines(step.run ?? '')));
     expect(indexOfUses(publish, 'actions/download-artifact')).toBeLessThan(publishAt);
   });
 
@@ -2060,21 +2077,74 @@ describe('ci.yml moves the branch image tag only for the tested branch head', ()
     expect(executableLines(tagRules.join('\n'))).not.toContain('type=ref,event=branch');
   });
 
-  it('re-points the branch tag as the last step, after the smoke, on push, only at the branch head', () => {
-    const steps = dockerSteps();
-    const smoke = steps.findIndex(step =>
-      executableLinesConservative(step.run ?? '').includes('smoke-test-non-root.sh'),
-    );
-    const retag = steps.findIndex(step => executableLinesConservative(step.run ?? '').includes('imagetools create'));
-    expect(smoke).toBeGreaterThan(-1);
-    expect(retag).toBeGreaterThan(smoke);
+  // What is wrong with the order of a docker job's steps. Two readings, because the two halves are different
+  // questions: the smoke has to be a step that CERTAINLY runs the script (conservative), and every step the
+  // shell MAY run `imagetools create` in has to be the last one (exact), or a re-point written as
+  // `echo x<U+00A0>#; docker buildx imagetools create ...` runs ahead of the smoke while this reads green.
+  const branchTagProblems = (steps: CiStep[]): string[] => {
+    const last = steps.length - 1;
+    const runs = (read: (run: string) => string): string[] => steps.map(step => read(step.run ?? ''));
+    const smoke = runs(executableLinesConservative).findIndex(run => run.includes('smoke-test-non-root.sh'));
+    const mayRepoint = runs(executableLines).flatMap((run, i) => (run.includes('imagetools create') ? [i] : []));
+    const found: string[] = [];
+    if (smoke === -1) found.push('no step runs the non-root smoke');
     // Last, so every check added to this job gates the branch tag, not only the non-root smoke.
-    expect(retag).toBe(steps.length - 1);
-    const step = steps[retag];
-    expect(step.if ?? '').toContain("github.event_name == 'push'");
-    const run = executableLinesConservative(step.run ?? '');
-    expect(run).toMatch(/git ls-remote/);
-    expect(run).toMatch(/GITHUB_SHA/);
+    for (const i of mayRepoint) if (i !== last) found.push(`step ${i + 1} may re-point the branch tag, before the end`);
+    const retag = steps[last];
+    if (!executableLinesConservative(retag?.run ?? '').includes('imagetools create')) {
+      found.push('the last step does not re-point the branch tag');
+    } else if (smoke > -1 && smoke >= last) {
+      found.push('the smoke does not run before the re-point');
+    }
+    if (!(retag?.if ?? '').includes("github.event_name == 'push'")) found.push('the re-point is not push only');
+    const run = executableLinesConservative(retag?.run ?? '');
+    if (!/git ls-remote/.test(run)) found.push('the re-point does not look up the branch head');
+    if (!/GITHUB_SHA/.test(run)) found.push('the re-point does not compare the commit');
+    return found;
+  };
+
+  it('re-points the branch tag as the last step, after the smoke, on push, only at the branch head', () => {
+    expect(branchTagProblems(dockerSteps())).toEqual([]);
+  });
+
+  // The same checks on copies of the steps as they ship, each edited the way a change would be.
+  it('refuses a re-point that runs before the smoke or is only named behind a #', () => {
+    const copy = (): CiStep[] => JSON.parse(JSON.stringify(dockerSteps())) as CiStep[];
+    const smokeAt = dockerSteps().findIndex(step => (step.run ?? '').includes('smoke-test-non-root.sh'));
+    const REPOINT = 'docker buildx imagetools create --tag ghcr.io/x/openwa:main ghcr.io/x/openwa@sha256:0';
+    const early = (run: string): CiStep[] => {
+      const steps = copy();
+      steps.splice(smokeAt, 0, { run });
+      return steps;
+    };
+    // Each blank the shell reads as part of a word, and the line separator of YAML 1.1: the `#` after one is no
+    // comment, so the re-point after the `;` is a command that runs before the smoke.
+    for (const blank of [...BLANK_LOOKALIKES, String.fromCharCode(0x2028)]) {
+      const code = `U+${blank.charCodeAt(0).toString(16)}`;
+      expect([code, branchTagProblems(early(`echo x${blank}#; ${REPOINT}`))]).toEqual([
+        code,
+        [`step ${smokeAt + 1} may re-point the branch tag, before the end`],
+      ]);
+    }
+    // The same line behind a space is a comment: nothing runs, so the job is as it ships.
+    expect(branchTagProblems(early(`echo x # ${REPOINT}`))).toEqual([]);
+    // Only the exact reading finds a re-point that is named and not run, so the last step must run it.
+    const mention = copy();
+    mention[mention.length - 1].run = `echo x${BLANK_LOOKALIKES[0]}# ${REPOINT}\ngit ls-remote\n$GITHUB_SHA`;
+    expect(branchTagProblems(mention)).toEqual(['the last step does not re-point the branch tag']);
+    // A step after the re-point, and a re-point that no longer follows the smoke.
+    const appended = copy();
+    appended.push({ run: 'echo done' });
+    expect(branchTagProblems(appended)).toEqual([
+      `step ${appended.length - 1} may re-point the branch tag, before the end`,
+      'the last step does not re-point the branch tag',
+      'the re-point is not push only',
+      'the re-point does not look up the branch head',
+      'the re-point does not compare the commit',
+    ]);
+    const swapped = copy();
+    swapped[smokeAt].run = 'echo skipped';
+    expect(branchTagProblems(swapped)).toEqual(['no step runs the non-root smoke']);
   });
 });
 
@@ -2128,16 +2198,53 @@ describe('the dashboard unit tests are bounded', () => {
     expect(scripts.test).toBe('npm run test:unit');
   });
 
+  type TimedStep = Step & { 'timeout-minutes'?: unknown };
+  type TimedWorkflow = { jobs?: Record<string, { steps?: TimedStep[] }> };
+  // One step runs the tests, and its bound is a number. Both readings, since each half is its own question:
+  // a step that certainly runs them has to be there once, and every step the shell may run them in has to
+  // carry the bound, or a second one written as `echo x<U+00A0>#; npm run test:unit` runs with none.
+  const unitTestProblems = (workflow: TimedWorkflow): string[] => {
+    const steps = Object.values(workflow.jobs ?? {}).flatMap(job => job.steps ?? []);
+    const running = (read: (run: string) => string): TimedStep[] =>
+      steps.filter(step => read(step.run ?? '').includes('npm run test:unit'));
+    const found: string[] = [];
+    const certain = running(executableLinesConservative).length;
+    if (certain !== 1) found.push(`${certain} steps certainly run the unit tests, expected 1`);
+    const may = running(executableLines);
+    if (may.length > 1) found.push(`${may.length} steps may run the unit tests, expected 1`);
+    for (const step of may) {
+      if (typeof step['timeout-minutes'] !== 'number') found.push(`a step that may run the unit tests has no bound`);
+    }
+    return found;
+  };
+
   it.each(['ci.yml', 'release.yml'])('%s bounds the dashboard unit test step', file => {
-    type TimedStep = Step & { 'timeout-minutes'?: unknown };
-    const workflow = yaml.load(fs.readFileSync(path.join(workflowDir, file), 'utf8')) as {
-      jobs?: Record<string, { steps?: TimedStep[] }>;
-    };
-    const steps = Object.values(workflow.jobs ?? {})
-      .flatMap(job => job.steps ?? [])
-      .filter(step => executableLinesConservative(step.run ?? '').includes('npm run test:unit'));
-    expect(steps.length).toBe(1);
-    expect(steps[0]['timeout-minutes']).toEqual(expect.any(Number));
+    expect(unitTestProblems(workflowOf(file))).toEqual([]);
+  });
+
+  it.each(['ci.yml', 'release.yml'])('%s: refuses a second unit test run or one that is not bounded', file => {
+    const copy = (): TimedWorkflow => JSON.parse(JSON.stringify(workflowOf(file))) as TimedWorkflow;
+    const dashboard = (workflow: TimedWorkflow): TimedStep[] => workflow.jobs?.dashboard?.steps ?? [];
+    for (const blank of [...BLANK_LOOKALIKES, String.fromCharCode(0x2028)]) {
+      const code = `U+${blank.charCodeAt(0).toString(16)}`;
+      const second = copy();
+      dashboard(second).push({ run: `echo x${blank}#; npm run test:unit` });
+      expect([code, unitTestProblems(second)]).toEqual([
+        code,
+        ['2 steps may run the unit tests, expected 1', 'a step that may run the unit tests has no bound'],
+      ]);
+    }
+    // The step that runs them, with its bound taken off, and with the command only named behind a `#`.
+    const unbounded = copy();
+    for (const step of dashboard(unbounded)) {
+      if ((step.run ?? '').includes('npm run test:unit')) delete step['timeout-minutes'];
+    }
+    expect(unitTestProblems(unbounded)).toEqual(['a step that may run the unit tests has no bound']);
+    const named = copy();
+    for (const step of dashboard(named)) {
+      if ((step.run ?? '').includes('npm run test:unit')) step.run = `echo x${BLANK_LOOKALIKES[0]}# npm run test:unit`;
+    }
+    expect(unitTestProblems(named)).toEqual(['0 steps certainly run the unit tests, expected 1']);
   });
 });
 
