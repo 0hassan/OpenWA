@@ -1610,11 +1610,40 @@ test('scrolling up from the nudged position retries the page, and a second failu
   assert.equal(requests.count, 2);
 });
 
+// The echo of the page's own write and a scroll of the reader's are told apart by the position they leave: a
+// reader's scroll that reaches the top in the same frame as the echo is one scroll event, and it is not the echo.
+test('a scroll to the top that arrives with the echo of the nudge is the reader asking again', () => {
+  const { requests, scroller, fail } = threadWithOlderPageOut(0);
+  fail();
+  scroller.scrollTo(0);
+  scroller.deliver();
+  assert.equal(requests.count, 1);
+});
+
+// The echo is skipped once. A scroll of the reader's that comes after it and happens to land on the nudged
+// position is a request like any other.
+test('only the echo of the nudge is skipped: a later scroll that lands on the same position retries', () => {
+  const { requests, scroller, fail } = threadWithOlderPageOut(0);
+  fail();
+  scroller.deliver();
+  assert.equal(requests.count, 0);
+
+  scroller.scrollTo(50);
+  scroller.deliver();
+  assert.equal(requests.count, 1);
+  scroller.scrollTo(1);
+  scroller.deliver();
+  assert.equal(requests.count, 2);
+});
+
 test('a reader who has scrolled away from the top is not moved by a failure', () => {
   // Under the threshold the next scroll retries as it is, so there is nothing to make room for.
   for (const { start, next, retries } of [
     { start: 400, next: 150, retries: 0 },
     { start: 30, next: 10, retries: 1 },
+    // Any position above zero is a position to scroll up from, whole pixels or not.
+    { start: 1, next: 0, retries: 1 },
+    { start: 0.5, next: 0, retries: 1 },
   ]) {
     const { requests, scroller, fail } = threadWithOlderPageOut(start);
     fail();
