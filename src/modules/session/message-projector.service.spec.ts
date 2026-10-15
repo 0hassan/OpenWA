@@ -395,6 +395,23 @@ describe('MessageProjector', () => {
 
         expect(eventsGateway.emitMessageRevoked).toHaveBeenCalledTimes(1);
       });
+
+      it('writes and announces nothing when the engine is retired while the row is read', async () => {
+        let answer!: () => void;
+        messageRepository.findOne.mockReturnValue(
+          new Promise(resolve => (answer = () => resolve({ chatId: 'c1@c.us', direction: 'incoming' }))),
+        );
+
+        projector.handleMessageRevoked('s1', engine, revoke, { fromMe: false });
+        await settle();
+        engines.delete('s1');
+        answer();
+        await settle();
+
+        expect(messageRepository.update).not.toHaveBeenCalled();
+        expect(webhookService.dispatch).not.toHaveBeenCalled();
+        expect(eventsGateway.emitMessageRevoked).not.toHaveBeenCalled();
+      });
     });
 
     it('ignores an event from an engine that no longer owns the session', async () => {
