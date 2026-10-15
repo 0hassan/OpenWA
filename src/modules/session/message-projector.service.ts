@@ -101,6 +101,14 @@ const refOf = (m: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>): Stored
   author: m.author,
 });
 
+/** What a delivery claims to be, as the rule that refuses a change aimed at a stored row reads it. */
+const claimOf = (m: Pick<IncomingMessage, 'chatId' | 'fromMe' | 'author'>): MutationSource => ({
+  kind: 'edit',
+  chatId: m.chatId,
+  fromMe: m.fromMe,
+  author: m.author,
+});
+
 /** A message not yet written, and the changes that reached it meanwhile (see inboundInFlight). */
 interface InFlightEntry {
   // What a quote of it may lend, as the hook chain last left it. Never the message itself: a repeat
@@ -650,12 +658,11 @@ export class MessageProjector {
    * not prove a difference, says nothing and the engine keeps its copy.
    */
   private async judgeRepeat(id: string, message: InboundMessageData): Promise<InboundOutcome | undefined> {
-    const reason = await this.mutationProjector.foreignRowReason(id, storableWaMessageId(message.id) ?? '', {
-      kind: 'edit',
-      chatId: message.chatId,
-      fromMe: message.fromMe,
-      author: message.author,
-    });
+    const reason = await this.mutationProjector.foreignRowReason(
+      id,
+      storableWaMessageId(message.id) ?? '',
+      claimOf(message),
+    );
     if (!reason) return undefined;
     this.logger.warn('Dropping a message that reuses the id of a different stored message', {
       sessionId: id,
@@ -721,7 +728,7 @@ export class MessageProjector {
     // in which case nothing dispatched yet, so dispatch fail-open (without the row-bound hook), and
     // that row still has to take a revoke or edit that arrived in flight.
     if (outcome.landed === 'dup' && !outcome.retried) return 'repeat';
-    if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, incoming.id);
+    if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, incoming.id, false, claimOf(incoming));
     return { dbMessage, persisted: false };
   }
 
@@ -791,16 +798,51 @@ export class MessageProjector {
    * insert finds the row itself. Reactions are only stored here; their event already went out. A row
    * inserted cleared is cleared again, in case a change raced the insert, but `message:persisted`
    * already carried it cleared and does not fire twice.
+   *
+   * `lostInsert`, set when the delivery's insert lost to a row under the id, says what the delivery claims
+   * to be. That row may be the message itself (its first attempt committed before the error) or another
+   * message's (an id reused from another chat): the changes go to it only if it is the message.
    */
-  private applyChangesMadeInFlight(id: string, waMessageId: string, insertedCleared = false): void {
+  private applyChangesMadeInFlight(
+    id: string,
+    waMessageId: string,
+    insertedCleared = false,
+    lostInsert?: MutationSource,
+  ): void {
     const pending = waMessageId ? this.inboundInFlight.get(`${id}:${waMessageId}`) : undefined;
-    const ackStatus = pending?.ackStatus;
+    if (
+      !pending ||
+      (!pending.ackStatus && !pending.revoked && pending.editedBody === undefined && !pending.reactions)
+    ) {
+      return;
+    }
+    if (!lostInsert) {
+      this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared);
+      return;
+    }
+    void this.mutationProjector.foreignRowReason(id, waMessageId, lostInsert).then(reason => {
+      if (!reason) return this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared);
+      this.logger.warn('Not applying the changes of a message to the stored message that holds its id', {
+        sessionId: id,
+        messageId: waMessageId,
+        reason,
+      });
+    });
+  }
+
+  private writeChangesMadeInFlight(
+    id: string,
+    waMessageId: string,
+    pending: InFlightEntry,
+    insertedCleared: boolean,
+  ): void {
+    const { ackStatus } = pending;
     if (ackStatus) {
       void this.advanceAck(id, waMessageId, ackStatus).catch(err =>
         this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)),
       );
     }
-    if (!pending?.revoked && pending?.editedBody === undefined && !pending?.reactions) return;
+    if (!pending.revoked && pending.editedBody === undefined && !pending.reactions) return;
     this.enqueueMessageMutation(id, waMessageId, async () => {
       if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
       try {
@@ -1054,7 +1096,7 @@ export class MessageProjector {
       const outcome = await this.insertWithRetry(id, engine, dbMessage, 'outgoing');
       if (outcome.landed === 'stale') return;
       // The REST writer may have won either attempt; its row still takes the echo's pending changes.
-      if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, outgoing.id);
+      if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, outgoing.id, false, claimOf(outgoing));
       if (outcome.landed === 'yes') {
         this.applyChangesMadeInFlight(id, outgoing.id, insertedCleared);
         // Fire-and-forget, mirroring onMessage: plugin providers (search etc.) see phone-

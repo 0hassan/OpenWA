@@ -1616,6 +1616,97 @@ describe('MessageProjector (inbound projection)', () => {
       ]);
     });
 
+    // The retry's duplicate may be the message's own row (its first attempt committed before the error) or
+    // the row of another message under a reused id. What was recorded for the message goes only to a row
+    // that is it.
+    describe('a retry that meets the row of another message', () => {
+      const own = '15550001111@c.us';
+      const foreign = { chatId: '15559998888@c.us', direction: 'incoming', author: null };
+      const same = { chatId: own, direction: 'incoming', author: null };
+      let releaseHook!: () => void;
+
+      /** Holds the hook chain, lets `record` reach the message meanwhile, then runs the failing retry. */
+      const retried = async (
+        record: (engine: IWhatsAppEngine) => void,
+        row: Record<string, unknown>,
+        echo = false,
+      ): Promise<unknown[]> => {
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        messageRepository.insert.mockRejectedValueOnce(busy()).mockRejectedValueOnce(dup());
+        hookManager.execute.mockImplementationOnce(async (_event: string, data: unknown) => {
+          await new Promise<void>(resolve => (releaseHook = resolve));
+          return { continue: true, data };
+        });
+        const incoming = makeIncoming({ fromMe: echo });
+        if (echo) projector.handleOwnSendEcho(SESSION_ID, engine, incoming);
+        else projector.handleInboundMessage(SESSION_ID, engine, incoming);
+        await flush();
+        record(engine);
+        await flush();
+        // The row holding the id appears only now: nothing stored it when the change was recorded.
+        messageRepository.findOne.mockResolvedValue(row);
+        messageRepository.update.mockClear();
+        releaseHook();
+        await flush();
+        await jest.advanceTimersByTimeAsync(PERSIST_RETRY_DELAY_MS);
+        await flush();
+        return messageRepository.update.mock.calls as unknown[];
+      };
+
+      const changes: Array<[string, (engine: IWhatsAppEngine) => void]> = [
+        [
+          'a revoke',
+          engine =>
+            projector.handleMessageRevoked(SESSION_ID, engine, { id: 'wamid.1', chatId: own } as never, {
+              fromMe: false,
+            }),
+        ],
+        [
+          'an edit',
+          () =>
+            projector.applyMessageEditQueued(SESSION_ID, {
+              messageId: 'wamid.1',
+              body: 'late fix',
+              chatId: own,
+              fromMe: false,
+            } as never),
+        ],
+        ['an ack', engine => projector.handleMessageAck(SESSION_ID, engine, 'wamid.1', 'read')],
+        [
+          'a reaction',
+          () =>
+            projector.applyReactionQueued(SESSION_ID, {
+              messageId: 'wamid.1',
+              chatId: own,
+              reaction: 'ok',
+              senderId: 'x@c.us',
+            }),
+        ],
+      ];
+
+      it.each(changes)('leaves that row alone when the message was given %s', async (_name, record) => {
+        expect(await retried(record, foreign)).toEqual([]);
+      });
+
+      it.each(changes)('still writes %s onto the row when it is the message itself', async (_name, record) => {
+        expect((await retried(record, same)).length).toBeGreaterThan(0);
+      });
+
+      it('leaves the row of another message alone for an own-send echo too', async () => {
+        const record = (engine: IWhatsAppEngine): void =>
+          projector.handleMessageRevoked(SESSION_ID, engine, { id: 'wamid.1', chatId: own } as never, { fromMe: true });
+        expect(await retried(record, foreign, true)).toEqual([]);
+      });
+
+      it('writes the echo changes onto the row a REST send stored under the other dialect', async () => {
+        const record = (engine: IWhatsAppEngine): void =>
+          projector.handleMessageRevoked(SESSION_ID, engine, { id: 'wamid.1', chatId: own } as never, { fromMe: true });
+        const row = { chatId: '15550001111@s.whatsapp.net', direction: 'outgoing', author: null };
+        expect((await retried(record, row, true)).length).toBeGreaterThan(0);
+      });
+    });
+
     it('drops the retry when the engine is retired while it waits', async () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
