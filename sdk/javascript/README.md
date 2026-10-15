@@ -1,6 +1,6 @@
 # @rmyndharis/openwa
 
-This document describes `main`. Send idempotency, webhook failure redrive, message-window filters, poll choices, and last-message types are unreleased additions after SDK 0.5.1 and require the corresponding server changes after OpenWA 0.24.0.
+This document describes `main`. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name are unreleased additions after SDK 0.5.1 and require the corresponding server changes after OpenWA 0.24.0.
 
 Official JavaScript/TypeScript SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
@@ -29,7 +29,7 @@ const client = new OpenWAClient({
 const session = await client.sessions.create({ name: 'my-session' });
 await client.sessions.start(session.id);
 
-// Link the account before sending: scan sessions.getQrCode or use sessions.requestPairingCode,
+// Link the account before sending: scan sessions.getQrCode (or use sessions.requestPairingCode for a number with no linked session),
 // then wait for status 'ready'. An unlinked session answers the send with 409.
 const result = await client.messages.sendText(session.id, {
   chatId: '628123456789@c.us',
@@ -122,9 +122,12 @@ Cutting a release:
    version and never trigger an SDK publish.
 3. The workflow audits the SDK lockfile (`npm audit --audit-level=high`),
    re-runs the SDK's tests, typecheck, build and dual CJS/ESM smoke check
-   (packaging plus requests through each build's client), then publishes.
-   The published tarball is the one those gates passed, not a later
-   rebuild.
+   (packaging plus requests through each build's client), then packs the
+   tarball. A second job, the only one that can mint the publish credential,
+   uploads that tarball and runs no project code: the published bytes are the
+   ones those gates passed, not a later rebuild. It receives the tarball as a
+   workflow artifact and passes its absolute path to `npm publish`, which takes
+   one file, so a missing or a second tarball fails the release.
 
 ## License
 
@@ -140,4 +143,4 @@ Supply a unique caller-owned key for one logical send and reuse it when retrying
 await client.messages.sendText(sessionId, { chatId: '628123@c.us', text: 'Hello' }, 'order-123');
 ```
 
-The gateway supports text, image, video, audio, document, sticker, location, contact, template, poll, reply and forward sends. Completed calls replay their response; pending or uncertain outcomes return 409, and a changed request with the same key returns 422. The gateway retains keys for 24 hours. Bulk, product and button operations have no such guarantee. Omit the key to preserve existing behavior.
+The gateway supports text, image, video, audio, document, sticker, location, contact, template, poll, reply and forward sends. Completed calls replay their response; a 409 with the error `code` `IDEMPOTENCY_KEY_IN_PROGRESS` means the first request is still running, so retry with the same key later; a 409 `IDEMPOTENCY_OUTCOME_UNKNOWN` means the message may have been sent, so check the chat and, if it did not arrive, send again with a new key (the `code` tells them apart from the 409 for a session that is not connected). A changed request with the same key returns 422. The gateway retains keys for 24 hours. Bulk, product and button operations have no such guarantee. Omit the key to preserve existing behavior.

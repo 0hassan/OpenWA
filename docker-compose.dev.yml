@@ -24,6 +24,7 @@ services:
       - CHOWN
       - DAC_OVERRIDE
       - FOWNER
+      - KILL # dumb-init: forward signals to the openwa process after gosu drops uid
       - SETGID
       - SETUID
     read_only: true

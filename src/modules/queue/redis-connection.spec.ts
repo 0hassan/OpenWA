@@ -1,3 +1,5 @@
+import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
+import Redis from 'ioredis';
 import {
   ingressWorkerConcurrency,
   producerConnectWaitMs,
@@ -20,6 +22,10 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
     // producer-only fast-fail from the shared connection and threw "Stream isn't writeable" on a blip.
     const opts = workerConnectionOptions() as unknown as Record<string, unknown>;
     expect(opts.enableOfflineQueue).toBeUndefined();
+  });
+
+  it('sets no command timeout: the Worker blocks on Redis by design', () => {
+    expect((workerConnectionOptions() as unknown as Record<string, unknown>).commandTimeout).toBeUndefined();
   });
 
   it('reads host/port/username/password/connectTimeout from env with safe defaults', () => {
@@ -55,6 +61,83 @@ describe('workerConnectionOptions (webhook Worker connection)', () => {
     process.env = { ...ORIGINAL_ENV, REDIS_TLS: 'true' };
     expect(workerConnectionOptions().tls).toEqual({});
     expect(queueConnectionOptions()).toMatchObject({ tls: {}, enableOfflineQueue: false });
+  });
+});
+
+/** The command names in a chunk of RESP arrays, lower-cased: `*2\r\n$3\r\nGET\r\n$1\r\na\r\n` is ['get']. */
+function commandNames(chunk: string): string[] {
+  const lines = chunk.split('\r\n');
+  const names: string[] = [];
+  for (let i = 0; i < lines.length;) {
+    const header = /^\*(\d+)$/.exec(lines[i]);
+    if (!header) {
+      i += 1;
+      continue;
+    }
+    names.push((lines[i + 2] ?? '').toLowerCase());
+    i += 1 + Number(header[1]) * 2;
+  }
+  return names;
+}
+
+describe('queueConnectionOptions on a Redis that stops answering', () => {
+  // The socket stays open and nothing comes back, as in a network partition or a frozen Redis process.
+  // Without a deadline every producer call (the queue add of a delivery, a job lookup) then never settles,
+  // so the dispatch slot or the ingress request holding it never frees and the fallback never runs.
+  let server: Server;
+  let sockets: Socket[];
+  let answering: boolean;
+  let client: Redis;
+
+  beforeEach(async () => {
+    sockets = [];
+    answering = true;
+    server = createServer(socket => {
+      sockets.push(socket);
+      socket.on('error', () => undefined);
+      socket.on('data', chunk => {
+        if (!answering) return;
+        // One reply per command in the chunk, enough RESP for the handshake and a nil GET.
+        for (const name of commandNames(chunk.toString())) {
+          socket.write(
+            name === 'hello' ? "-ERR unknown command 'hello'\r\n" : name === 'client' ? '+OK\r\n' : '$-1\r\n',
+          );
+        }
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    client = new Redis({
+      ...queueConnectionOptions(),
+      host: '127.0.0.1',
+      port: (server.address() as AddressInfo).port,
+      enableReadyCheck: false,
+      retryStrategy: () => null,
+    });
+    // With no offline queue, a command issued before the connect rejects at once.
+    await new Promise(resolve => client.once('ready', resolve));
+  });
+
+  afterEach(async () => {
+    client.disconnect();
+    sockets.forEach(socket => socket.destroy());
+    await new Promise(resolve => server.close(resolve));
+  });
+
+  it('rejects a command that gets no reply, instead of holding its caller for good', async () => {
+    await expect(client.get('first')).resolves.toBeNull();
+    answering = false;
+
+    // Read off the options, with the 2 s the producer is held to as the fallback of a build without one.
+    const budget = (queueConnectionOptions() as { commandTimeout?: number }).commandTimeout ?? 2000;
+    const outcome = await Promise.race([
+      client.get('second').then(
+        () => 'answered',
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+      new Promise<string>(resolve => setTimeout(resolve, budget + 1500, 'still waiting')),
+    ]);
+
+    expect(outcome).toMatch(/timed out/i);
   });
 });
 
@@ -139,6 +222,21 @@ describe('producerReady', () => {
     const never = producerReady(queueReadyAfter());
     await expect(settledAfter(never, 4999)).resolves.toBe('pending');
     await expect(settledAfter(never, 1)).resolves.toBe('rejected: Redis has not connected within 5000ms');
+  });
+
+  it('keeps the connect window from holding the process, so a wait open at shutdown cannot delay the exit', async () => {
+    process.env = { ...ORIGINAL_ENV, REDIS_CONNECT_TIMEOUT_MS: '1000' };
+    const startTimer = jest.spyOn(global, 'setTimeout');
+
+    const ready = producerReady(queueReadyAfter());
+    const timers = startTimer.mock.results.map(result => result.value as NodeJS.Timeout);
+    startTimer.mockRestore();
+
+    expect(timers).toHaveLength(1);
+    expect(timers[0].hasRef()).toBe(false);
+    const expired = expect(ready).rejects.toThrow('Redis has not connected within 1000ms');
+    await jest.advanceTimersByTimeAsync(1000);
+    await expired;
   });
 
   it('caps the wait at the Node timer ceiling instead of overflowing to 1 ms', async () => {

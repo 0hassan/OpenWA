@@ -44,6 +44,7 @@ import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
 import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
+import { describeAudio } from './baileys-audio-probe';
 
 /**
  * Messaging-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -134,6 +135,43 @@ export async function loadSharp() {
   } catch (error) {
     throw new InternalServerErrorException(
       `Sticker conversion is unavailable: sharp could not load (${error instanceof Error ? error.message : String(error)}).`,
+    );
+  }
+}
+
+/**
+ * Refuse SVG input process-wide. OpenWA never needs it, yet a sticker and the thumbnail of every outbound
+ * image hand caller-supplied bytes to sharp, which autodetects SVG and parses it with librsvg: a native
+ * decoder with a memory-safety record that is the largest attack surface on those two routes. The block is
+ * libvips state shared by every importer of sharp, Baileys included, so it has to be set before the first
+ * decode and not by the first sticker. Best effort: a sharp that cannot load has nothing to block, and the
+ * routes that need it report that themselves (see loadSharp).
+ */
+export async function blockSvgDecoding(): Promise<void> {
+  try {
+    (await import('sharp')).default.block({ operation: ['VipsForeignLoadSvg'] });
+  } catch {
+    // sharp could not load, so there is no decoder to block.
+  }
+}
+
+/**
+ * Refuse a picture the image decoder cannot read, before Baileys hands it to that decoder: its own
+ * conversion rejects such a file with an error nothing maps, which reached the client as a 500. An SVG is
+ * one since blockSvgDecoding, and so is a file that is no image at all. Only the header is read. A sharp
+ * that cannot load is left to the library, which reports that itself.
+ */
+export async function assertReadableImage(data: Buffer): Promise<void> {
+  const sharp = await import('sharp').then(
+    module => module.default,
+    () => undefined,
+  );
+  if (!sharp) return;
+  try {
+    await sharp(data).metadata();
+  } catch (error) {
+    throw new BadRequestException(
+      `The picture could not be read as an image (SVG is not accepted): ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -443,13 +481,16 @@ export class BaileysMessaging {
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), 'audio/mpeg');
+    const ptt = media.ptt ?? false;
     return this.sendContent(
       chatId,
       // Audio carries no caption, so a mention here tags the recipient through contextInfo without
       // visible @text. It is still forwarded: the route accepts `mentions` (SendAudioMessageDto
       // extends SendMediaMessageDto) and whatsapp-web.js sends it, so dropping it here made the same
       // request notify participants on one engine and silently not on the other.
-      { audio: data, mimetype, ptt: media.ptt ?? false, ...this.withMentions(media.mentions) },
+      // The duration and a voice note's waveform come from describeAudio, never from Baileys, which
+      // would read the file in this process.
+      { audio: data, mimetype, ptt, ...(await describeAudio(data, ptt)), ...this.withMentions(media.mentions) },
       await this.quoteOption(media.quotedMessageId),
     );
   }

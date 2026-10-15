@@ -167,6 +167,9 @@ version: '3.8'
 services:
   app:
     image: ghcr.io/rmyndharis/openwa:latest
+    # Teardown takes up to 63 s with every datastore on; raise this by the amount SHUTDOWN_DELAY_MS or
+    # WEBHOOK_SHUTDOWN_DRAIN_MS exceeds its default, or Docker's 10 s default kills the container mid-teardown.
+    stop_grace_period: 75s
     deploy:
       replicas: 1
       resources:
@@ -378,7 +381,7 @@ LOG_FORMAT=json
 # DATABASE_NAME=openwa
 # DATABASE_USERNAME=user
 # DATABASE_PASSWORD=pass
-# DATABASE_POOL_SIZE=20
+# DATABASE_POOL_SIZE=10
 # DATABASE_SSL=false
 
 # ===========================================

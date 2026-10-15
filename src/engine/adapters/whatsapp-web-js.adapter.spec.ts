@@ -26,6 +26,8 @@ import { resolveEngineInitTimeoutMs } from '../engine-init-timeout';
 import * as fs from 'fs';
 import { createHash } from 'crypto';
 import * as path from 'path';
+import * as ts from 'typescript';
+import * as vm from 'vm';
 import * as qrcode from 'qrcode';
 import { InternalServerErrorException, UnprocessableEntityException, BadRequestException } from '@nestjs/common';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
@@ -3655,6 +3657,48 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
     expect(msg.media?.omitted).toBeUndefined();
   });
 
+  it('logs an own-send echo whose base cannot be built instead of dropping it silently', async () => {
+    // The echo runs in an async function whose rejection holdWhileProcessing consumes, so an unreadable
+    // `to` (a WhatsApp Web build renaming the field) vanished without a log line or the unhandled-rejection
+    // metric. The incoming handler logs the same defect; the echo must too. It is not admitted either, since
+    // its chat is unknown, so there is no ticket to settle.
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-echo-unreadable',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const logger = (adapter as unknown as { logger: { error: jest.Mock } }).logger;
+    const errorSpy = jest.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onMessageCreate = jest.fn();
+    const admitInbound = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onMessageCreate, admitInbound };
+    (adapter as unknown as { setupEventHandlers: () => void }).setupEventHandlers();
+
+    client.emit('message_create', {
+      id: { _serialized: 'OWN_UNREADABLE_1' },
+      from: '628123@c.us',
+      to: undefined,
+      body: '',
+      type: 'chat',
+      timestamp: 1700000074,
+      fromMe: true,
+      hasMedia: false,
+      hasQuotedMsg: false,
+    });
+    await new Promise(r => setImmediate(r));
+    await new Promise(r => setImmediate(r));
+
+    expect(onMessageCreate).not.toHaveBeenCalled();
+    expect(admitInbound).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith('Error processing outgoing message', expect.stringContaining('endsWith'));
+  });
+
   it('does not download the media of an own status post echo', async () => {
     // The echo consumer drops status posts, so the blob was fetched in full, held an inbound limiter
     // slot, and was thrown away.
@@ -5790,6 +5834,34 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     expect(toBase64).not.toHaveBeenCalled();
   });
 
+  it.each<[string, { stage?: string; resolvedStage?: string }, string]>([
+    ['a page that does not offer the media yet', { stage: 'REUPLOADING' }, 'null'],
+    ['media whose resolve step fails', { stage: 'INIT', resolvedStage: 'ERROR_MISSING' }, 'undefined'],
+  ])('says why %s leaves the omitted marker', async (_case, page, answer) => {
+    pageServing(3, page);
+    const warn = jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+
+    await expect(cap(understated(runInPage))).resolves.toEqual(expect.objectContaining({ omitted: true }));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'Inbound media download returned nothing; emitting the omitted marker',
+      expect.objectContaining({ msgId: 'M1', answer }),
+    );
+  });
+
+  it('looks the message up by an id the WhatsApp Web build stores under $1', async () => {
+    // A bare `_serialized` read sends the page an empty id, which finds no message and comes back null.
+    pageServing(3);
+    const renamed = { ...understated(runInPage), id: { $1: 'M1' } };
+
+    await expect(cap(renamed)).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      data: Buffer.alloc(3).toString('base64'),
+    });
+    expect(runInPage).toHaveBeenCalledWith(downloadMediaInPage, { msgId: 'M1', maxBytes: 1000 });
+  });
+
   it('still inlines a payload within the cap', async () => {
     pageServing(3);
 
@@ -5797,6 +5869,24 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
       mimetype: 'video/mp4',
       filename: 'clip.mp4',
       data: Buffer.alloc(3).toString('base64'),
+    });
+  });
+
+  // The comparison in the page and the one that plans the download are each one character from the wrong one.
+  it('inlines a payload of exactly the cap and drops one a byte over it', async () => {
+    pageServing(1000);
+    await expect(cap(understated(runInPage))).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      data: Buffer.alloc(1000).toString('base64'),
+    });
+
+    pageServing(1001);
+    await expect(cap(understated(runInPage))).resolves.toEqual({
+      mimetype: 'video/mp4',
+      filename: 'clip.mp4',
+      omitted: true,
+      sizeBytes: 1001,
     });
   });
 
@@ -5834,11 +5924,86 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
     });
   });
 
-  it('rethrows any other download error', async () => {
-    const failure = Object.assign(new Error('boom'), { status: 500 });
+  // puppeteer rebuilds a page exception from its class name alone, and WhatsApp Web's classes are minified
+  // (`t: t`), so the page names the rejection itself, with the build it came from.
+  it('names any other download error with its WhatsApp Web build', async () => {
+    const failure = Object.assign(new Error('bad type'), { name: 'InvalidMediaFileType', status: 500 });
     pageServing(5, { decrypt: () => Promise.reject(failure) });
+    (g.window as { Debug?: unknown }).Debug = { VERSION: '2.3000.1' };
 
-    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toBe(failure);
+    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(
+      'InvalidMediaFileType: bad type (WhatsApp Web 2.3000.1)',
+    );
+  });
+
+  // WhatsApp Web rejects with more than errors: a bare string, or an object that carries only a status
+  // (upstream reads e.status === 404), and the operator reads the warning that names it.
+  it.each([
+    ['a bare string', 'download refused', 'download refused (WhatsApp Web 2.3000.1)'],
+    ['an object with only a status', { status: 500 }, 'status 500 (WhatsApp Web 2.3000.1)'],
+    [
+      'an object with a name and a status',
+      { name: 'MediaError', status: 410 },
+      'MediaError: status 410 (WhatsApp Web 2.3000.1)',
+    ],
+    ['nothing at all', undefined, 'unknown rejection (WhatsApp Web 2.3000.1)'],
+  ])('names a rejection that is %s', async (_label, rejection, expected) => {
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+    pageServing(5, { decrypt: () => Promise.reject(rejection) });
+    (g.window as { Debug?: unknown }).Debug = { VERSION: '2.3000.1' };
+
+    await expect(downloadMediaInPage({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(expected);
+  });
+
+  // puppeteer ships downloadMediaInPage into the page as Function#toString(), so it can reach nothing of this
+  // module: a constant or helper it closes over resolves in Node, where every test above runs it, and throws
+  // ReferenceError in the page, where every download then fails. The source is compiled from the file with the
+  // project's compiler options and run in a context holding only the page's window and AbortController. The
+  // loaded copy is not used: coverage instruments it with counters the page does not have.
+  function shippedToPage(): typeof downloadMediaInPage {
+    const root = path.join(__dirname, '..', '..', '..');
+    const { config } = ts.readConfigFile(path.join(root, 'tsconfig.json'), name => fs.readFileSync(name, 'utf8')) as {
+      config: { compilerOptions: Record<string, unknown> };
+    };
+    const { options } = ts.convertCompilerOptionsFromJson({ ...config.compilerOptions, module: 'CommonJS' }, root);
+    const file = fs.readFileSync(path.join(__dirname, 'wwebjs-messaging.ts'), 'utf8');
+    const start = file.indexOf('async function downloadMediaInPage');
+    expect(start).toBeGreaterThan(-1);
+    const compiled = ts.transpileModule(file.slice(start, file.indexOf('\n}\n', start) + 2), {
+      compilerOptions: options,
+    }).outputText;
+    // Declared alongside whatever helpers the compiler hoisted, then sent as its own text, as puppeteer does.
+    const declared = vm.runInNewContext(`${compiled}\n;downloadMediaInPage`) as { toString(): string };
+    return vm.runInNewContext(`(${declared.toString()})`, {
+      window: (globalThis as unknown as { window: unknown }).window,
+      AbortController,
+    }) as typeof downloadMediaInPage;
+  }
+
+  const clip = { mimetype: 'video/mp4', filename: 'clip.mp4' };
+  it.each<[string, number, PageCase, unknown]>([
+    ['a payload within the cap', 3, {}, { ...clip, sizeBytes: 3, data: Buffer.alloc(3).toString('base64') }],
+    ['a payload over the cap', 5000, {}, { ...clip, sizeBytes: 5000, data: '' }],
+    ['unresolved media', 3, { stage: 'INIT' }, { ...clip, sizeBytes: 3, data: Buffer.alloc(3).toString('base64') }],
+    ['a message the page does not hold', 3, { msgId: 'M2' }, null],
+    ['media the phone is re-uploading', 3, { stage: 'REUPLOADING' }, null],
+    ['media whose resolve step fails', 3, { stage: 'INIT', resolvedStage: 'ERROR_MISSING' }, undefined],
+    ['media still fetching after the resolve step', 3, { stage: 'INIT', resolvedStage: 'FETCHING' }, undefined],
+    ['media the server no longer has', 3, { decrypt: notFound }, undefined],
+  ])('reaches nothing outside the page when it runs there: %s', async (_case, bytes, page, expected) => {
+    pageServing(bytes, page);
+
+    await expect(shippedToPage()({ msgId: page.msgId ?? 'M1', maxBytes: 1000 })).resolves.toEqual(expected);
+  });
+
+  it('reaches nothing outside the page when a download fails with any other error', async () => {
+    const failure = Object.assign(new Error('boom'), { status: 500 });
+    pageServing(3, { decrypt: () => Promise.reject(failure) });
+    (g.window as { Debug?: unknown }).Debug = { VERSION: '2.3000.1' };
+
+    await expect(shippedToPage()({ msgId: 'M1', maxBytes: 1000 })).rejects.toThrow(
+      'Error: boom (WhatsApp Web 2.3000.1)',
+    );
   });
 
   // downloadMediaInPage copies the page side of Message#downloadMedia. The fingerprint pins the whole
@@ -5872,9 +6037,21 @@ describe('WhatsAppWebJsAdapter inbound media measured in the page', () => {
       'f70f7cd8393bc60149745b7901bb96eece28a2940eaee4725e71ce615cf9ec73',
     );
     expect(literals(own)).toEqual(literals(upstream));
-    // The copy measures the decrypted length instead of reporting the declared `size`.
+    // The copy measures the decrypted length instead of reporting the declared `size`, and names a
+    // rejection from its `name`, class, `message`, `status` and the page's `Debug.VERSION`.
     expect(members(own)).toEqual(
-      [...members(upstream).filter(m => m !== 'size'), 'byteLength', 'maxBytes', 'msgId', 'sizeBytes'].sort(),
+      [
+        ...members(upstream).filter(m => m !== 'size'),
+        'byteLength',
+        'maxBytes',
+        'msgId',
+        'sizeBytes',
+        'name',
+        'message',
+        'constructor',
+        'Debug',
+        'VERSION',
+      ].sort(),
     );
     expect(call(own, 'downloadMedia')).toBe(call(upstream, 'downloadMedia'));
     expect(call(own, 'downloadAndMaybeDecrypt')).toBe(

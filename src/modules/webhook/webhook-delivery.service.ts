@@ -979,12 +979,35 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * A finished job: its worker settled the delivery, so an outbox row still queued for it is a leftover and
+   * not a stranded send. Anything unreadable answers false here; isQueueJobPending already holds the
+   * conservative answer for that case.
+   */
+  async hasQueueJobCompleted(deliveryId: string): Promise<boolean> {
+    if (!this.webhookQueue) return false;
+    try {
+      await producerReady(this.webhookQueue);
+      const job = await this.webhookQueue.getJob(deliveryId);
+      return job ? (await job.getState()) === 'completed' : false;
+    } catch (error) {
+      this.logger.warn('Could not inspect queued webhook delivery', { deliveryId, error: String(error) });
+      return false;
+    }
+  }
+
   /** Finish a spent outbox replay budget only after its failure record is durable. */
   async recordReplayExhaustion(row: ReplayableDelivery, url: string): Promise<boolean> {
     const existing = await this.failureRepository.count({
       where: { webhookId: row.webhookId, idempotencyKey: row.idempotencyKey, attempts: MoreThan(0) },
     });
     if (existing > 0) return true;
+    // A delivery that was shed or refused before sending was recorded with its reason as an attempts-0 row,
+    // which the terminal row below replaces; keep that reason on it.
+    const unsent = await this.failureRepository.findOne({
+      where: { webhookId: row.webhookId, idempotencyKey: row.idempotencyKey, attempts: 0 },
+      select: { id: true, lastError: true },
+    });
     const recorded = await recordWebhookDeliveryFailure(this.failureRepository, this.logger, {
       webhookId: row.webhookId,
       sessionId: row.sessionId,
@@ -992,7 +1015,9 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       url,
       idempotencyKey: row.idempotencyKey,
       attempts: Math.max(1, row.attempts),
-      lastError: 'Webhook replay budget exhausted',
+      lastError: unsent?.lastError
+        ? `Webhook replay budget exhausted; last error: ${unsent.lastError}`
+        : 'Webhook replay budget exhausted',
       ...(this.keepsFailurePayload() ? { payload: row.payload } : {}),
     });
     if (recorded === true) incrementWebhookDeliveryFailures();

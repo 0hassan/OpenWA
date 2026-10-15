@@ -98,6 +98,7 @@
     "loadingMessages": "Chargement des messages...",
     "loadingOlderMessages": "Chargement des messages plus anciens...",
     "loadOlderMessagesError": "Impossible de charger les messages plus anciens. Faites défiler vers le haut pour réessayer.",
+    "loadOlderMessagesRetryHint": "Faites défiler vers le haut pour réessayer.",
     "noMessagesInChat": "Aucun message pour le moment. Envoyez le premier message pour commencer !",
     "downloadDocument": "Télécharger le document",
     "actions": {
@@ -708,8 +709,9 @@
     },
     "chats": {
       "label": "Accès aux discussions (facultatif)",
-      "hint": "Une discussion par ligne : un ID de groupe se terminant par @g.us, un ID de contact se terminant par @c.us ou @lid, ou un numéro de téléphone. Laissez vide pour toutes les discussions. Une clé limitée à des discussions ne peut utiliser que les routes ouvertes à ce type de clé ; le WebSocket des événements et MCP la refusent.",
-      "invalid": "Ni un ID de discussion ni un numéro de téléphone : {{value}}"
+      "hint": "Une discussion par ligne : un ID de groupe se terminant par @g.us, un ID de contact se terminant par @c.us ou @lid, ou un numéro de téléphone. Laissez vide pour toutes les discussions. Une clé limitée à des discussions ne peut utiliser que les routes ouvertes à ce type de clé ; son accès par le WebSocket des événements et MCP reste limité à ces discussions.",
+      "invalid": "Ni un ID de discussion ni un numéro de téléphone : {{value}}",
+      "tooMany": "Trop de discussions ({{count}}) : une clé peut en lister au plus {{max}}."
     },
     "expiry": {
       "label": "Expire le (facultatif)",

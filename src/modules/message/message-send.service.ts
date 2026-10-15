@@ -714,7 +714,10 @@ export class MessageSendService {
       status: data.status ?? MessageStatus.PENDING,
       metadata: quotedMessage ? { ...data.metadata, quotedMessage } : data.metadata,
     });
-    const saved = await this.messageRepository.save(message).catch(async (err: unknown) => {
+    // No transaction of its own: the unique violation handled below is routine (the own-send echo wins the
+    // race), and on SQLite's single shared connection its rollback would discard what other callers wrote
+    // while it was open, after they were told it was stored.
+    const saved = await this.messageRepository.save(message, { transaction: false }).catch(async (err: unknown) => {
       const waMessageId = message.waMessageId;
       if (!waMessageId || !isUniqueViolation(err)) throw err;
       // No `status` here on purpose. The row this collides with is the own-send echo's, inserted
@@ -813,7 +816,8 @@ export class MessageSendService {
     message.status = MessageStatus.SENT;
     message.timestamp = result.timestamp;
     try {
-      await this.messageRepository.save(message);
+      // No transaction of its own, for the reason given at the first save of this message.
+      await this.messageRepository.save(message, { transaction: false });
       // Reconcile the earlier PENDING emission with the finalized row (#906).
       this.emitPersisted(message.sessionId, message);
     } catch (persistError) {

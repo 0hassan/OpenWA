@@ -95,6 +95,7 @@
     "loadingMessages": "正在載入訊息...",
     "loadingOlderMessages": "正在載入較舊的訊息...",
     "loadOlderMessagesError": "無法載入較舊的訊息。向上捲動重試。",
+    "loadOlderMessagesRetryHint": "向上捲動重試。",
     "noMessagesInChat": "尚無訊息。傳送第一則訊息即可開始！",
     "downloadDocument": "下載文件",
     "actions": {
@@ -702,8 +703,9 @@
     },
     "chats": {
       "label": "聊天存取（選填）",
-      "hint": "每行一個聊天：以 @g.us 結尾的群組 ID、以 @c.us 或 @lid 結尾的聯絡人 ID，或電話號碼。留空則允許所有聊天。受聊天限制的金鑰只可使用對此類金鑰開放的路由；事件 WebSocket 及 MCP 會拒絕它。",
-      "invalid": "不是聊天 ID 或電話號碼：{{value}}"
+      "hint": "每行一個聊天：以 @g.us 結尾的群組 ID、以 @c.us 或 @lid 結尾的聯絡人 ID，或電話號碼。留空則允許所有聊天。受聊天限制的金鑰只可使用對此類金鑰開放的路由；透過事件 WebSocket 及 MCP 的存取亦僅限於這些聊天。",
+      "invalid": "不是聊天 ID 或電話號碼：{{value}}",
+      "tooMany": "聊天過多（{{count}}）：一個金鑰最多可列出 {{max}} 個。"
     },
     "expiry": {
       "label": "到期時間（選填）",

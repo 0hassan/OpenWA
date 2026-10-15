@@ -165,8 +165,8 @@ export class WebhookRedriveService implements OnModuleDestroy {
       ? []
       : await query
           .clone()
-          // `payload` is select: false on the entity; replay explicitly reads it.
-          .addSelect('failure.payload')
+          // The payload is not selected here: a batch holds up to MAX_WEBHOOK_REDRIVE_LIMIT rows but runs
+          // REDRIVE_CONCURRENCY replays at a time, so each body is read as its own replay starts.
           // Failed replays move behind rows with fewer attempts, so a bad receiver cannot pin a batch.
           .orderBy('failure.attempts', 'ASC')
           .addOrderBy('failure.createdAt', 'ASC')
@@ -204,21 +204,24 @@ export class WebhookRedriveService implements OnModuleDestroy {
       return;
     }
     try {
-      const outcome = await this.delivery.redeliver(
-        webhook,
-        row.sessionId,
-        row.event,
-        row.idempotencyKey,
-        row.payload ?? {},
-        { singleAttempt: true },
-      );
+      const payload = await this.readPayload(row.id);
+      if (payload === null) {
+        // The row was removed, or lost its copy, between the batch and this replay.
+        result.skipped++;
+        return;
+      }
+      const outcome = await this.delivery.redeliver(webhook, row.sessionId, row.event, row.idempotencyKey, payload, {
+        singleAttempt: true,
+      });
       if (outcome === 'delivered') result.delivered++;
       else if (outcome === 'enqueued') result.enqueued++;
       else if (outcome === 'cancelled') result.skipped++;
       else {
         result.failed++;
-        // Terminal failures update their own attempt count in the shared recorder.
-        if (outcome !== 'failed') await this.bumpAttempts(row);
+        // A failure the delivery path records raises this row's attempts itself. One it refuses before
+        // sending (a body over the payload cap after the hooks) leaves the row as it was, so the attempt is
+        // counted here; otherwise that row would head every batch.
+        if (outcome !== 'failed' || (await this.attemptsUnchanged(row))) await this.bumpAttempts(row);
       }
     } catch (error) {
       result.failed++;
@@ -229,6 +232,26 @@ export class WebhookRedriveService implements OnModuleDestroy {
       });
       await this.bumpAttempts(row);
     }
+  }
+
+  /** The stored event data of one row, or null when the row or its copy is gone. `payload` is select: false. */
+  private async readPayload(id: string): Promise<Record<string, unknown> | null> {
+    const row = await this.failureRepository
+      .createQueryBuilder('failure')
+      .select('failure.id')
+      .addSelect('failure.payload')
+      .where('failure.id = :id', { id })
+      .getOne();
+    return row?.payload ?? null;
+  }
+
+  /** Whether the row still carries the attempt count the batch read, that is, nothing recorded the failure. */
+  private async attemptsUnchanged(row: WebhookDeliveryFailure): Promise<boolean> {
+    const current = await this.failureRepository.findOne({
+      where: { id: row.id },
+      select: { id: true, attempts: true },
+    });
+    return current !== null && current.attempts === row.attempts;
   }
 
   /** Count the failed replay on the row. Best-effort: the row is already on record either way. */

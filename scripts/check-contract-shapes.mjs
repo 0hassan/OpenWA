@@ -179,7 +179,7 @@ const MAPPINGS = {
 const MINIMUM_MAPPED = {
   'sdk/javascript/src/types.ts': 85,
   'dashboard/src/services/api.ts': 22,
-  'sdk/python/openwa/types.py': 81,
+  'sdk/python/openwa/types.py': 84,
   'sdk/go': 81,
   'sdk/java': 85,
 };
@@ -236,6 +236,7 @@ const PYTHON_MAPPING = {
   CreateSessionRequest: 'CreateSessionDto',
   CreateTemplateRequest: 'CreateTemplateDto',
   CreateWebhookRequest: 'CreateWebhookDto',
+  CustomLinkPreview: 'CustomLinkPreviewDto',
   DeleteChatRequest: 'DeleteChatDto',
   DeleteMessageRequest: 'DeleteMessageDto',
   DemoteChannelAdminRequest: 'DemoteChannelAdminDto',
@@ -298,6 +299,8 @@ const PYTHON_MAPPING = {
   RedriveWebhookDeliveriesRequest: 'RedriveWebhookDeliveriesDto',
   VotePollRequest: 'VotePollDto',
   WebhookDeliveryFailure: 'WebhookDeliveryFailureDto',
+  WebhookFilterCondition: 'WebhookFilterConditionDto',
+  WebhookFilters: 'WebhookFiltersDto',
   WebhookRedriveResult: 'WebhookRedriveResultDto',
   WebhookResponse: 'WebhookResponseDto',
 };

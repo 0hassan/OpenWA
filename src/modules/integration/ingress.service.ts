@@ -209,7 +209,12 @@ export class IngressService {
     // dead-lettered, and the deliveries were simply gone. Fall through to the body hash, which is
     // exactly the "provider supplied no id" case it already exists for.
     const headerId = req.headers[dedupHeader]?.trim();
-    const deliveryId = route.dedupOn === 'body' || !headerId ? deriveDeliveryId(req) : headerId;
+    // An id past 255 characters is no id a provider mints, and the unique index it is stored under refuses an
+    // entry past about 2.7 KB on PostgreSQL with a 500, so such a header gets the body hash too.
+    const deliveryId =
+      route.dedupOn === 'body' || !headerId || headerId.length > MAX_DELIVERY_ID_LENGTH
+        ? deriveDeliveryId(req)
+        : headerId;
     // Provider request headers persist with the event (redrive/debugging); credentials must not.
     // Signature headers are re-derivable, auth material is not — redact before the first write.
     // A shared-secret route carries the instance secret itself in its declared header, and an hmac
@@ -286,6 +291,9 @@ export class IngressService {
     return ack;
   }
 }
+
+/** The longest dedup header value taken as a delivery id, kept far below the index entry limit of PostgreSQL. */
+const MAX_DELIVERY_ID_LENGTH = 255;
 
 /**
  * Derives a DETERMINISTIC delivery id when the provider sends no dedup header, so a provider retry of

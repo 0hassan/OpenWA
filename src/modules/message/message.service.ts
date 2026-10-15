@@ -693,7 +693,7 @@ export class MessageService implements PluginMessagePort {
     // Clear the stored message the same way an engine revoke does (body, media and metadata), on
     // its mutation chain. Best-effort: never rejects. No localized display string is persisted
     // here; the dashboard renders the localized "message deleted" text.
-    await this.messageProjector.recordRevoke(sessionId, dto.messageId);
+    await this.messageProjector.recordRevoke(sessionId, dto.messageId, { kind: 'revoke', chatId: dto.chatId });
   }
 
   // ========== Edit Message ==========
@@ -714,7 +714,11 @@ export class MessageService implements PluginMessagePort {
     // Best-effort: reflect the new body in the stored copy (mirrors deleteMessage's revoked flag),
     // serialized with the inbound edit/reaction writers through the session's per-message mutation
     // queue. A missing row must not fail the request — the engine edit already succeeded.
-    await this.messageProjector.recordOutboundMessageEdit(sessionId, finalDto.messageId, finalDto.body);
+    await this.messageProjector.recordOutboundMessageEdit(sessionId, finalDto.messageId, finalDto.body, {
+      kind: 'edit',
+      chatId: finalDto.chatId,
+      fromMe: true,
+    });
     return { messageId: result.id, timestamp: result.timestamp };
   }
 

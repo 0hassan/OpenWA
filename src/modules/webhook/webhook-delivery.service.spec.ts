@@ -1697,6 +1697,24 @@ describe('WebhookDeliveryService', () => {
       expect(jobData).not.toHaveProperty('replayData');
     });
 
+    it('points the outbox row of a replay at the job it queued', async () => {
+      const queueService = await buildQueueService((key: string, def?: unknown) =>
+        key === 'queue.enabled' ? true : def,
+      );
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      const webhook = createMockWebhook({ events: ['message.received'] });
+
+      await expect(queueService.redeliver(webhook, 'sess-1', 'message.received', 'stored-key', {})).resolves.toBe(
+        'enqueued',
+      );
+
+      // A replay is queued under a new delivery id, and the sweep looks a queued row's job up by the id the
+      // row holds: left on the old one it finds no job and enqueues the event again.
+      const [, , opts] = (webhookQueue.add as jest.Mock).mock.calls[0] as [string, WebhookJobData, { jobId: string }];
+      expect(outboxService.markQueued).toHaveBeenCalledTimes(1);
+      expect(outboxService.markQueued).toHaveBeenCalledWith(webhook.id, 'stored-key', opts.jobId);
+    });
+
     it('carries the pre-hook event data in the job only while payload retention is on', async () => {
       const queueService = await buildQueueService((key: string, def?: unknown) => {
         if (key === 'queue.enabled') return true;
@@ -1997,6 +2015,56 @@ describe('WebhookDeliveryService', () => {
         'https://example.com/webhook',
         expect.objectContaining({ method: 'POST' }),
       );
+    });
+
+    // The reconciler replays a queued outbox row only when the queue no longer owns it. A live job owns it
+    // (and so does a queue that cannot be read: a replay beside it would POST twice), a completed job means
+    // a worker already settled it, and only a failed, unknown or missing job leaves a replay to do.
+    describe('queued job state', () => {
+      const states: Array<[string, boolean, boolean]> = [
+        ['waiting', true, false],
+        ['active', true, false],
+        ['delayed', true, false],
+        ['prioritized', true, false],
+        ['waiting-children', true, false],
+        ['completed', false, true],
+        ['failed', false, false],
+        ['unknown', false, false],
+      ];
+      const queueOn = (key: string, def?: unknown) => (key === 'queue.enabled' ? true : def);
+
+      it.each(states)('reads a %s job as pending=%s, completed=%s', async (state, pending, completed) => {
+        const queueService = await buildQueueService(queueOn);
+        webhookQueue.getJob = jest.fn().mockResolvedValue({ getState: jest.fn().mockResolvedValue(state) });
+        expect(await queueService.isQueueJobPending('job-1')).toBe(pending);
+        expect(await queueService.hasQueueJobCompleted('job-1')).toBe(completed);
+      });
+
+      it('reads a missing job as neither pending nor completed', async () => {
+        const queueService = await buildQueueService(queueOn);
+        webhookQueue.getJob = jest.fn().mockResolvedValue(undefined);
+        expect(await queueService.isQueueJobPending('job-1')).toBe(false);
+        expect(await queueService.hasQueueJobCompleted('job-1')).toBe(false);
+      });
+
+      it('reads an unreadable queue as pending, and never as completed', async () => {
+        const queueService = await buildQueueService(queueOn);
+        webhookQueue.getJob = jest.fn().mockRejectedValue(new Error('redis down'));
+        expect(await queueService.isQueueJobPending('job-1')).toBe(true);
+        expect(await queueService.hasQueueJobCompleted('job-1')).toBe(false);
+      });
+
+      it('has no job to inspect without a queue', async () => {
+        const withoutQueue = new WebhookDeliveryService(
+          repository as never,
+          failureRepository as never,
+          { get: jest.fn((_key: string, def?: unknown) => def) } as never,
+          hookManager as never,
+          outboxService as never,
+        );
+        expect(await withoutQueue.isQueueJobPending('job-1')).toBe(false);
+        expect(await withoutQueue.hasQueueJobCompleted('job-1')).toBe(false);
+      });
     });
   });
 

@@ -162,6 +162,26 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     expect((await provider.search({ q: 'hello', chatIds: ['c2'], sessionIds: ['s1'] })).total).toBe(0);
   });
 
+  // bm25 weighs a term by how many messages the whole index holds, so the rank of a hit a session- or
+  // chat-scoped caller may read still reflects sessions and chats it may not. The hits stay ordered by it;
+  // the value is withheld.
+  it('returns no score to a session- or chat-scoped caller, and still returns one to an unscoped key', async () => {
+    const unscoped = await provider.search({ q: 'hello' });
+    expect(unscoped.hits.map(hit => typeof hit.score)).toEqual(['number', 'number']);
+
+    const chats = await provider.search({ q: 'hello', chatIds: ['c2'] });
+    expect(chats.hits.map(hit => hit.chatId)).toEqual(['c2']);
+    expect(chats.hits[0].score).toBeUndefined();
+
+    const sessions = await provider.search({ q: 'hello', sessionIds: ['s1'] });
+    expect(sessions.hits.map(hit => hit.sessionId)).toEqual(['s1']);
+    expect(sessions.hits[0].score).toBeUndefined();
+
+    // A key stored with an empty session list is unrestricted: it searches every session and keeps its score.
+    const everySession = await provider.search({ q: 'hello', sessionIds: [] });
+    expect(everySession.hits.map(hit => typeof hit.score)).toEqual(['number', 'number']);
+  });
+
   it.each([0, 1])('returns no hits or count for an empty compiled chat scope at offset %s', async offset => {
     const result = await provider.search({ q: 'hello', chatIds: [], limit: 1, offset });
     expect(result.hits).toEqual([]);
@@ -185,6 +205,17 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     for (const q of ['"unbalanced', '*foo', '(test', '262813461250071@lid', 'a@c.us']) {
       await expect(provider.search({ q })).resolves.toMatchObject({ provider: 'builtin-fts' });
     }
+  });
+
+  it('runs a repeated word once, since a repeat adds nothing under AND but costs a pass per match', async () => {
+    const query = jest.spyOn(ds, 'query');
+    const repeated = await provider.search({ q: Array.from({ length: 200 }, () => 'hello').join(' ') });
+    const single = await provider.search({ q: 'hello' });
+
+    const matched = query.mock.calls.filter(([sql]) => String(sql).includes('MATCH')).map(([, params]) => params);
+    expect((matched[0] as unknown[])[0]).toBe('"hello"');
+    expect((matched[1] as unknown[])[0]).toBe('"hello"');
+    expect(repeated.hits.map(h => h.messageId)).toEqual(single.hits.map(h => h.messageId));
   });
 
   it('keeps multi-token AND semantics after quoting', async () => {

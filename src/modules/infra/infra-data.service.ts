@@ -760,9 +760,9 @@ export class InfraDataService {
         // OTHER failure (lock, I/O, aborted tx) propagate to the transaction rollback below — a blind
         // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
         // SQLite, violating the endpoint's "replaces existing data" contract.
-        const clearTable = async (table: string): Promise<void> => {
+        const clearTable = async (table: string, where = ''): Promise<void> => {
           try {
-            await queryRunner.query(`DELETE FROM ${table}`);
+            await queryRunner.query(`DELETE FROM ${table}${where}`);
           } catch (err) {
             if (!isMissingTableError(err)) throw err;
             this.logger.debug('Skipped clearing a table that does not exist during import', { table });
@@ -932,6 +932,27 @@ export class InfraDataService {
             await ScrubNonPhoneLidMappings1786950000000.scrub(queryRunner);
           } catch (error) {
             warnings.push(`Failed to clean restored rows: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+
+        // send_idempotency_keys is not archived, so it is trimmed rather than cleared. A claim of a session
+        // this restore dropped would outlive it by up to 24 h, and a later restore that brings the id back
+        // would answer a retried send with the old stored response instead of sending it. The claims of a
+        // session the restore keeps stay: a retry of a send made before the restore still replays.
+        // Asked first rather than caught: on PostgreSQL a statement that fails, a missing table included,
+        // aborts the whole import transaction, and every later statement then fails with it.
+        if (warnings.length === 0 && (await queryRunner.hasTable('send_idempotency_keys'))) {
+          try {
+            // CAST: sessions.id is a uuid on PostgreSQL and the claim's sessionId a varchar, which `IN` does not
+            // compare.
+            await clearTable(
+              'send_idempotency_keys',
+              ' WHERE "sessionId" NOT IN (SELECT CAST("id" AS TEXT) FROM sessions)',
+            );
+          } catch (error) {
+            warnings.push(
+              `Failed to drop the send idempotency claims of removed sessions: ${error instanceof Error ? error.message : String(error)}`,
+            );
           }
         }
 

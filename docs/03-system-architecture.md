@@ -917,15 +917,27 @@ export enum EngineStatus {
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
-  onMessage?: (message: IncomingMessage) => void;
-  onMessageCreate?: (message: IncomingMessage) => void; // outgoing (incl. linked-phone sends)
-  onMessageAck?: (messageId: string, status: DeliveryStatus) => void;
-  onMessageRevoked?: (message: RevokedMessage) => void;
+  admitInbound?: (arrival: {
+    id: string;
+    chatId: string;
+    needsRoom: boolean;
+    status: boolean;
+    fromMe?: boolean;
+    author?: string;
+  }) => InboundTicket | undefined; // PostgreSQL: reserves room for a download before the emit, and holds a change to the chat, direction and author it names
+  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void | InboundReceipt; // the receipt reports { conflict: true } when the id already held another message; Baileys drops its copy
+  // A change aimed at that id that reads as foreign to the engine's copy waits for the receipt: up to 3 media download
+  // timeouts for a message still being processed, then 5 minutes for the session, at most 64 changes at once. A change
+  // that cannot wait, or is still waiting when the time runs out, is dropped.
+  onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
+  onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
+  onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;
+  onEventResponse?: (event: EventResponseEvent) => void; // an RSVP to a WhatsApp event; Baileys only
   onGroupEvent?: (event: GroupEvent) => void; // kind selects group.join / group.leave / group.update / group.join_request
   onCall?: (event: IncomingCallEvent) => void; // incoming call ringing; Baileys can rejectCall() while it rings
-  onHistoryMessages?: (messages: IncomingMessage[]) => void; // bulk initial sync; persist, don't dispatch
+  onHistoryMessages?: (messages: IncomingMessage[]) => void | Promise<IncomingMessage[] | void>; // bulk initial sync; persist, don't dispatch
   onDisconnected?: (reason: string) => void; // recoverable -> reconnect
   onReconnecting?: (attempt: number, nextDelayMs: number) => void; // engines that retry internally (Baileys)
   onStateChanged?: (state: EngineStatus) => void;

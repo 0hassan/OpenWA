@@ -12,7 +12,7 @@ import { BaileysHistory, toUnixSeconds } from './baileys-history';
 import { type BaileysEngineHost } from './baileys-host';
 import { OwnSendRegistry } from './baileys-own-sends';
 import { BaileysLifecycle } from './baileys-lifecycle';
-import { BaileysMessaging } from './baileys-messaging';
+import { BaileysMessaging, blockSvgDecoding } from './baileys-messaging';
 import { BaileysStatus } from './baileys-status';
 import {
   CallLinkType,
@@ -146,6 +146,8 @@ export class BaileysAdapter implements IWhatsAppEngine {
       putStoredMessage: msg => this.config.messageStore?.put(this.config.dbSessionId, msg),
       updateStoredMessage: (messageId, change) =>
         this.config.messageStore?.update(this.config.dbSessionId, messageId, change),
+      removeStoredMessage: (messageId, shouldRemove) =>
+        this.config.messageStore?.remove(this.config.dbSessionId, messageId, shouldRemove),
       wasDeletedForEveryone: messageId => this.events.wasDeletedForEveryone(messageId),
       markDeletedForEveryone: messageId => this.events.markDeletedForEveryone(messageId),
       applyHistoryRevoke: (target, envelope) => this.events.applyHistoryRevoke(target, envelope),
@@ -236,6 +238,7 @@ export class BaileysAdapter implements IWhatsAppEngine {
 
   async initialize(callbacks: EngineEventCallbacks): Promise<void> {
     this.callbacks = callbacks;
+    await blockSvgDecoding();
     return this.lifecycle.initialize();
   }
 

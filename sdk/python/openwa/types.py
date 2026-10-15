@@ -214,13 +214,13 @@ class GroupJoinInfo(TypedDict):
     participantCount: NotRequired[int]
 
 
-class CustomLinkPreview(TypedDict, total=False):
+class CustomLinkPreview(TypedDict):
     """A caller-supplied link preview. Nothing is fetched for these."""
 
     url: str
     # Required -- WhatsApp will not render a preview without a title.
     title: str
-    description: str
+    description: NotRequired[str]
 
 
 # ── Session ───────────────────────────────────────────────────────
@@ -903,14 +903,14 @@ class SetProfilePictureRequest(TypedDict, total=False):
 # ── Webhook ───────────────────────────────────────────────────────
 
 
-class WebhookFilterCondition(TypedDict, total=False):
+class WebhookFilterCondition(TypedDict):
     # field/operator/value required; caseSensitive optional (text fields only, default false).
     field: str
-    operator: str
+    operator: Literal["is", "isNot", "contains", "equals"]
     # Polymorphic per field kind: a single string (text fields), a list of
     # strings (id/idArray/enum fields), or a bool (boolean fields).
     value: str | list[str] | bool
-    caseSensitive: bool
+    caseSensitive: NotRequired[bool]
 
 
 class WebhookFilters(TypedDict):
@@ -1476,7 +1476,8 @@ class SearchQueryParams(_SearchQueryRequired, _SearchQueryOptional):
 
 # `from` is a Python keyword → functional form for the required keys. The builtin
 # provider returns waMessageId/snippet as "" when absent (always str, never null);
-# `score` is provider-dependent (builtin always returns it) → optional.
+# `score` is provider-dependent (the builtin provider on SQLite leaves it out for a key restricted to
+# sessions or chats) → optional.
 _SearchHitRequired = TypedDict(
     "_SearchHitRequired",
     {

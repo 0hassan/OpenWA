@@ -95,6 +95,7 @@
     "loadingMessages": "正在加载消息...",
     "loadingOlderMessages": "正在加载更早的消息...",
     "loadOlderMessagesError": "无法加载更早的消息。向上滚动重试。",
+    "loadOlderMessagesRetryHint": "向上滚动重试。",
     "noMessagesInChat": "暂无消息。发送第一条消息即可开始！",
     "downloadDocument": "下载文档",
     "actions": {
@@ -702,8 +703,9 @@
     },
     "chats": {
       "label": "聊天访问（可选）",
-      "hint": "每行一个聊天：以 @g.us 结尾的群组 ID、以 @c.us 或 @lid 结尾的联系人 ID，或电话号码。留空则允许所有聊天。受聊天限制的密钥只能使用对此类密钥开放的路由；事件 WebSocket 和 MCP 会拒绝它。",
-      "invalid": "不是聊天 ID 或电话号码：{{value}}"
+      "hint": "每行一个聊天：以 @g.us 结尾的群组 ID、以 @c.us 或 @lid 结尾的联系人 ID，或电话号码。留空则允许所有聊天。受聊天限制的密钥只能使用对此类密钥开放的路由；通过事件 WebSocket 和 MCP 的访问也仅限于这些聊天。",
+      "invalid": "不是聊天 ID 或电话号码：{{value}}",
+      "tooMany": "聊天过多（{{count}}）：一个密钥最多可列出 {{max}} 个。"
     },
     "expiry": {
       "label": "过期时间（可选）",

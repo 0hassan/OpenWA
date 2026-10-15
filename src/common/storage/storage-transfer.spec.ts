@@ -44,7 +44,14 @@ jest.mock('archiver', () => {
   return { TarArchive };
 });
 
-import { createExportStream, ExportFileSource, importFromStream } from './storage-transfer';
+import {
+  createExportStream,
+  DEFAULT_IMPORT_MAX_BYTES,
+  DEFAULT_IMPORT_MAX_ENTRIES,
+  DEFAULT_IMPORT_MAX_TOTAL_BYTES,
+  ExportFileSource,
+  importFromStream,
+} from './storage-transfer';
 
 const FILE_BYTES = 256 * 1024;
 const files = Array.from({ length: 12 }, (_, i) => `media/file-${String.fromCharCode(97 + i)}.bin`);
@@ -362,5 +369,58 @@ describe('createExportStream and the per-entry import cap', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_BYTES'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`(${FILE_BYTES} bytes)`));
+  });
+});
+
+describe('the per-entry import cap boundary', () => {
+  const importOne = async (cap: string, size: number) => {
+    const prev = process.env.STORAGE_IMPORT_MAX_BYTES;
+    process.env.STORAGE_IMPORT_MAX_BYTES = cap;
+    const pack = tar.pack();
+    pack.entry({ name: 'only.bin' }, Buffer.alloc(size, 0x61));
+    pack.finalize();
+    try {
+      return await importFromStream(pack.pipe(createGzip()), () => Promise.resolve(), makeLogger() as never).catch(
+        (err: unknown) => err,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.STORAGE_IMPORT_MAX_BYTES;
+      else process.env.STORAGE_IMPORT_MAX_BYTES = prev;
+    }
+  };
+
+  it('imports an entry of exactly the cap and aborts on one byte more', async () => {
+    expect(await importOne('10', 10)).toEqual({ imported: 1, failed: 0 });
+    const over = await importOne('10', 11);
+    expect(over).toBeInstanceOf(Error);
+    expect((over as Error).message).toMatch(/10-byte per-entry cap \(STORAGE_IMPORT_MAX_BYTES\)/);
+  });
+});
+
+describe('createExportStream and the entry-count limit this deployment lowered', () => {
+  it('warns above the lower limit, though the shipped default would not', async () => {
+    const prev = process.env.STORAGE_IMPORT_MAX_ENTRIES;
+    process.env.STORAGE_IMPORT_MAX_ENTRIES = '2';
+    const logger = makeLogger();
+    try {
+      const { openFile } = trackingOpener();
+      const output = await createExportStream(() => Promise.resolve(files.slice(0, 3)), openFile, logger as never);
+      await new Promise<void>(resolve => output.on('end', resolve).resume());
+    } finally {
+      if (prev === undefined) delete process.env.STORAGE_IMPORT_MAX_ENTRIES;
+      else process.env.STORAGE_IMPORT_MAX_ENTRIES = prev;
+    }
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('above the import limit of 2'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Raise STORAGE_IMPORT_MAX_ENTRIES'));
+  });
+});
+
+// docs/14, .env.example and the upgrade notes state these figures, and an operator sizes an import
+// against them: a drifted default changes what an import is allowed to extract without a word.
+describe('storage import caps', () => {
+  it('ship at the documented defaults', () => {
+    expect(DEFAULT_IMPORT_MAX_BYTES).toBe(209_715_200);
+    expect(DEFAULT_IMPORT_MAX_ENTRIES).toBe(100_000);
+    expect(DEFAULT_IMPORT_MAX_TOTAL_BYTES).toBe(10_737_418_240);
   });
 });

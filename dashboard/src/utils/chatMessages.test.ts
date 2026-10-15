@@ -422,7 +422,7 @@ test('senderKey prefers the participant JID and falls back to the display name',
   assert.equal(senderKey({}), undefined);
 });
 
-import { capMediaPayloads, MEDIA_PAYLOAD_CACHE_LIMIT } from './chatMessages.ts';
+import { capMediaPayloads, MEDIA_PAYLOAD_CACHE_LIMIT, mergeDeliveryStatus } from './chatMessages.ts';
 
 const mediaMsg = (id: string, data?: string): ChatMessageView =>
   msg({ id, type: 'image', metadata: { media: { mimetype: 'image/jpeg', filename: `${id}.jpg`, data } } });
@@ -741,4 +741,31 @@ test('legacy poll rows inherit available history choices without replacing store
   assert.deepEqual(merged.metadata, { reactions: { sender: 'ok' }, poll });
   const revoked = mergeChatMessages([{ ...stored, type: 'revoked', body: '', metadata: undefined }], [historical])[0];
   assert.equal(revoked.metadata?.poll, undefined);
+});
+
+test('capMediaPayloads: archived documents are download buttons, not previews, and are not counted', () => {
+  const document = (id: string): ChatMessageView =>
+    msg({ id, type: 'document', metadata: { media: { mimetype: 'application/pdf', omitted: true, archived: true } } });
+  const images = Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT }, (_, i) => mediaMsg(`m-${i}`, 'X'));
+  const list = [...Array.from({ length: 5 }, (_, i) => document(`d-${i}`)), ...images];
+  assert.equal(capMediaPayloads(list), list, 'only the images count, and they fit');
+});
+
+test('capMediaPayloads: omitted markers that follow a full set of payloads strip none of them', () => {
+  const images = Array.from({ length: MEDIA_PAYLOAD_CACHE_LIMIT }, (_, i) => mediaMsg(`m-${i}`, 'X'));
+  const omitted = Array.from({ length: 120 }, (_, i) =>
+    msg({ id: `o-${i}`, type: 'image', metadata: { media: { mimetype: 'image/jpeg', omitted: true } } }),
+  );
+  const list = [...images, ...omitted];
+  assert.equal(capMediaPayloads(list), list);
+});
+
+test('mergeDeliveryStatus: a late lower tick never downgrades the shown one, and failed applies only before delivery', () => {
+  assert.equal(mergeDeliveryStatus('delivered', 'sent'), 'delivered');
+  assert.equal(mergeDeliveryStatus('read', 'delivered'), 'read');
+  assert.equal(mergeDeliveryStatus('sent', 'delivered'), 'delivered');
+  assert.equal(mergeDeliveryStatus('pending', 'sent'), 'sent');
+  assert.equal(mergeDeliveryStatus('delivered', 'failed'), 'delivered');
+  assert.equal(mergeDeliveryStatus('sent', 'failed'), 'failed');
+  assert.equal(mergeDeliveryStatus('failed', 'read'), 'failed');
 });

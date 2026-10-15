@@ -78,8 +78,9 @@ export async function reportPageDeath<T>(host: WwebjsEngineHost, context: string
     // Web threw in the page reaches the caller with its reason. A no-op for every other error.
     const mapped = toCapturedPageError(error);
     if (mapped !== error) {
-      // The mapped error is an HttpException, which Nest does not log, and the status path logs
-      // nothing of its own: this is the one line that keeps the full in-page summary.
+      // The mapped error is an HttpException, which Nest does not log, and a status post's own log line
+      // (StatusService.recordedPost) carries only the session and kind: this is the line that keeps the
+      // full in-page summary.
       host.logger.warn(`WhatsApp Web threw during ${context}`, {
         sessionId: host.config.sessionId,
         cause: (error as Error).message,

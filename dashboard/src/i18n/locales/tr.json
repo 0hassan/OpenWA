@@ -95,6 +95,7 @@
     "loadingMessages": "Mesajlar yükleniyor...",
     "loadingOlderMessages": "Daha eski mesajlar yükleniyor...",
     "loadOlderMessagesError": "Daha eski mesajlar yüklenemedi. Tekrar denemek için yukarı kaydırın.",
+    "loadOlderMessagesRetryHint": "Tekrar denemek için yukarı kaydırın.",
     "noMessagesInChat": "Henüz mesaj yok. Başlamak için ilk mesajı gönderin!",
     "downloadDocument": "Belgeyi indir",
     "actions": {
@@ -702,8 +703,9 @@
     },
     "chats": {
       "label": "Sohbet erişimi (isteğe bağlı)",
-      "hint": "Her satıra bir sohbet: @g.us ile biten bir grup kimliği, @c.us veya @lid ile biten bir kişi kimliği ya da bir telefon numarası. Tüm sohbetler için boş bırakın. Sohbetle sınırlı bir anahtar yalnızca bu tür anahtarlara açık yolları kullanabilir; olay WebSocket'i ve MCP onu reddeder.",
-      "invalid": "Sohbet kimliği veya telefon numarası değil: {{value}}"
+      "hint": "Her satıra bir sohbet: @g.us ile biten bir grup kimliği, @c.us veya @lid ile biten bir kişi kimliği ya da bir telefon numarası. Tüm sohbetler için boş bırakın. Sohbetle sınırlı bir anahtar yalnızca bu tür anahtarlara açık yolları kullanabilir; olay WebSocket'i ve MCP üzerinden erişimi de bu sohbetlerle sınırlı kalır.",
+      "invalid": "Sohbet kimliği veya telefon numarası değil: {{value}}",
+      "tooMany": "Çok fazla sohbet ({{count}}): bir anahtar en fazla {{max}} sohbet listeleyebilir."
     },
     "expiry": {
       "label": "Son kullanma tarihi (isteğe bağlı)",

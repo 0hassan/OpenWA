@@ -1,3 +1,4 @@
+import { ShutdownService } from '../../common/services/shutdown.service';
 import { Injectable, OnApplicationBootstrap, OnModuleInit, OnModuleDestroy, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
@@ -16,6 +17,7 @@ import {
 } from './plugin.interfaces';
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
+import type { PluginConversationMappingPort } from './plugin-host-ports';
 import { PluginCapabilityContext } from './plugin-capability-context';
 import { PluginSandboxBridge } from './plugin-sandbox-bridge';
 import { PluginPackageScanner } from './plugin-package-scanner';
@@ -153,6 +155,10 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     // that construct this service with the 4 prior args still compile; when absent, canonicalChatId
     // degrades to identity (no @lid resolution).
     @Optional() private readonly lidMappingStore?: LidMappingStoreService,
+    // The gateway-wide drain flag. The loader's own `shuttingDown` flips only when PluginsModule is
+    // destroyed, last of the global modules, so the boot restore would otherwise keep enabling plugins
+    // through the grace and every earlier destroy stage.
+    @Optional() private readonly shutdownService?: ShutdownService,
   ) {
     // Same default the `plugins.dir` key is built from, so this fallback cannot drift away from the
     // tree PluginStorageService keeps the registry and each plugin's ctx.storage in.
@@ -235,11 +241,23 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       this.pluginsDir,
       pluginId => this.lifecycle.unloadPlugin(pluginId),
       this.legacyPluginsDir,
+      pluginId => this.releaseTakeovers(pluginId),
     );
   }
 
   onModuleInit(): void {
     this.scanner.scanAtBoot();
+  }
+
+  /** Hand back the chats a plugin took over. A host without the conversation store has none to hand back. */
+  private releaseTakeovers(pluginId: string): Promise<void> {
+    let port: PluginConversationMappingPort;
+    try {
+      port = this.hostServices.getConversationMappingPort();
+    } catch {
+      return Promise.resolve();
+    }
+    return port.releaseTakeovers(pluginId);
   }
 
   /**
@@ -260,7 +278,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
       p => !p.builtIn && this.pluginStorage.getPluginEntry(p.manifest.id)?.enabledByOperator === true,
     );
     for (let i = 0; i < restorable.length; i++) {
-      if (this.shuttingDown) {
+      if (this.shuttingDown || this.shutdownService?.isShuttingDown()) {
         this.logger.log(`Plugin restore stopped at ${i} of ${restorable.length} plugin(s): shutting down`, {
           action: 'plugin_restore_aborted',
         });
@@ -449,7 +467,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     onLog?: (level: PluginLogLevel, message: string, meta?: Record<string, unknown>) => void,
     runWithHookGuard?: (inFlightEvents: string[], run: () => Promise<unknown>) => Promise<unknown>,
     onSearchProviderRegister?: () => void,
-    onWorkerExit?: (code: number, intentional: boolean) => void,
+    onWorkerExit?: (code: number, intentional: boolean, reason?: string) => void,
     onUnresponsive?: () => void,
   ): PluginWorkerHost {
     const workerEntry = path.join(__dirname, 'sandbox', 'worker-bootstrap.js');

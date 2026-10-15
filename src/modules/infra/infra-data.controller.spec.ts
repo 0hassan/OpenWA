@@ -43,6 +43,7 @@ import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.ent
 import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
+import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { AutomationRule } from '../automation/entities/automation-rule.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { ScopeBindingService } from '../integration/scope-binding.service';
@@ -85,6 +86,7 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
         IntegrationDeliveryFailure,
         StatusUpdate,
         AutomationRule,
+        SendIdempotencyKey,
       ],
       synchronize: true,
     });
@@ -157,6 +159,40 @@ describe('InfraDataController.importData round-trips export-data (no silent mess
 
     expect((await ds.getRepository(Session).findOneByOrFail({ id: 's1' })).desiredState).toBe('stopped');
     expect((await ds.getRepository(Session).findOneByOrFail({ id: 's2' })).desiredState).toBeNull();
+  });
+
+  it('drops the send idempotency claims of a session the restore removes and keeps those of one it restores', async () => {
+    await seedSession('s1');
+    await seedSession('s2');
+    const claims = ds.getRepository(SendIdempotencyKey);
+    for (const sessionId of ['s1', 's2']) {
+      await claims.save(
+        claims.create({
+          sessionId,
+          idempotencyKey: 'order-42',
+          route: 'send-text',
+          requestHash: 'h',
+          state: 'completed',
+          responseBody: { messageId: `sent-by-${sessionId}` },
+          expiresAt: new Date(Date.now() + 3_600_000),
+        }),
+      );
+    }
+    const both = await controller.exportData();
+    const onlyS2 = {
+      tables: {
+        ...both.tables,
+        sessions: (both.tables.sessions as unknown as Array<{ id: string }>).filter(row => row.id === 's2'),
+      },
+    };
+
+    expect(await controller.importData(onlyS2 as never)).toMatchObject({ imported: true });
+    expect((await claims.find()).map(claim => claim.sessionId)).toEqual(['s2']);
+
+    // A later restore that brings s1 back must not answer a retried send with the old stored response.
+    expect(await controller.importData({ tables: both.tables })).toMatchObject({ imported: true });
+    expect(await claims.findOneBy({ sessionId: 's1' })).toBeNull();
+    expect(await claims.findOneBy({ sessionId: 's2' })).not.toBeNull();
   });
 
   it('carries LIVE claims forward by their remaining time, including a peer node’s', async () => {

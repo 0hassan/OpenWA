@@ -916,8 +916,8 @@ export const sessionApi = {
   getChannelMessages: (id: string, channelId: string, limit = 50) =>
     request<ChannelMessage[]>(`/sessions/${id}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}`),
   getContactStatuses: (id: string) => request<{ statuses: StatusUpdate[] }>(`/sessions/${id}/status`),
-  getStatusMediaBlob: (id: string, statusId: string) =>
-    requestBlob(`/sessions/${id}/status/${encodeURIComponent(statusId)}/media`),
+  getStatusMediaBlob: (id: string, statusId: string, signal?: AbortSignal) =>
+    requestBlob(`/sessions/${id}/status/${encodeURIComponent(statusId)}/media`, signal),
   postTextStatus: (
     id: string,
     text: string,
@@ -1233,7 +1233,7 @@ export const infraApi = {
       body: JSON.stringify({ profiles: profiles || [], profilesToRemove: profilesToRemove || [] }),
     }),
   // Readiness, not the plain /infra/health ping. The restart poll must not be able to latch onto the
-  // process it just asked to shut down: /infra/health answers 200 for the whole drain and teardown,
+  // process it just asked to shut down: /infra/health answers 200 for the whole drain,
   // while /health/ready reports 503 as soon as draining starts and stays 503 until both databases
   // answer. Public (no API key), like /infra/health.
   healthCheck: () => request<{ status: 'ok' | 'error'; details: Record<string, { status: string }> }>('/health/ready'),
