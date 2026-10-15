@@ -34,20 +34,32 @@ const jobSteps = (file: string, job: string): Step[] => {
   return steps;
 };
 
-// Lines are compared whole, so they are read exactly; a caller that looks for a name inside them passes the
-// conservative reading.
-const gateCommands = (file: string, job: string, read: (run: string) => string = executableLines): string[] =>
-  jobSteps(file, job).flatMap(step =>
-    read(step.run ?? '')
+// The shell skips a space and a tab and nothing else, so only those come off a line: String.trim() would also
+// drop U+00A0 and the other blanks the shell reads as part of a word, and count `<U+00A0>npm run x` as the
+// command `npm run x` when the shell runs one named `<U+00A0>npm` (127).
+const stripBlanks = (text: string): string => text.replace(/^[ \t]+|[ \t]+$/g, '');
+
+// The lines of these scripts that are an npm or npx command. They are compared whole, so they are read
+// exactly; a caller that looks for a name inside them passes the conservative reading.
+const commandLines = (runs: string[], read: (run: string) => string = executableLines): string[] =>
+  runs.flatMap(run =>
+    read(run)
       .split('\n')
-      .map(line => line.trim())
+      .map(stripBlanks)
       .filter(line => /^npx |^npm /.test(line)),
   );
 
+const gateCommands = (file: string, job: string, read: (run: string) => string = executableLines): string[] =>
+  commandLines(
+    jobSteps(file, job).map(step => step.run ?? ''),
+    read,
+  );
+
+// A whole run, compared whole: the blank lines a comment leaves and the newline that ends the block go too.
 const runSteps = (file: string, job: string): string[] =>
   jobSteps(file, job)
     .filter(step => step.run !== undefined)
-    .map(step => executableLines(step.run ?? '').trim());
+    .map(step => executableLines(step.run ?? '').replace(/^[ \t\n]+|[ \t\n]+$/g, ''));
 
 describe('release gate parity (the tag path runs every branch gate)', () => {
   it.each(['lint', 'test', 'test-postgres'])('%s: every ci.yml gate command also runs in release.yml', job => {
@@ -66,6 +78,11 @@ describe('release gate parity (the tag path runs every branch gate)', () => {
     expect(ci.length).toBeGreaterThanOrEqual(4);
     expect(release.length).toBeGreaterThanOrEqual(4);
     expect(ci.filter(step => !release.includes(step))).toEqual([]);
+  });
+
+  it('does not count as a gate command a line that begins with a blank the shell does not skip', () => {
+    const nbsp = String.fromCharCode(0xa0);
+    expect(commandLines([`${nbsp}npm run lint\n  npm run test \t\n\t${nbsp}npx tsc`])).toEqual(['npm run test']);
   });
 
   it('the two gates this spec was born from still run on the tag path', () => {
@@ -208,7 +225,7 @@ describe('release gate jobs can stop the publish jobs', () => {
     // The comparisons end the step when they fail, the steps cannot fail softly, and the digest they
     // compare against is assigned once, from the build job.
     const body = (text: string, start: string): string => {
-      const lines = text.split('\n').map(line => line.trim());
+      const lines = text.split('\n').map(stripBlanks);
       const from = lines.indexOf(start);
       const to = lines.indexOf('fi', from);
       return from === -1 || to === -1 ? '' : lines.slice(from, to).join('\n');
@@ -405,7 +422,7 @@ describe('every npm tree is audited and kept current', () => {
     return workflow.jobs[job].steps.flatMap((step, index) =>
       executableLines(step.run ?? '')
         .split('\n')
-        .map(line => /^(?:cd (\S+) && )?npm (?:run check:audit|audit --audit-level=high)$/.exec(line.trim()))
+        .map(line => /^(?:cd (\S+) && )?npm (?:run check:audit|audit --audit-level=high)$/.exec(stripBlanks(line)))
         .flatMap(match =>
           match ? [{ index, step, tree: path.posix.join(cwd, match[1] ?? '').replace(/^\.$/, '') }] : [],
         ),
