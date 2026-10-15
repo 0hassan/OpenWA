@@ -1042,9 +1042,14 @@ describe('a job that can mint a publish credential pins global npm installs and 
   const stepsOf = (workflow: OidcWorkflow, job: string): Step[] => jobOf(workflow, job).steps ?? [];
   const inputsOf = (step: Step): Record<string, unknown> => step.with as Record<string, unknown>;
   const shelled = (step: Step): Step & { shell?: string } => step;
+  // Replaces `from` in the first line whose executable part holds it, so a comment that repeats the words, or
+  // one written on the line, is neither the place that is found nor a reason for the case to fail.
   const swap = (step: Step, from: string, to: string): void => {
-    expect(step.run).toContain(from);
-    step.run = (step.run ?? '').replace(from, to);
+    const lines = (step.run ?? '').split('\n');
+    const at = lines.findIndex(line => executableLines(line).includes(from));
+    expect(at).toBeGreaterThan(-1);
+    lines[at] = lines[at].replace(from, () => to);
+    step.run = lines.join('\n');
   };
   type Edit = (workflow: OidcWorkflow) => void;
   const expectRefused = (file: string, cases: Array<[string, Edit, string[]]>): void => {
@@ -1345,13 +1350,14 @@ describe('a job that can mint a publish credential pins global npm installs and 
     };
   };
   // Two lines of a script traded places; the edit throws if either is not the line the case expects there.
-  // Lines are counted among those that carry a command, so a comment written between two of them moves none.
+  // Lines are counted among those that carry a command, so a comment written between two of them moves none,
+  // and a line is compared by what it runs, so a comment written on one does not change which line it is.
   const exchangeLines = (step: Step, a: [number, Allowed], b: [number, Allowed]): void => {
     const lines = (step.run ?? '').split('\n');
     const carrying = lines.flatMap((line, i) => (scriptLines(line).length > 0 ? [i] : []));
     const [from, to] = [carrying[a[0]], carrying[b[0]]];
-    expect(allows([a[1]], lines[from])).toBe(true);
-    expect(allows([b[1]], lines[to])).toBe(true);
+    expect(allows([a[1]], scriptLines(lines[from])[0])).toBe(true);
+    expect(allows([b[1]], scriptLines(lines[to])[0])).toBe(true);
     [lines[from], lines[to]] = [lines[to], lines[from]];
     step.run = lines.join('\n');
   };
@@ -1731,48 +1737,54 @@ describe('a job that can mint a publish credential pins global npm installs and 
       expect(found).toEqual([]);
     });
 
-    it('release.yml: a comment in the script, after a line and in the file is accepted', () => {
-      const { found, workflow } = refusedAfter('release.yml', text =>
-        text
-          .replace(
-            '          set -euo pipefail\n',
-            '          # fail on any error, unset variable or failed pipe stage\n          set -euo pipefail\n',
-          )
-          .replace(
-            'docker buildx imagetools create --tag "$tag" "$staging"\n',
-            'docker buildx imagetools create --tag "$tag" "$staging" # the re-point\n',
-          )
-          .replace(
-            '          echo "promoting -> $tag"\n',
-            '          # ${REPO,,} and ${tag} are names, {{ and }} are not an expression\n          echo "promoting -> $tag"\n',
-          )
-          .replace('# Dual-publish: the same boot-tested', '# Dual-publish, reworded: the same boot-tested'),
+    // A comment is read from where the script has it, so the edits need no line of the file to be as it is
+    // today: every line of every script of the id-token job gets a comment above it, on it and below it.
+    it.each(Object.keys(ALLOW_LISTS))('%s: a comment above, on and below every script line is accepted', file => {
+      const copy = JSON.parse(JSON.stringify(loadOidcWorkflow(file))) as OidcWorkflow;
+      let scripts = 0;
+      for (const [, def] of oidcJobs(copy)) {
+        for (const step of def.steps ?? []) {
+          if (step.run === undefined) continue;
+          scripts += 1;
+          step.run = step.run
+            .split('\n')
+            .flatMap(line => {
+              if (line.trim() === '') return [line];
+              const on = line.endsWith('\\') ? line : `${line} # note on it`;
+              return ['# note above it', on, '# note below it'];
+            })
+            .join('\n');
+        }
+      }
+      // Non-vacuity: the scripts the template lists are the scripts that were commented.
+      const listed = Object.values(ALLOW_LISTS[file].jobs).flatMap(job => job.steps.filter(step => step.run));
+      expect(scripts).toBe(listed.length);
+      expect([...outsideAllowList(copy, ALLOW_LISTS[file]), ...outsideStepTemplate(copy, ALLOW_LISTS[file])]).toEqual(
+        [],
       );
-      // Non-vacuity: both comments are in the script the checker reads.
-      const script = stepsOf(workflow, 'promote')
-        .map(step => step.run ?? '')
-        .join('\n');
-      expect(script).toContain('# fail on any error');
-      expect(script).toContain('"$staging" # the re-point');
-      expect(script).toContain('# ${REPO,,} and ${tag} are names');
+    });
+
+    it.each(Object.keys(ALLOW_LISTS))('%s: every whole-line comment reworded is accepted', file => {
+      const { found } = refusedAfter(file, text => text.replace(/^([ \t]*#[ \t]*)(\S.*)$/gm, '$1reworded: $2'));
       expect(found).toEqual([]);
     });
 
-    it('js-sdk-release.yml: a comment after the version check is accepted', () => {
-      const { found, workflow } = refusedAfter('js-sdk-release.yml', text =>
-        text.replace('          npm --version\n', '          npm --version # the pinned release\n'),
+    // Shell expansions and braces in a comment are not an expression: only `${{` is.
+    it('release.yml: a comment holding ${REPO,,}, ${tag} and a pair of braces is accepted', () => {
+      const copy = JSON.parse(JSON.stringify(loadOidcWorkflow('release.yml'))) as OidcWorkflow;
+      const tag = stepsOf(copy, 'promote').find(
+        step => step.name === 'Tag the smoke-tested image with the release tags',
       );
-      expect(
-        stepsOf(workflow, 'publish').filter(step => (step.run ?? '').includes('npm --version # the pinned release')),
-      ).toHaveLength(1);
-      expect(found).toEqual([]);
-    });
-
-    it('python-sdk-release.yml: a reworded comment is accepted', () => {
-      const { found } = refusedAfter('python-sdk-release.yml', text =>
-        text.replace('No checkout and no install: this job only', 'There is no checkout and no install: this job only'),
+      expect(tag).toBeDefined();
+      swap(
+        tag as Step,
+        'echo "promoting -> $tag"',
+        '# ${REPO,,} and ${tag} are names, {{ and }} are not an expression\necho "promoting -> $tag"',
       );
-      expect(found).toEqual([]);
+      expect([
+        ...outsideAllowList(copy, ALLOW_LISTS['release.yml']),
+        ...outsideStepTemplate(copy, ALLOW_LISTS['release.yml']),
+      ]).toEqual([]);
     });
   });
 
