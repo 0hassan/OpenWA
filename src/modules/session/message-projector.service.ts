@@ -796,12 +796,17 @@ export class MessageProjector {
    * just inserted: its own write matched no row then. Queued on the message's mutation chain, so it
    * lands after any edit already queued, and a revoke wins over the rest. A change arriving after the
    * insert finds the row itself. Reactions are only stored here; their event already went out. A row
-   * inserted cleared is cleared again, in case a change raced the insert, but `message:persisted`
-   * already carried it cleared and does not fire twice.
+   * inserted cleared is cleared again, in case a change raced the insert, without announcing it:
+   * `message:persisted` already carried it cleared. A revoke event still waiting for its own row read
+   * when the insert lands clears the row and announces it once more: a consumer sees the cleared row
+   * twice, under the same id.
    *
    * `lostInsert`, set when the delivery's insert lost to a row under the id, says what the delivery claims
    * to be. That row may be the message itself (its first attempt committed before the error) or another
-   * message's (an id reused from another chat): the changes go to it only if it is the message.
+   * message's (an id reused from another chat): the changes go to it only if it is the message. The
+   * judgement is the first step of the slot taken on the chain here, not a read ahead of it, so a change
+   * of the message that arrives while the row is read queues behind the write instead of being
+   * overwritten by it.
    */
   private applyChangesMadeInFlight(
     id: string,
@@ -810,50 +815,56 @@ export class MessageProjector {
     lostInsert?: MutationSource,
   ): void {
     const pending = waMessageId ? this.inboundInFlight.get(`${id}:${waMessageId}`) : undefined;
-    if (
-      !pending ||
-      (!pending.ackStatus && !pending.revoked && pending.editedBody === undefined && !pending.reactions)
-    ) {
-      return;
-    }
+    if (!pending) return;
+    const { ackStatus } = pending;
+    const rowChanges = Boolean(pending.revoked || pending.editedBody !== undefined || pending.reactions);
+    if (!ackStatus && !rowChanges) return;
+    const advance = (): void => {
+      if (!ackStatus) return;
+      void this.advanceAck(id, waMessageId, ackStatus).catch(err =>
+        this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)),
+      );
+    };
     if (!lostInsert) {
-      this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared);
+      advance();
+      if (rowChanges) {
+        this.enqueueMessageMutation(id, waMessageId, () =>
+          this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared),
+        );
+      }
       return;
     }
-    void this.mutationProjector.foreignRowReason(id, waMessageId, lostInsert).then(reason => {
-      if (!reason) return this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared);
-      this.logger.warn('Not applying the changes of a message to the stored message that holds its id', {
-        sessionId: id,
-        messageId: waMessageId,
-        reason,
-      });
+    this.enqueueMessageMutation(id, waMessageId, async () => {
+      const reason = await this.mutationProjector.foreignRowReason(id, waMessageId, lostInsert);
+      if (reason) {
+        this.logger.warn('Not applying the changes of a message to the stored message that holds its id', {
+          sessionId: id,
+          messageId: waMessageId,
+          reason,
+        });
+        return;
+      }
+      advance();
+      await this.writeChangesMadeInFlight(id, waMessageId, pending, insertedCleared);
     });
   }
 
-  private writeChangesMadeInFlight(
+  /** The row part of {@link applyChangesMadeInFlight}. Must run on the mutation chain. */
+  private async writeChangesMadeInFlight(
     id: string,
     waMessageId: string,
     pending: InFlightEntry,
     insertedCleared: boolean,
-  ): void {
-    const { ackStatus } = pending;
-    if (ackStatus) {
-      void this.advanceAck(id, waMessageId, ackStatus).catch(err =>
-        this.logger.error(`Failed to advance ack for ${waMessageId}`, String(err)),
-      );
-    }
-    if (!pending.revoked && pending.editedBody === undefined && !pending.reactions) return;
-    this.enqueueMessageMutation(id, waMessageId, async () => {
-      if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
-      try {
-        if (pending.editedBody !== undefined) {
-          await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
-        }
-        if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
-      } catch (err) {
-        this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
+  ): Promise<void> {
+    if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
+    try {
+      if (pending.editedBody !== undefined) {
+        await this.messageRepository.update({ sessionId: id, waMessageId }, { body: pending.editedBody });
       }
-    });
+      if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
+    } catch (err) {
+      this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
+    }
   }
 
   /** Merge reactions into the row's metadata, withdrawing a sender's on ''. Must run on the mutation chain. */
