@@ -797,9 +797,10 @@ export class MessageProjector {
    * lands after any edit already queued, and a revoke wins over the rest. A change arriving after the
    * insert finds the row itself. Reactions are only stored here; their event already went out. A row
    * inserted cleared is cleared again, in case a change raced the insert, without announcing it:
-   * `message:persisted` already carried it cleared. A revoke event still waiting for its own row read
-   * when the insert lands clears the row and announces it once more: a consumer sees the cleared row
-   * twice, under the same id.
+   * `message:persisted` already carried it cleared. Where the insert lost, a pending revoke announces the
+   * row it clears, which an earlier revoke may have cleared and announced already, and a revoke event still
+   * waiting for its own row read when the insert lands announces it once more: a consumer may see the
+   * cleared row more than once under the same id.
    *
    * `lostInsert`, set when the delivery's insert lost to a row under the id, says what the delivery claims
    * to be. That row may be the message itself (its first attempt committed before the error) or another
