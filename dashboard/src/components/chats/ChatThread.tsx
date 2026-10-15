@@ -59,10 +59,10 @@ interface ChatThreadProps {
 }
 
 /**
- * How long after a pointer press a focus that is not :focus-visible still counts as the press's own. A click
- * focuses its target in the same task as its pointerdown, and the lightbox's close button gives focus back to
- * the bubble that opened it as it goes away; a focus long after a press is a script's or an assistive
- * technology's.
+ * How long after the pointer last went down or came up a focus that is not :focus-visible still counts as the
+ * pointer's. A click focuses its target in the same task as its pointerdown, and the lightbox's close button
+ * gives focus back to the bubble that opened it as it goes away, on the release of the press however long it
+ * was held; a focus long after the pointer's last event is a script's or an assistive technology's.
  */
 const POINTER_FOCUS_WINDOW_MS = 1000;
 
@@ -156,15 +156,20 @@ function ChatThread({
   // comes back. The blur arrives after confirm() has returned, so the handler that opened the dialog cannot put
   // the place back itself.
   const deactivatedRef = useRef<EventTarget | null>(null);
-  // When the pointer last went down anywhere in the page (performance.now()); see POINTER_FOCUS_WINDOW_MS. Not
-  // only in the thread: the press that closes the lightbox is outside it, and the focus it gives back is one.
+  // When the pointer last went down or came up anywhere in the page (performance.now()); see
+  // POINTER_FOCUS_WINDOW_MS. Not only in the thread: the press that closes the lightbox is outside it, and the
+  // focus it gives back is one. The release counts as well as the press: a click acts on release, so a press
+  // that was held for longer than the window would otherwise be over before its own focus arrived.
   const pointerAtRef = useRef<number>(Number.NEGATIVE_INFINITY);
   useEffect(() => {
-    const notePress = () => {
+    const notePointer = () => {
       pointerAtRef.current = performance.now();
     };
-    document.addEventListener('pointerdown', notePress, true);
-    return () => document.removeEventListener('pointerdown', notePress, true);
+    const types = ['pointerdown', 'pointerup'] as const;
+    for (const type of types) document.addEventListener(type, notePointer, true);
+    return () => {
+      for (const type of types) document.removeEventListener(type, notePointer, true);
+    };
   }, []);
   useEffect(() => {
     const held = keyboardFocusRef.current;
@@ -393,8 +398,8 @@ function ChatThread({
       // is read by Chats.css. It follows the focus itself as well as the pointer and the keys: a key pressed
       // outside the thread is never seen here, and a click on a native audio or video control sends the
       // page no pointer event at all, though it focuses the element. A focus that is not :focus-visible
-      // is the pointer's only when a press came just before it or the element is a media control: one that
-      // a script or an assistive technology moves later is not, and its actions are shown.
+      // is the pointer's only when the pointer went down or came up just before it or the element is a media
+      // control: one that a script or an assistive technology moves later is not, and its actions are shown.
       onPointerDown={event => event.currentTarget.setAttribute('data-pointer', '')}
       onKeyDown={event => event.currentTarget.removeAttribute('data-pointer')}
       onFocus={event => {

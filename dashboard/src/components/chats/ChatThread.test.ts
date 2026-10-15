@@ -871,6 +871,81 @@ test('focus given back after a press outside the thread is pointer focus, until 
   }
 });
 
+// A click acts on release, so the lightbox gives focus back when the press is let go, not when it went down. A
+// press held for longer than the window is still the pointer's, and the window runs from the last pointer event.
+test('focus given back on the release of a long press is pointer focus, counted from the release', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const close = document.createElement('button');
+  document.body.appendChild(close);
+  const clock = holdClock();
+  try {
+    rtl.fireEvent.pointerDown(close);
+    clock.advance(1400);
+    rtl.fireEvent.pointerUp(close);
+    clock.advance(300);
+    rtl.fireEvent.focusIn(bubblesOf(container)[0]);
+    assert.equal(thread.hasAttribute('data-pointer'), true);
+
+    rtl.fireEvent.pointerDown(close);
+    clock.advance(1400);
+    rtl.fireEvent.pointerUp(close);
+    clock.advance(1500);
+    rtl.fireEvent.focusIn(bubblesOf(container)[1]);
+    assert.equal(thread.hasAttribute('data-pointer'), false);
+  } finally {
+    close.remove();
+  }
+});
+
+// A lightbox or a menu may stop its pointer events from bubbling: the page still has to see them.
+test('the pointer is noted before a handler that stops its events from reaching the document', () => {
+  const { container } = renderThread('operator', [PROMPT, { ...PROMPT, id: 'db-2', waMessageId: 'wamid.2' }]);
+  const thread = container.querySelector<HTMLElement>('.room-messages');
+  assert.ok(thread);
+  const close = document.createElement('button');
+  for (const type of ['pointerdown', 'pointerup']) close.addEventListener(type, event => event.stopPropagation());
+  document.body.appendChild(close);
+  const clock = holdClock();
+  try {
+    rtl.fireEvent.pointerDown(close);
+    clock.advance(1400);
+    rtl.fireEvent.pointerUp(close);
+    clock.advance(300);
+    rtl.fireEvent.focusIn(bubblesOf(container)[0]);
+    assert.equal(thread.hasAttribute('data-pointer'), true);
+  } finally {
+    close.remove();
+  }
+});
+
+test('the thread stops listening for the pointer on the document when it unmounts', () => {
+  const original = { add: document.addEventListener, remove: document.removeEventListener };
+  const listening = new Set<string>();
+  mock.method(
+    document,
+    'addEventListener',
+    function (this: Document, ...args: Parameters<Document['addEventListener']>) {
+      if (args[0].startsWith('pointer') && args[2] === true) listening.add(args[0]);
+      return original.add.apply(this, args);
+    },
+  );
+  mock.method(
+    document,
+    'removeEventListener',
+    function (this: Document, ...args: Parameters<Document['removeEventListener']>) {
+      if (args[2] === true) listening.delete(args[0]);
+      return original.remove.apply(this, args);
+    },
+  );
+  renderThread('operator');
+  assert.deepEqual([...listening].sort(), ['pointerdown', 'pointerup']);
+
+  rtl.cleanup();
+  assert.deepEqual([...listening], []);
+});
+
 // A click on the controls of an audio or video element sends the page no pointer event at all.
 test('focus on a media control is pointer focus without any press seen', () => {
   const voice: ChatMessageView = {
