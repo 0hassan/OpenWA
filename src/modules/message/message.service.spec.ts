@@ -898,6 +898,22 @@ describe('MessageService', () => {
       );
     });
 
+    it('judges the stored row by the chat the gate sent the edit to, not the one the caller named', async () => {
+      (hookManager.execute as jest.Mock).mockResolvedValueOnce({
+        continue: true,
+        data: { input: { chatId: 'other@c.us', messageId: 'wa-msg-1', body: 'edited' } },
+      });
+
+      await service.editMessage('sess-1', { chatId: 'test@c.us', messageId: 'wa-msg-1', body: 'edited' });
+
+      expect(mockEngine.editMessage).toHaveBeenCalledWith('other@c.us', 'wa-msg-1', 'edited');
+      expect(messageProjector.recordOutboundMessageEdit).toHaveBeenCalledWith('sess-1', 'wa-msg-1', 'edited', {
+        kind: 'edit',
+        chatId: 'other@c.us',
+        fromMe: true,
+      });
+    });
+
     it('honours a plugin that rewrites the tag list, not the list the caller sent', async () => {
       // message:sending is a moderation chokepoint, so a handler that drops a WID from the list must
       // win. Reading the caller's own dto here instead of the gated one would send the unredacted
