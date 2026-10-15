@@ -126,7 +126,7 @@ Cutting a release:
    tarball. A second job, the only one that can mint the publish credential,
    uploads that tarball and runs no project code: the published bytes are the
    ones those gates passed, not a later rebuild. It receives the tarball as a
-   workflow artifact and passes `package/*.tgz` to `npm publish`, which takes
+   workflow artifact and passes its absolute path to `npm publish`, which takes
    one file, so a missing or a second tarball fails the release.
 
 ## License
