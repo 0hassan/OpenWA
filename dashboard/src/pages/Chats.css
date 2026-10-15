@@ -576,7 +576,7 @@
    wide as its text up to the pane less its inset. It is held to two lines, which end inside the 1.5rem of
    padding and the top padding of the first bubble: a reader at the top of the thread is on that message, and a
    third line would run over its first line of text. Two lines hold the whole sentence of every translation
-   while the thread is as wide as the container query below says; under that only the retry instruction is
+   in a thread wider than the container query below says; at that width or less only the retry instruction is
    shown. */
 .chats-page .messages-loading-older.failed {
   position: absolute;
@@ -605,14 +605,14 @@
   display: none;
 }
 
-/* Where the thread is too narrow for two lines of the whole sentence, only the retry instruction is shown.
-   The width queried is the content box of the thread: its client width, which leaves out a scrollbar, less
-   the 1.5rem of padding on each side. 17rem of it is a client width of 320px. The longest sentence, the German
-   one, needs 308px of client width for two lines in every engine. A 360px phone has 326px, and shows the
-   sentence with an overlay scrollbar; a classic scrollbar of 6px leaves it 320px, and the instruction alone
-   is shown. The instruction is two lines at most in the narrowest thread there is, 244px of client width
-   beside the list at an 890px viewport (238px with a scrollbar of 6px). display: none takes the hidden text
-   out of the accessibility tree as well, so what is read is what is shown. */
+/* In a thread of 17rem of content or less, two lines may not hold the whole sentence, and only the retry
+   instruction is shown. The width queried is the content box of the thread: its client width, which leaves
+   out a scrollbar, less the 1.5rem of padding on each side. 17rem of it is a client width of 320px. The
+   longest sentence, the German one, needs 308px of client width for two lines in every engine. A 360px phone
+   has 326px, and shows the sentence with an overlay scrollbar; a classic scrollbar of 6px leaves it 320px,
+   and the instruction alone is shown. The instruction is two lines at most in the narrowest thread there is,
+   244px of client width beside the list at an 890px viewport (238px with a scrollbar of 6px). display: none
+   takes the hidden text out of the accessibility tree as well, so what is read is what is shown. */
 @container (max-width: 17rem) {
   .chats-page .messages-loading-older.failed > .older-failure-full {
     display: none;
@@ -624,9 +624,10 @@
 }
 
 /* The loading label is one line while the pill fits it: the longest translation, the French one, is 285px
-   wide with its icon and padding, and 18rem of content box is 288px. Under that it takes two lines, at the
-   size and the height of the failure, and the pill is taller by what the second line needs: its margins take
-   that back (see above), and the two lines end where the failure's do, above the first message's text. */
+   wide with its icon and padding, and 18rem of content box is 288px. At 18rem or less the label may wrap
+   onto a second line, at the size of the failure text. The pill is 1.875rem high there instead of 1.25rem
+   whether or not the label wraps: its margins take that back (see above), and the two lines end where the
+   failure's do, above the first message's text. */
 @container (max-width: 18rem) {
   .chats-page .messages-loading-older:not(.failed) {
     --older-row-height: 1.875rem;

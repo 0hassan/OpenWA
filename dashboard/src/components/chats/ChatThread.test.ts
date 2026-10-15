@@ -1328,9 +1328,10 @@ test('the text of the older-page indicator has room to paint beyond its line wit
   );
 });
 
-// The failure shows its whole sentence while the thread is wide enough for two lines of it, and only the retry
-// instruction when it is not. The width that decides it is the thread's, not the viewport's: beside the list the
-// thread is narrower than a phone's. Both texts are in the document and the stylesheet shows one.
+// The failure shows its whole sentence in a thread wide enough for two lines of it, and only the retry
+// instruction at the query's width (max-width: it includes that width) or less. The width that decides it is
+// the thread's, not the viewport's: beside the list the thread is narrower than a phone's. Both texts are in
+// the document and the stylesheet shows one.
 test('the failure indicator shows its retry instruction alone in a thread too narrow for the sentence', () => {
   const thread = declarationsOf(chatsCss, '.chats-page .room-messages');
   assert.equal(
@@ -1370,9 +1371,10 @@ test('the failure indicator shows its retry instruction alone in a thread too na
   );
 });
 
-// The loading label is one line while the pill fits it, and two lines under that, at the size of the failure
-// text. The pill is taller there, and its margins take the height back all the same.
-test('the loading indicator takes two lines in a thread narrower than its longest label, and no more room', () => {
+// The loading label is one line while the pill fits it, and at 18rem of content or less it may wrap onto a
+// second line, at the size of the failure text. The pill is taller there whether or not it wraps, and its
+// margins take the height back all the same.
+test('the loading label may take two lines in a thread of 18rem or less, and no more room', () => {
   const blocks = containerBlocks(chatsCss);
   const wrapped = blocks.find(block => block.body.includes(':not(.failed)'));
   assert.ok(wrapped, 'the loading label has a width at which it wraps');
@@ -1380,7 +1382,7 @@ test('the loading indicator takes two lines in a thread narrower than its longes
   assert.ok(limit, `the width is a number of rem, not of px or of the viewport: ${wrapped.condition}`);
   const contentPx = Number(limit[1]) * 16;
   // The French label, the longest of the translations, is 285px wide with its icon, padding and border.
-  assert.ok(contentPx >= 285, 'a thread that holds the longest label on one line is not wrapped');
+  assert.ok(contentPx >= 285, 'a thread too narrow for the longest label on one line is wrapped');
   assert.ok(contentPx - 285 < 16, 'the label is not wrapped in a thread with more than a rem to spare');
 
   const thread = declarationsOf(chatsCss, '.chats-page .room-messages');
