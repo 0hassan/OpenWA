@@ -552,6 +552,94 @@ describe('Baileys inbound messages held for storage', () => {
     expect(h.announced()).toEqual(['H']);
   });
 
+  // An id names one message of one chat. The table refuses a delivery that reuses the id of a message it
+  // holds under another chat, and a delete from the reusing chat is the delete of that delivery, never of
+  // the stored message: its row keeps its content, and nothing announces it as deleted.
+  describe.each([
+    ['PostgreSQL', false],
+    ['SQLite', true],
+  ])('a delivery that reuses the id of a stored message of another chat, deleted by its sender on %s', (_, sqlite) => {
+    const CHAT_A = '628111@s.whatsapp.net';
+    const CHAT_B = '628222@s.whatsapp.net';
+    const real = (): Row => ({
+      sessionId: 's1',
+      waMessageId: 'X',
+      chatId: CHAT_A,
+      direction: 'incoming',
+      type: 'text',
+      body: 'the real one',
+      metadata: null,
+    });
+    const revokeFrom = (chat: string): WAMessage => ({
+      key: { id: 'REV', remoteJid: chat, fromMe: false },
+      messageTimestamp: 1_700_000_001,
+      message: { protocolMessage: { type: 0, key: { id: 'X', remoteJid: chat, fromMe: false } } },
+    });
+
+    it.each([
+      ['text', (): WAMessage => text('X', CHAT_B)],
+      ['media', (): WAMessage => media('X', CHAT_B)],
+    ])('leaves the stored message alone when the delivery is %s', async (_kind, reuse) => {
+      process.env.INBOUND_MEDIA_CONCURRENCY = '1';
+      const h = heldProjector({ unique: true, sqlite });
+      h.rows.push(real());
+      const download = deferred<ReturnType<typeof stream>>();
+      downloadMediaMessage.mockImplementationOnce(() => download.promise);
+      const { events } = build(4, h.callbacks);
+      upsert(events, reuse(), revokeFrom(CHAT_B));
+      await flush();
+      download.resolve(stream());
+      await flush();
+
+      expect(h.rows).toEqual([real()]);
+      expect(h.announcedAs('message.revoked')).toEqual([]);
+      expect(h.announced()).toEqual([]);
+    });
+
+    // The delivery's row waits for an earlier message of its chat: on SQLite as well, it is in flight
+    // from its emit until that commit ends, and a delete from its chat reaches it there.
+    it('leaves the stored message alone when the delivery waits for an earlier message of its chat', async () => {
+      const h = heldProjector({ unique: true, sqlite });
+      h.rows.push(real());
+      const release = h.stall('EARLIER');
+      const { events } = build(4, h.callbacks);
+      upsert(events, text('EARLIER', CHAT_B), text('X', CHAT_B));
+      await flush();
+      upsert(events, revokeFrom(CHAT_B));
+      await flush();
+      release();
+      await flush();
+
+      expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(real());
+      expect(h.inserted()).toEqual(['X', 'EARLIER']);
+      expect(h.announcedAs('message.revoked')).toEqual([]);
+      expect(h.announced()).toEqual(['EARLIER']);
+    });
+
+    it('still takes a later edit from the real message chat', async () => {
+      const h = heldProjector({ unique: true, sqlite });
+      h.rows.push(real());
+      const { events } = build(4, h.callbacks);
+      upsert(events, text('X', CHAT_B), revokeFrom(CHAT_B));
+      await flush();
+      upsert(events, {
+        key: { id: 'ENV', remoteJid: CHAT_A, fromMe: false },
+        messageTimestamp: 1_700_000_002,
+        message: {
+          protocolMessage: {
+            type: 14,
+            key: { id: 'X', remoteJid: CHAT_A, fromMe: false },
+            editedMessage: { conversation: 'fixed' },
+            timestampMs: 1_700_000_002_000,
+          },
+        },
+      });
+      await flush();
+
+      expect(h.rows).toEqual([{ ...real(), body: 'fixed' }]);
+    });
+  });
+
   // The session holds a change that reaches a message before its emit to the rule of the row it will
   // become, which needs the direction and the sender from the arrival on.
   it('names whose message it is in the arrival, and the sender behind a group message', async () => {

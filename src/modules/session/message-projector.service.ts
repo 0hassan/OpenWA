@@ -835,16 +835,18 @@ export class MessageProjector {
   recordRevoke(sessionId: string, waMessageId: string): Promise<void> {
     // A message not written yet takes the revoke once its row lands; the UPDATE below matches nothing.
     const inFlight = this.inboundInFlight.get(`${sessionId}:${waMessageId}`);
-    if (inFlight) {
-      inFlight.revoked = true;
-      // Media still waiting for room needs none now: wake it, so it is stored cleared at once.
-      for (const t of this.tickets.get(sessionId) ?? []) if (t.entry === inFlight) t.giveUp();
-    }
+    if (inFlight) this.holdRevoked(sessionId, inFlight);
     return new Promise(resolve =>
       this.enqueueMessageMutation(sessionId, waMessageId, () =>
         this.revokeRow(sessionId, waMessageId).finally(resolve),
       ),
     );
+  }
+
+  /** Take back a message not written yet: its row is stored cleared, and media waiting for room needs none. */
+  private holdRevoked(sessionId: string, entry: InFlightEntry): void {
+    entry.revoked = true;
+    for (const t of this.tickets.get(sessionId) ?? []) if (t.entry === entry) t.giveUp();
   }
 
   /**
@@ -1231,20 +1233,28 @@ export class MessageProjector {
       void this.webhookService.dispatch(id, 'message.revoked', revokedPayload);
       this.eventsGateway.emitMessageRevoked(id, revokedPayload);
     };
-    // An engine that applies no validation to a revoke says who made it, and the stored row says whose
-    // message it names: a revoke the row proves foreign is dropped, announcement included. whatsapp-web.js
-    // reports only what WhatsApp Web itself accepted, so it passes no actor and is applied at once. So is
-    // the revoke of a message still arriving, once the entry it is held under agrees with it: that message
-    // has no row to be checked against, and waiting for a read would let its emit run, and announce the
-    // deleted content, first.
-    const source = actor && ({ kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const);
-    const inFlight = this.inboundInFlight.get(`${id}:${revokedWaMessageId}`);
-    if (!source || (inFlight && !this.foreignToInFlight(inFlight, source))) {
+    // whatsapp-web.js reports only what WhatsApp Web itself accepted, so it passes no actor and is applied at
+    // once: its ids name the chat, so no row of another chat can hold the id. An engine that applies no
+    // validation to a revoke says who made it, and the stored row says whose message it names: a revoke the
+    // row proves foreign is dropped, announcement included.
+    if (!actor) {
       apply();
       return;
     }
-    // Judged by the stored row, which a change the entry called foreign has to find, and accept.
-    const needsRow = inFlight !== undefined;
+    const source = { kind: 'revoke', chatId: message.chatId, fromMe: actor.fromMe } as const;
+    const inFlight = this.inboundInFlight.get(`${id}:${revokedWaMessageId}`);
+    // A message still arriving, once the entry it is held under agrees with the revoke, is taken back at
+    // once: waiting for a read would let its emit run, and announce the deleted content, first. That is all
+    // the entry can vouch for. A repeat of an id sent from another chat is held under it too, and the row
+    // under the id may be the other chat's message, which only the row can say: the announcement and the
+    // clearing of the row wait for it.
+    const held = inFlight !== undefined && !this.foreignToInFlight(inFlight, source);
+    if (held) {
+      this.holdRevoked(id, inFlight);
+      inFlight.revokeAnnounced = true;
+    }
+    // Otherwise judged by the stored row, which a change the entry called foreign has to find, and accept.
+    const needsRow = inFlight !== undefined && !held;
     void this.mutationProjector.storedRowVerdict(id, revokedWaMessageId, source).then(verdict => {
       if (!this.engines.isLive(id, engine)) return;
       if (verdict.reason || (needsRow && !verdict.exists)) {

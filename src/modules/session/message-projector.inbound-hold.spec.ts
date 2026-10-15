@@ -456,14 +456,16 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
         expect(rows[0].type).not.toBe('revoked');
       });
 
-      it('is applied at once when its author made it', async () => {
+      it('is applied when its author made it, before the message is emitted', async () => {
         const t = admit(arrival('A', CHAT, false, false, true));
         projector.handleMessageRevoked('s1', engine, revoke(CHAT), { fromMe: true });
-        expect(dispatched('message.revoked')).toHaveLength(1);
+        // Nothing waits for the row read: the emit that follows it at once announces nothing of the message.
         projector.handleInboundMessage('s1', engine, message('A', CHAT, { body: 'mine', fromMe: true }), t);
         await flush();
 
         expect(rows[0]).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+        expect(dispatched('message.revoked')).toHaveLength(1);
+        expect(dispatched('message.received')).toEqual([]);
       });
 
       it('is judged by the stored row when a repeat of the id from another chat is held', async () => {
@@ -496,6 +498,163 @@ describe('MessageProjector holding inbound messages (PostgreSQL)', () => {
       await flush();
 
       expect(rows[0]).toEqual(expect.objectContaining({ body: 'edited' }));
+    });
+  });
+
+  // An id names one message of one chat. A delivery that reuses the id of a message stored under another
+  // chat is held under that id too, and a revoke from its chat agrees with it. That agreement says the
+  // delivery is taken back, not that the stored message is: only the row can say whose revoke it is.
+  describe('a revoke from the chat of a delivery that reuses the id of a stored message', () => {
+    const CHAT = '15550001111@c.us';
+    const OTHER = '15559998888@c.us';
+    const GROUP = '120363000000000001@g.us';
+    const MEMBER = '15551110001@c.us';
+    const stored = (over: Row = {}): Row => ({
+      sessionId: 's1',
+      waMessageId: 'A',
+      chatId: CHAT,
+      direction: 'incoming',
+      type: 'text',
+      body: 'original',
+      metadata: { keep: true },
+      ...over,
+    });
+    const revoke = (chatId: string): RevokedMessage => ({
+      id: 'A',
+      revokedId: 'A',
+      chatId,
+      from: chatId,
+      to: 'me@c.us',
+      type: 'revoked',
+      body: '',
+      timestamp: 1,
+    });
+    // As the real table's unique index refuses a second row under an id.
+    const uniqueIndex = (): void => {
+      insertGate = row =>
+        rows.some(r => r.waMessageId === row.waMessageId)
+          ? Promise.reject(Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' }))
+          : Promise.resolve();
+    };
+
+    it('leaves the stored row alone and announces nothing, while the delivery is held', async () => {
+      rows.push(stored());
+      uniqueIndex();
+      const t = admit(arrival('A', OTHER, false, false, false));
+      projector.handleMessageRevoked('s1', engine, revoke(OTHER), { fromMe: false });
+      await flush();
+      const receipt = projector.handleInboundMessage('s1', engine, message('A', OTHER, { body: 'repeat' }), t);
+      await flush();
+
+      expect(rows).toEqual([stored()]);
+      expect(dispatched('message.revoked')).toEqual([]);
+      expect(eventsGateway.emitMessageRevoked).not.toHaveBeenCalled();
+      expect(dispatched('message.received')).toEqual([]);
+      // The delivery was refused as another message than the one the row holds.
+      await expect(receipt?.settled).resolves.toEqual({ conflict: true });
+    });
+
+    it('leaves the stored row alone on SQLite too, while the delivery runs its hook chain', async () => {
+      build('better-sqlite3');
+      rows.push(stored());
+      uniqueIndex();
+      projector.handleInboundMessage('s1', engine, message('A', OTHER, { body: 'repeat' }));
+      projector.handleMessageRevoked('s1', engine, revoke(OTHER), { fromMe: false });
+      await flush();
+
+      expect(rows).toEqual([stored()]);
+      expect(dispatched('message.revoked')).toEqual([]);
+      expect(eventsGateway.emitMessageRevoked).not.toHaveBeenCalled();
+    });
+
+    it('keeps the revoke for the delivery itself, which is stored cleared where nothing holds the id', async () => {
+      rows.push(stored());
+      uniqueIndex();
+      const t = admit(arrival('A', OTHER, false, false, false));
+      projector.handleMessageRevoked('s1', engine, revoke(OTHER), { fromMe: false });
+      await flush();
+      // The stored message is gone (pruned, say) before the delivery commits.
+      rows.length = 0;
+      projector.handleInboundMessage('s1', engine, message('A', OTHER, { body: 'repeat' }), t);
+      await flush();
+
+      expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', chatId: OTHER, body: '', type: 'revoked' })]);
+      expect(hookStarts).toEqual([]);
+      expect(dispatched('message.received')).toEqual([]);
+    });
+
+    it('leaves the account own message alone when the other side reuses its id in the same chat', async () => {
+      rows.push(stored({ direction: 'outgoing' }));
+      uniqueIndex();
+      admit(arrival('A', CHAT, false, false, false));
+      projector.handleMessageRevoked('s1', engine, revoke(CHAT), { fromMe: false });
+      await flush();
+
+      expect(rows).toEqual([stored({ direction: 'outgoing' })]);
+      expect(dispatched('message.revoked')).toEqual([]);
+    });
+
+    it('still clears the stored message when its own chat revokes it while a repeat of it is held', async () => {
+      rows.push(stored());
+      admit(arrival('A', CHAT, false, false, false));
+      projector.handleMessageRevoked('s1', engine, revoke(CHAT), { fromMe: false });
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: '', type: 'revoked', metadata: null }));
+      expect(dispatched('message.revoked')).toHaveLength(1);
+    });
+
+    it('still clears a member message a group admin revokes while a repeat of it is held', async () => {
+      rows.push(stored({ chatId: GROUP, author: MEMBER }));
+      admit(arrival('A', GROUP, false, false, false, MEMBER));
+      projector.handleMessageRevoked('s1', engine, revoke(GROUP), { fromMe: false });
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+      expect(dispatched('message.revoked')).toHaveLength(1);
+    });
+
+    it('still clears the account own message when it revokes it from its phone while the echo is held', async () => {
+      rows.push(stored({ direction: 'outgoing' }));
+      admit(arrival('A', CHAT, false, false, true));
+      projector.handleMessageRevoked('s1', engine, revoke(CHAT), { fromMe: true });
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+      expect(dispatched('message.revoked')).toHaveLength(1);
+    });
+
+    it('still clears a row a REST send stored under the other dialect of the chat', async () => {
+      rows.push(stored({ chatId: '15550001111@s.whatsapp.net', direction: 'outgoing' }));
+      admit(arrival('A', CHAT, false, false, true));
+      projector.handleMessageRevoked('s1', engine, revoke(CHAT), { fromMe: true });
+      await flush();
+
+      expect(rows[0]).toEqual(expect.objectContaining({ body: '', type: 'revoked' }));
+      expect(dispatched('message.revoked')).toHaveLength(1);
+    });
+
+    it('takes back a message still arriving whose row nothing stores, as before', async () => {
+      const t = admit(arrival('A', CHAT, false, false, false));
+      projector.handleMessageRevoked('s1', engine, revoke(CHAT), { fromMe: false });
+      projector.handleInboundMessage('s1', engine, message('A', CHAT), t);
+      await flush();
+
+      expect(rows).toEqual([expect.objectContaining({ waMessageId: 'A', body: '', type: 'revoked' })]);
+      expect(dispatched('message.revoked')).toHaveLength(1);
+      expect(dispatched('message.received')).toEqual([]);
+    });
+
+    // A status post keeps no entry: its own table takes it. A revoke of it reaches the row of the same
+    // id, if there is one, only as a revoke of another chat.
+    it('leaves a message alone that shares its id with a deleted status post', async () => {
+      rows.push(stored());
+      admit(arrival('A', 'status@broadcast', false, true));
+      projector.handleMessageRevoked('s1', engine, revoke('status@broadcast'), { fromMe: false });
+      await flush();
+
+      expect(rows).toEqual([stored()]);
+      expect(dispatched('message.revoked')).toEqual([]);
     });
   });
 
