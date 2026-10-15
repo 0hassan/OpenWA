@@ -1,6 +1,6 @@
 # @rmyndharis/openwa
 
-This document describes `main`. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name are unreleased additions after SDK 0.5.1 and require the corresponding server changes after OpenWA 0.24.0.
+This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
 
 Official JavaScript/TypeScript SDK for [OpenWA](https://github.com/rmyndharis/OpenWA), the open-source WhatsApp API Gateway. OpenWA is an independent project, not affiliated with or endorsed by WhatsApp or Meta.
 
@@ -117,7 +117,7 @@ rejects the publish, so configure it first.
 Cutting a release:
 
 1. Bump `version` in `package.json` and land it on `main`.
-2. Tag that commit `js-sdk-v<version>` (e.g. `js-sdk-v0.5.1`) and push the tag.
+2. Tag that commit `js-sdk-v<version>` (e.g. `js-sdk-v0.6.0`) and push the tag.
    The SDK has its own version line — the monorepo's `v*` tags are the app
    version and never trigger an SDK publish.
 3. The workflow audits the SDK lockfile (`npm audit --audit-level=high`),
@@ -135,7 +135,7 @@ MIT
 
 ## Send idempotency
 
-The example below requires the unreleased SDK changes on `main`; SDK 0.5.1 does not expose this per-send key argument. The server must also include the send idempotency changes after OpenWA 0.24.0.
+The example below requires SDK 0.6.0 or later and OpenWA 0.25.0 or later. SDK 0.5.1 does not expose this per-send key argument.
 
 Supply a unique caller-owned key for one logical send and reuse it when retrying that same call. Keys contain 1-255 visible ASCII characters; unrelated calls must use different keys. The SDK forwards the key without changing its retry policy or generating one automatically.
 
