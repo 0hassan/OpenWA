@@ -896,8 +896,12 @@ export interface EngineEventCallbacks {
   /**
    * Fired for each received message. The session may answer with a receipt for what it makes of the
    * message once its row is settled (see {@link InboundReceipt}); the engine never holds the message back
-   * for it, though a change aimed at that message waits for it before it is judged, and a receipt that
-   * fails, or is still unsettled after minutes, is let go of.
+   * for it. A change aimed at that message waits for the receipt only when it reads as foreign to the
+   * copy the engine holds under its id; one from that copy's own chat and author is not delayed. A receipt
+   * that fails, or is still unsettled after minutes, is let go of. No receipt comes for a message the
+   * session skips as ephemeral, nor for one the engine does not emit because its sender deleted it while
+   * it was processed and nothing holds it from its arrival (SQLite): the engine's copy of such a message
+   * that reuses another message's id is not reported as a conflict, and stays.
    */
   onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void | InboundReceipt;
   /**

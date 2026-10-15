@@ -926,6 +926,9 @@ export interface EngineEventCallbacks {
     author?: string;
   }) => InboundTicket | undefined; // PostgreSQL: reserves room for a download before the emit, and holds a change to the chat, direction and author it names
   onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void | InboundReceipt; // the receipt reports { conflict: true } when the id already held another message; Baileys drops its copy
+  // A change aimed at that id that reads as foreign to the engine's copy waits for the receipt: up to 3 media download
+  // timeouts for a message still being processed, then 5 minutes for the session, at most 64 changes at once. A change
+  // that cannot wait, or is still waiting when the time runs out, is dropped.
   onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
   onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
