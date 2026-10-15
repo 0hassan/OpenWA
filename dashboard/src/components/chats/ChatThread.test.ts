@@ -1428,6 +1428,15 @@ test('the older-page indicator takes no room in the thread, loading or failed', 
   );
 });
 
+// The indicator is positioned and comes before the bubbles, so it needs a z-index to be seen over the bubbles
+// that scroll under it, and it must not exceed a bubble's actions menu, which it would then cover.
+test('the older-page indicator stacks over the bubbles and not over their actions menu', () => {
+  const indicator = Number(declarationsOf(chatsCss, '.chats-page .messages-loading-older')['z-index']);
+  const menu = Number(declarationsOf(chatsCss, '.chats-page .message-actions-menu')['z-index']);
+  assert.ok(indicator > 0, `the indicator has a positive z-index: ${indicator}`);
+  assert.ok(indicator <= menu, `the indicator is not above the actions menu: ${indicator} against ${menu}`);
+});
+
 // The text of the indicator clips, for its ellipsis and for the limit on the failure's lines, and a line box is
 // shorter than the glyphs of some scripts: the tails of g and p, Telugu conjuncts below the base, Arabic marks.
 // The padding is the room the clip leaves them and the negative margin takes it back, so the box lays out as
