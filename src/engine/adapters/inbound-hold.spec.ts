@@ -731,7 +731,7 @@ describe('Baileys inbound messages held for storage', () => {
       expect(h.announced()).toEqual([]);
     });
 
-    it('hands the real edit to the session while the repeat is held, and removes the copy once it is refused', async () => {
+    it('holds the real edit while the repeat is held, and lands it once the copy is refused', async () => {
       const h = heldProjector({ unique: true });
       h.rows.push(seeded());
       const release = h.stall('X');
@@ -745,7 +745,8 @@ describe('Baileys inbound messages held for storage', () => {
       // Judged against the copy alone it would be foreign, and lost with the copy's removal still to come.
       upsert(events, realEdit());
       await flush();
-      expect(h.rows[0]).toEqual(expect.objectContaining({ body: 'fixed' }));
+      expect(h.rows).toEqual([seeded()]);
+      expect(h.announcedAs('message.edited')).toEqual([]);
       expect(store.copies.has('X')).toBe(true);
 
       release();
@@ -859,17 +860,24 @@ describe('Baileys inbound messages held for storage', () => {
           },
         );
 
-        // The delivery's answer is pending when the change is handed on, so only the session can drop it:
-        // by the entry it holds the delivery under, and by the row once there is one.
+        // The delivery's answer is pending when the change is judged, so the adapter holds it: it does nothing
+        // for it until the answer, when it drops it, or, with the copy gone, leaves it to the session, which
+        // drops it by the row.
         it.each(kinds.flatMap(kind => [true, false].map(conflicts => [kind, conflicts] as const)))(
-          'leaves a forged %s from a third chat to the session, which drops it (delivery conflicts: %s)',
+          'holds a forged %s from a third chat until the delivery is answered, then drops it (delivery conflicts: %s)',
           async (kind, conflicts) => {
             const h = heldProjector({ unique: true, sqlite });
             // Without a row of another message, the delivery is the message the id names.
             if (conflicts) h.rows.push(seeded());
             const release = h.stall('X');
             const { store, open } = holdingReads([1]);
-            const { events } = build(4, h.callbacks, store);
+            const handedOn = {
+              onMessageEdited: jest.fn(h.callbacks.onMessageEdited),
+              onMessageRevoked: jest.fn(h.callbacks.onMessageRevoked),
+              onMessageReaction: jest.fn(h.callbacks.onMessageReaction),
+            };
+            const { events } = build(4, { ...h.callbacks, ...handedOn }, store);
+            const reached = (): number => Object.values(handedOn).reduce((n, fn) => n + fn.mock.calls.length, 0);
 
             upsert(events, text('X', CHAT_B));
             await flush();
@@ -877,11 +885,11 @@ describe('Baileys inbound messages held for storage', () => {
             await flush();
             open(1);
             await flush();
-            expect(h.announcedAs('message.edited')).toEqual([]);
-            expect(h.announcedAs('message.revoked')).toEqual([]);
+            expect(reached()).toBe(0);
             release();
             await flush();
 
+            expect(reached()).toBe(conflicts ? 1 : 0);
             expect(effect(h, kind)).toEqual(untouched(kind, conflicts));
             expect(h.announcedAs('message.edited')).toEqual([]);
             expect(h.announcedAs('message.revoked')).toEqual([]);
@@ -937,6 +945,30 @@ describe('Baileys inbound messages held for storage', () => {
         release();
         await flush();
         expect(emitted).toEqual(['H', 'X']);
+        expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(
+          expect.objectContaining({ chatId: CHAT_A, body: 'fixed' }),
+        );
+      });
+
+      it('keeps no limiter slot while the change waits for the answer', async () => {
+        process.env.INBOUND_MEDIA_CONCURRENCY = '1';
+        const h = heldProjector({ unique: true });
+        h.rows.push(seeded());
+        const release = h.stall('X');
+        const { events } = build(1, h.callbacks, memoryStore());
+
+        upsert(events, text('X', CHAT_B));
+        await flush();
+        upsert(events, change('edit', CHAT_A, 'REAL_ENV'));
+        await flush();
+        // The only slot is free for what arrives next, though the change has not been judged.
+        upsert(events, text('N', CHAT_C));
+        await flush();
+        expect(h.inserted()).toContain('N');
+        expect(h.rows.find(r => r.waMessageId === 'X')?.body).toBe('the real one');
+
+        release();
+        await flush();
         expect(h.rows.find(r => r.waMessageId === 'X')).toEqual(
           expect.objectContaining({ chatId: CHAT_A, body: 'fixed' }),
         );

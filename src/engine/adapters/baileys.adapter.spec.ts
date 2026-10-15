@@ -8991,6 +8991,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
   describe('a delivery that reuses the id of another message', () => {
     type Copy = { key: { id: string; remoteJid: string; participant?: string; fromMe?: boolean } };
     const OTHER = '628222@s.whatsapp.net';
+    const dropped = 'Dropping an edit, revoke or reaction aimed at a message from another chat or author';
     const copies = new Map<string, Copy>();
 
     beforeEach(() => {
@@ -9198,7 +9199,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       expect(copies.has('REUSED')).toBe(false);
     });
 
-    it('hands the real edit to the session while it has not answered, then removes the copy', async () => {
+    it('holds the real edit while the session has not answered, and hands it on once the copy is removed', async () => {
       const answered = answer();
       const onMessageEdited = jest.fn();
       await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
@@ -9208,14 +9209,16 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       // The edit reads as foreign to the stored copy, which is the delivery the session has yet to judge.
       realEdit();
       await settleAll();
-      expect(onMessageEdited).toHaveBeenCalledWith(
-        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
-      );
+      expect(onMessageEdited).not.toHaveBeenCalled();
       expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
 
       answered.resolve({ conflict: true });
       await settleAll();
       expect(copies.has('REUSED')).toBe(false);
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+      expect(fakeStore.remove.mock.invocationCallOrder[0]).toBeLessThan(onMessageEdited.mock.invocationCallOrder[0]);
     });
 
     // The read of the real edit runs on the store's clock, not the session's: it can begin under the hold and
@@ -9249,7 +9252,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       );
     });
 
-    it('hands the real edit to the session when its store read began before the delivery was stored', async () => {
+    it('holds the real edit until the answer when its store read began before the delivery was stored', async () => {
       const answered = answer();
       const onMessageEdited = jest.fn();
       await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
@@ -9271,6 +9274,10 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
 
       openGate();
+      await settleAll();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+
+      answered.resolve({ conflict: true });
       await settleAll();
       expect(onMessageEdited).toHaveBeenCalledWith(
         expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
@@ -9343,7 +9350,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       expect(onMessageEdited).not.toHaveBeenCalled();
     });
 
-    it('keeps the id held until the removal of the copy has run', async () => {
+    it('keeps a change held until the removal of the copy has run', async () => {
       const answered = answer();
       const onMessageEdited = jest.fn();
       await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
@@ -9363,12 +9370,13 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
 
       realEdit();
       await settleAll();
-      expect(onMessageEdited).toHaveBeenCalledWith(
-        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
-      );
+      expect(onMessageEdited).not.toHaveBeenCalled();
       runRemoval();
       await settleAll();
       expect(copies.has('REUSED')).toBe(false);
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
     });
 
     it('applies the edit of the delivery itself to its copy before the answer, and still removes it', async () => {
@@ -9391,12 +9399,13 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       expect(copies.has('REUSED')).toBe(false);
     });
 
-    it('stops judging in the session once every delivery of the id has been answered', async () => {
+    it('judges a change against the copy once every delivery of the id has been answered', async () => {
       const first = answer();
       const second = answer();
       const outcomes = [first.promise, second.promise];
       const onMessageEdited = jest.fn();
-      await startWith({ onMessage: jest.fn(() => ({ settled: outcomes.shift()! })), onMessageEdited });
+      const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: outcomes.shift()! })), onMessageEdited });
+      const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
       // Both pass the repeat check before either is stored, as a repeat sent while the first is processed does.
       fakeSock.fire('messages.upsert', {
         type: 'notify',
@@ -9413,21 +9422,24 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       await settleAll();
       realEdit();
       await settleAll();
-      expect(onMessageEdited).toHaveBeenCalledTimes(1); // the second delivery is still unanswered
+      // The second delivery is still unanswered, so the copy cannot judge the change yet.
+      expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
 
       second.resolve(undefined);
       await settleAll();
+      expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'REUSED' }));
       realEdit();
       await settleAll();
-      expect(onMessageEdited).toHaveBeenCalledTimes(1); // now judged against the copy again
+      expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(2);
+      expect(onMessageEdited).not.toHaveBeenCalled();
     });
 
     // The reusing delivery is not stored, and its receipt does not exist, until its processing (the limiter
     // queue, the repeat check, a media download) is over. A change that arrives meanwhile can only be judged
-    // against the key the delivery arrived under, which says nothing of which message the id names.
+    // against the key the delivery arrived under, which says nothing of which message the id names. It waits
+    // for the delivery, and then for the session's answer, and is judged once those are in.
     describe('a change that arrives while the delivery is still being processed', () => {
       const THIRD = '628333@s.whatsapp.net';
-      const dropped = 'Dropping an edit, revoke or reaction aimed at a message from another chat or author';
       const WAIT_MS = 3 * 30_000;
       type Kind = 'edit' | 'delete' | 'reaction';
       const kinds: Kind[] = ['edit', 'delete', 'reaction'];
@@ -9481,7 +9493,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
           reaction: callbacks.onMessageReaction,
         })[kind];
 
-      it.each(kinds)('holds a real %s, and hands it to the session once the delivery is stored', async kind => {
+      it.each(kinds)('holds a real %s until the delivery is stored and answered, then hands it on', async kind => {
         const answered = answer();
         const callbacks = sessionCallbacks();
         const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), ...callbacks });
@@ -9499,11 +9511,15 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         open(1);
         await settleAll();
         expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
-        expect(handedOn(callbacks, kind)).toHaveBeenCalledTimes(1);
+        // The delivery's copy stands in for a message the session may hold under another chat.
+        expect(handedOn(callbacks, kind)).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
 
         answered.resolve({ conflict: true });
         await settleAll();
         expect(copies.has('REUSED')).toBe(false);
+        expect(handedOn(callbacks, kind)).toHaveBeenCalledTimes(1);
+        expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
       });
 
       it.each(kinds)('lands a real %s when the session reports the conflict before it is judged again', async kind => {
@@ -9558,20 +9574,32 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         },
       );
 
-      it('leaves a change from a third chat to the session while it has not answered, which judges it by its row', async () => {
-        const callbacks = sessionCallbacks();
-        const answered = answer();
-        await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), ...callbacks });
-        const open = holdReads([1]);
-        deliverReuse();
-        await settleAll();
-        changeFrom('edit', THIRD);
-        await settleAll();
-        open(1);
-        await settleAll();
+      // The copy that is removed was the delivery's, so nothing the adapter holds names the message: the change
+      // goes to the session, which judges it by its row. A copy that stays is the message, and the change is
+      // foreign to it.
+      it.each(kinds.flatMap(kind => [true, false].map(conflict => [kind, conflict] as const)))(
+        'holds the %s from a third chat until the session answers (delivery conflicts: %s)',
+        async (kind, conflict) => {
+          const callbacks = sessionCallbacks();
+          const answered = answer();
+          const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), ...callbacks });
+          const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+          const open = holdReads([1]);
+          deliverReuse();
+          await settleAll();
+          changeFrom(kind, THIRD);
+          await settleAll();
+          open(1);
+          await settleAll();
+          expect(handedOn(callbacks, kind)).not.toHaveBeenCalled();
+          expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
 
-        expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(1);
-      });
+          answered.resolve({ conflict });
+          await settleAll();
+          expect(handedOn(callbacks, kind)).toHaveBeenCalledTimes(conflict ? 1 : 0);
+          expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(conflict ? 0 : 1);
+        },
+      );
 
       it('does not hold an edit from the chat the delivery arrived in', async () => {
         const callbacks = sessionCallbacks();
@@ -9697,20 +9725,186 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
           expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(6);
           expect(jest.getTimerCount() - idle).toBe(limit);
 
+          // The delivery is stored and waits for its answer: the parked changes wait for that too.
           open(1);
           await settleAll();
-          expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(limit);
+          expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+          expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(6);
 
           answered.resolve({ conflict: true });
           await settleAll();
+          expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(limit);
           expect(jest.getTimerCount()).toBe(idle);
         });
+
+        it('parks only so many changes on an answer, dropping the rest at once, and frees every timer', async () => {
+          const limit = (BaileysEvents as unknown as { CHANGES_PARKED_LIMIT: number }).CHANGES_PARKED_LIMIT;
+          const callbacks = sessionCallbacks();
+          const answered = answer();
+          const adapter = await startWith({
+            onMessage: jest.fn(() => ({ settled: answered.promise })),
+            ...callbacks,
+          });
+          const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+          deliverReuse();
+          await settleAll();
+          const idle = jest.getTimerCount();
+
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: Array.from({ length: limit + 6 }, (_, i) => ({
+              key: { id: `FLOOD_${i}`, remoteJid: PEER, fromMe: false },
+              message: {
+                protocolMessage: { key: { id: 'REUSED' }, type: 14, editedMessage: { conversation: `edit ${i}` } },
+              },
+              messageTimestamp: 1700000100,
+            })),
+          });
+          await settleAll();
+          // Never handed on unjudged: what cannot wait is dropped.
+          expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+          expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(6);
+          expect(jest.getTimerCount() - idle).toBe(limit);
+
+          answered.resolve({ conflict: true });
+          await settleAll();
+          expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(limit);
+          expect(jest.getTimerCount()).toBe(idle - 1); // the delivery's own hold is gone too
+        });
+      });
+    });
+
+    // The adapter acts on a change itself before the session judges it: the chat preview, the record of a
+    // delete, the stored copy and the callbacks. A change that reads as foreign to the copy it names must not
+    // do any of that while the session has not said whether the copy is the message.
+    describe('a forged change aimed at a delivery whose answer is pending', () => {
+      const GROUP = '120363000@g.us';
+      const MEMBER_1 = '628222@s.whatsapp.net';
+      const MEMBER_2 = '628333@s.whatsapp.net';
+      const outcomes: Array<[string, InboundOutcome | undefined]> = [
+        ['the session finds no conflict', { conflict: false }],
+        ['the session says nothing', undefined],
+      ];
+
+      const preview = async (adapter: BaileysAdapter, chat: string): Promise<string | undefined> =>
+        (await adapter.getChats()).find(c => c.id === chat)?.lastMessage;
+
+      const receive = (id: string, key: Record<string, unknown>): void => {
+        fakeSock.fire('messages.upsert', {
+          type: 'notify',
+          messages: [
+            {
+              key: { id, fromMe: false, ...key },
+              message: { conversation: 'original text' },
+              messageTimestamp: 1700000100,
+            },
+          ],
+        });
+      };
+
+      it.each(outcomes)(
+        "keeps a group message's preview and callbacks clear of another member's edit while it waits and after it, when %s",
+        async (_, outcome) => {
+          const answered = answer();
+          const onMessageEdited = jest.fn();
+          const adapter = await startWith({
+            onMessage: jest.fn(() => ({ settled: answered.promise })),
+            onMessageEdited,
+          });
+          const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+          fakeSock.fire('chats.upsert', [{ id: GROUP, name: 'Team' }]);
+          receive('GRP1', { remoteJid: GROUP, participant: MEMBER_1 });
+          await settleAll();
+          expect(await preview(adapter, GROUP)).toBe('original text');
+
+          fireProtocol(
+            { id: 'EDIT_P2', remoteJid: GROUP, participant: MEMBER_2, fromMe: false },
+            { key: { id: 'GRP1' }, type: 14, editedMessage: { conversation: 'FORGED BY P2' } },
+          );
+          await settleAll();
+          expect(await preview(adapter, GROUP)).toBe('original text');
+          expect(onMessageEdited).not.toHaveBeenCalled();
+
+          answered.resolve(outcome);
+          await settleAll();
+          expect(await preview(adapter, GROUP)).toBe('original text');
+          expect(onMessageEdited).not.toHaveBeenCalled();
+          expect(fakeStore.update).not.toHaveBeenCalled();
+          expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'GRP1' }));
+        },
+      );
+
+      it.each(outcomes)(
+        'does nothing for an edit, a delete and a reaction from another chat while it waits and after it, when %s',
+        async (_, outcome) => {
+          const answered = answer();
+          const onMessageEdited = jest.fn();
+          const onMessageRevoked = jest.fn();
+          const onMessageReaction = jest.fn();
+          const adapter = await startWith({
+            onMessage: jest.fn(() => ({ settled: answered.promise })),
+            onMessageEdited,
+            onMessageRevoked,
+            onMessageReaction,
+          });
+          fakeSock.fire('chats.upsert', [{ id: PEER, name: 'Alice' }]);
+          receive('DM1', { remoteJid: PEER });
+          await settleAll();
+
+          const third = { remoteJid: '628444@s.whatsapp.net', fromMe: false };
+          fireProtocol(
+            { id: 'EDIT_ENV', ...third },
+            { key: { id: 'DM1' }, type: 14, editedMessage: { conversation: 'FORGED' } },
+          );
+          fireProtocol({ id: 'REVOKE_ENV', ...third }, { key: { id: 'DM1' }, type: 0 });
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'REACT_ENV', ...third },
+                message: { reactionMessage: { key: { id: 'DM1' }, text: '👎' } },
+                messageTimestamp: 1700000101,
+              },
+            ],
+          });
+          await settleAll();
+          const expectUntouched = async (): Promise<void> => {
+            expect(await preview(adapter, '628111@c.us')).toBe('original text');
+            expect(onMessageEdited).not.toHaveBeenCalled();
+            expect(onMessageRevoked).not.toHaveBeenCalled();
+            expect(onMessageReaction).not.toHaveBeenCalled();
+            expect((adapter as unknown as { events: BaileysEvents }).events.wasDeletedForEveryone('DM1')).toBe(false);
+            expect(fakeStore.update).not.toHaveBeenCalled();
+          };
+          await expectUntouched();
+
+          answered.resolve(outcome);
+          await settleAll();
+          await expectUntouched();
+        },
+      );
+
+      it('still applies the edit of the real author while the answer is pending', async () => {
+        const answered = answer();
+        const onMessageEdited = jest.fn();
+        const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+        fakeSock.fire('chats.upsert', [{ id: GROUP, name: 'Team' }]);
+        receive('GRP1', { remoteJid: GROUP, participant: MEMBER_1 });
+        await settleAll();
+
+        fireProtocol(
+          { id: 'EDIT_P1', remoteJid: GROUP, participant: MEMBER_1, fromMe: false },
+          { key: { id: 'GRP1' }, type: 14, editedMessage: { conversation: 'fixed by the author' } },
+        );
+        await settleAll();
+
+        expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'GRP1' }));
+        expect(await preview(adapter, GROUP)).toBe('fixed by the author');
       });
     });
 
     describe('an answer that does not come', () => {
       const HOLD_MS = 5 * 60_000;
-      const edited = 'Dropping an edit, revoke or reaction aimed at a message from another chat or author';
 
       beforeEach(() => {
         jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
@@ -9720,7 +9914,7 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         jest.useRealTimers();
       });
 
-      it('stops holding the id for the session after a while, so a change is judged against the copy again', async () => {
+      it('stops holding the id for the session after a while, so a change is judged against the copy', async () => {
         const onMessageEdited = jest.fn();
         const adapter = await startWith({
           onMessage: jest.fn(() => ({ settled: new Promise<InboundOutcome | undefined>(() => undefined) })),
@@ -9732,14 +9926,55 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
 
         realEdit();
         await settleAll();
-        expect(onMessageEdited).toHaveBeenCalledTimes(1);
+        jest.advanceTimersByTime(HOLD_MS - 1);
+        await settleAll();
+        expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
 
-        jest.advanceTimersByTime(HOLD_MS);
+        jest.advanceTimersByTime(1);
+        await settleAll();
+        // Never handed on unjudged: the copy it was parked for is all there is to judge it by.
+        expect(onMessageEdited).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'REUSED' }));
+
         realEdit();
         await settleAll();
+        expect(onMessageEdited).not.toHaveBeenCalled();
+        expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(2);
+      });
 
-        expect(onMessageEdited).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith(edited, expect.objectContaining({ targetId: 'REUSED' }));
+      it('sets none of its timers to keep the process alive', async () => {
+        const WAIT_MS = 3 * 30_000; // a change waiting for a delivery to be processed
+        const answered = answer();
+        await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited: jest.fn() });
+        // The delivery's repeat check is held, so the change meets it while it is still being processed.
+        let openRead!: () => void;
+        const gate = new Promise<void>(resolve => (openRead = resolve));
+        fakeStore.getMessage.mockImplementationOnce(async (_session: string, id: string) => {
+          await gate;
+          return structuredClone(copies.get(id) ?? null);
+        });
+        const created: Array<{ ms: number; unref: jest.SpyInstance }> = [];
+        const setTimer = global.setTimeout;
+        const spy = jest.spyOn(global, 'setTimeout').mockImplementation((fn: () => void, ms?: number) => {
+          const timer = setTimer(fn, ms);
+          created.push({ ms: ms ?? 0, unref: jest.spyOn(timer, 'unref') });
+          return timer;
+        });
+        try {
+          // A change parked behind the delivery, then on the hold the delivery puts on its answer.
+          deliverReuse();
+          await settleAll();
+          realEdit();
+          await settleAll();
+          openRead();
+          await settleAll();
+        } finally {
+          spy.mockRestore();
+        }
+
+        const watched = created.filter(t => t.ms === HOLD_MS || t.ms === WAIT_MS);
+        expect(watched.map(t => t.ms)).toEqual([WAIT_MS, HOLD_MS, HOLD_MS]);
+        for (const timer of watched) expect(timer.unref).toHaveBeenCalledTimes(1);
       });
 
       it('still removes the copy when the session answers after the hold ended', async () => {
@@ -9778,8 +10013,41 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         realEdit();
         await settleAll();
 
+        // Still held for the second, so the copy cannot judge the change yet.
+        expect(onMessageEdited).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
+
+        second.resolve({ conflict: true });
+        await settleAll();
         expect(onMessageEdited).toHaveBeenCalledTimes(1);
-        expect(warn).not.toHaveBeenCalledWith(edited, expect.anything());
+        expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
+      });
+
+      it('waits no longer than the hold lasts, however many deliveries of the id hold it in turn', async () => {
+        const first = answer();
+        const second = answer();
+        const outcomes = [first.promise, second.promise];
+        const onMessageEdited = jest.fn();
+        const adapter = await startWith({
+          onMessage: jest.fn(() => ({ settled: outcomes.shift()! })),
+          onMessageEdited,
+        });
+        const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+        deliverReuse();
+        await settleAll();
+        realEdit();
+        await settleAll();
+        jest.advanceTimersByTime(2 * 60_000);
+        copies.delete('REUSED'); // the store let it go, so the repeat is not skipped as one it holds
+        deliverReuse();
+        await settleAll();
+
+        // The first hold ends on its timer, the second still has two minutes: the change was parked for the
+        // hold, which has lasted as long as a hold may, and is not handed on for the later delivery.
+        jest.advanceTimersByTime(HOLD_MS - 2 * 60_000);
+        await settleAll();
+        expect(onMessageEdited).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'REUSED' }));
       });
 
       it('frees the hold at once when the answer comes', async () => {
@@ -9795,6 +10063,45 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
 
         expect(jest.getTimerCount()).toBe(idle);
       });
+    });
+
+    // A delivery the store cannot keep leaves no copy to judge by, so the key it arrived under stands in until
+    // a conflict is reported: then that delivery was not the message the id names.
+    it.each([
+      ['lands the real edit when the session reports the conflict', true],
+      ['drops a forged edit when the session finds the delivery was the message', false],
+    ])('%s for a delivery the store never held', async (_, conflict) => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+      fakeStore.put.mockRejectedValue(new Error('disk full'));
+      // An earlier delivery of the id is still being processed, which keeps the id in flight after the
+      // repeat of it has been handed on.
+      let openFirst!: () => void;
+      const firstGate = new Promise<void>(resolve => (openFirst = resolve));
+      fakeStore.getMessage.mockImplementationOnce(async () => {
+        await firstGate;
+        return null;
+      });
+      deliverReuse();
+      deliverReuse();
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
+
+      answered.resolve({ conflict });
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledTimes(conflict ? 1 : 0);
+      expect(warn.mock.calls.filter(([message]) => message === dropped)).toHaveLength(conflict ? 0 : 1);
+
+      openFirst();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledTimes(conflict ? 1 : 0);
     });
 
     it('is not held up by an answer that rejects, and warns once', async () => {

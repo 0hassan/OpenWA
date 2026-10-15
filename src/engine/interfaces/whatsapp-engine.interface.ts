@@ -895,8 +895,9 @@ export interface EngineEventCallbacks {
   }) => InboundTicket | undefined;
   /**
    * Fired for each received message. The session may answer with a receipt for what it makes of the
-   * message once its row is settled (see {@link InboundReceipt}); the engine never waits for it, and
-   * a receipt that fails, or is still unsettled after minutes, is let go of.
+   * message once its row is settled (see {@link InboundReceipt}); the engine never holds the message back
+   * for it, though a change aimed at that message waits for it before it is judged, and a receipt that
+   * fails, or is still unsettled after minutes, is let go of.
    */
   onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void | InboundReceipt;
   /**

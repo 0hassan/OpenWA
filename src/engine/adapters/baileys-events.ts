@@ -332,17 +332,17 @@ export class BaileysEvents {
   private readonly editedWhileInFlight = new Map<string, { envelope: WAMessageKey; body: string }>();
 
   /**
-   * How many deliveries of an id were handed to onMessage and have no outcome yet, by id. The stored
-   * copy of such an id may be a duplicate the session is about to call another message's (the real one
-   * lives in its table only), so a change that reads as foreign to it is the session's to judge, which
-   * it does against the row (see targetsForeignMessage). An entry lasts at most OUTCOME_HOLD_MS. It begins
-   * when the delivery is handed on. A change that arrives while the delivery is still being processed
-   * (limiter wait, repeat check, media download) and reads as foreign to its key waits for that processing
-   * to end, then is judged again with this hold in place.
+   * The deliveries of an id handed to onMessage that have no outcome yet, by id: how many, and a promise
+   * that settles when the last of them has one (or is let go of after OUTCOME_HOLD_MS). The stored copy
+   * of such an id may be a duplicate the session is about to call another message's (the real one lives
+   * in its table only), so it cannot judge a change that reads as foreign to it yet: that change waits
+   * on `ended` and is judged again (see targetsForeignMessage). A hold begins when the delivery is
+   * handed on. A change that arrives while the delivery is still being processed (limiter wait, repeat
+   * check, media download) waits for that processing to end first.
    */
-  private readonly outcomesPending = new Map<string, number>();
+  private readonly outcomesPending = new Map<string, { count: number; ended: Promise<void>; free: () => void }>();
 
-  /** How many changes wait for a delivery to be processed (see awaitDelivery); the rest are judged at once. */
+  /** How many changes wait for a delivery or its outcome (see parkUntil); the rest are judged at once. */
   private changesParked = 0;
 
   private static readonly CHANGES_PARKED_LIMIT = 64;
@@ -884,18 +884,27 @@ export class BaileysEvents {
   /**
    * Count a delivery of `id` as awaiting the session's outcome, until the returned function is called
    * or OUTCOME_HOLD_MS passes, whichever is first, so a receipt that never settles (a hook that never
-   * returns) cannot keep the id held for the life of the adapter. Ending twice counts once.
+   * returns) cannot keep the id held for the life of the adapter. Ending twice counts once. The changes
+   * parked for the id wake once its last delivery's hold has ended.
    */
   private holdOutcome(id: string): () => void {
-    this.outcomesPending.set(id, (this.outcomesPending.get(id) ?? 0) + 1);
+    let hold = this.outcomesPending.get(id);
+    if (!hold) {
+      let free!: () => void;
+      const ended = new Promise<void>(resolve => (free = resolve));
+      hold = { count: 0, ended, free };
+      this.outcomesPending.set(id, hold);
+    }
+    const entry = hold;
+    entry.count++;
     let ended = false;
     const end = (): void => {
       if (ended) return;
       ended = true;
       clearTimeout(timer);
-      const pending = (this.outcomesPending.get(id) ?? 1) - 1;
-      if (pending > 0) this.outcomesPending.set(id, pending);
-      else this.outcomesPending.delete(id);
+      if (--entry.count > 0) return;
+      this.outcomesPending.delete(id);
+      entry.free();
     };
     const timer = setTimeout(end, BaileysEvents.OUTCOME_HOLD_MS);
     timer.unref();
@@ -1070,11 +1079,16 @@ export class BaileysEvents {
    * or, with `checkAuthor`, one somebody else sent. WhatsApp clients ignore such a message, but Baileys
    * emits it as-is and the projector updates the stored row by id alone, so a contact who knows an id
    * could rewrite or erase that message. A message still being processed is checked against the key
-   * it arrived under, but only once its processing has ended when that key reads the change as foreign:
-   * the delivery may be a duplicate of a message the session holds under another chat, and until it has
-   * been stored its key proves nothing about which of the two the change names (see awaitDelivery).
-   * Fails open: with no original at all, or ids that cannot be compared (see {@link differentWaIds}),
-   * the event goes through as it always has.
+   * it arrived under. Fails open: with no original at all, or ids that cannot be compared (see
+   * {@link differentWaIds}), the event goes through as it always has.
+   *
+   * The copy a change reads as foreign to may be a duplicate of a message the session holds under
+   * another chat, which only the session can say once it has stored the message and answered. Such a
+   * change is not handed on to be judged there, since the adapter acts on it before the session does
+   * (the preview, the stored copy, the delete record): it waits for the delivery to be processed, and
+   * then for the answer to its id (see parkUntil), and is judged again. A conflicting copy has been
+   * removed by then, so the real author's change finds nothing to contradict it, and a copy that stays
+   * is the message the change is foreign to. One still held when the wait ends is dropped.
    *
    * A reaction to a message the account sent to a broadcast list is exempt: Baileys files the
    * own-device copy under the list jid (`<id>@broadcast`), while each recipient reacts from their 1:1
@@ -1093,30 +1107,39 @@ export class BaileysEvents {
     if (!targetId) return false;
     // The key of the delivery in flight a wait was for, and the removals counted when it began.
     let waitedFor: { key: WAMessageKey; removals: number } | undefined;
+    // When the wait for the id's hold runs out, however many deliveries hold it in turn.
+    let heldUntil: number | undefined;
     let reread = false;
     for (;;) {
       const removals = this.copyRemovals;
       // A message still being processed has no stored copy yet, but the projector may already hold it
       // (PostgreSQL), so its own key is checked instead.
       const found = await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets');
-      // Nothing to read once the delivery was processed means it was never stored (no store, a failed
-      // write), so the key it arrived under still stands, unless a conflicting copy went meanwhile: then
-      // the delivery was not the message the id names.
+      // Without a stored copy the key of the delivery that was being processed stands (it may never have
+      // been stored: no store, a failed write), unless a conflicting copy went since the wait for it began:
+      // then that delivery was not the message the id names, and nothing says which one is.
+      const removedSince = waitedFor !== undefined && this.copyRemovals !== waitedFor.removals;
       const original =
-        found?.key ?? (waitedFor && this.copyRemovals === waitedFor.removals ? waitedFor.key : undefined);
+        found && !found.processing ? found.key : removedSince ? undefined : (found?.key ?? waitedFor?.key);
       if (!original || !this.readsAsForeign(original, key, checkAuthor, kind)) return false;
-      // The session has not said yet whether the delivery that stored this copy is the message it holds
-      // under the id or a duplicate of another one. Its own judgement stands in: it holds the message and
-      // checks the change against its key and against the stored row, and the stored copy does not.
-      if (this.outcomesPending.has(targetId)) return false;
-      // No copy is stored yet, only the key of the delivery being processed, and the real message may be
-      // one the store never held (the session has it by row), so this key cannot say which of the two the
-      // change names. Judged again once the delivery has been stored and handed on, which is when the
-      // hold above and the removal of a conflicting copy answer it. Only a delivery the session reports
-      // on counts: a status post is held by no entry there, and an own send gets no receipt.
-      if (!waitedFor && found?.processing && original.remoteJid !== 'status@broadcast' && original.fromMe !== true) {
+      const processing = found?.processing;
+      const hold = this.outcomesPending.get(targetId);
+      if (hold) {
+        // The session has not said yet whether the delivery that stored this copy is the message it holds
+        // under the id or a duplicate of another one, so the copy cannot judge the change. Parked until it
+        // has, when a conflicting copy is gone and the real author's change is judged by what remains.
+        if (processing) waitedFor ??= { key: original, removals };
+        heldUntil ??= Date.now() + BaileysEvents.OUTCOME_HOLD_MS;
+        const left = heldUntil - Date.now();
+        if (left > 0 && (await this.parkUntil(hold.ended, left, inbound))) continue;
+      } else if (!waitedFor && processing && original.remoteJid !== 'status@broadcast' && original.fromMe !== true) {
+        // No copy is stored yet, only the key of the delivery being processed, and the real message may be
+        // one the store never held (the session has it by row), so this key cannot say which of the two the
+        // change names. Judged again once the delivery has been stored and handed on, which is when the
+        // hold and the removal of a conflicting copy answer it. Only a delivery the session reports on
+        // counts: a status post is held by no entry there, and an own send gets no receipt.
         waitedFor = { key: original, removals };
-        if (await this.awaitDelivery(found.processing, inbound)) continue;
+        if (await this.parkUntil(processing, 3 * inboundMediaTimeoutMs(), inbound)) continue;
       }
       // A conflicting copy went while the store was read, and the read may have returned it: it ends the
       // hold only once removed, so the read is the one that can no longer be told from the real copy. Read
@@ -1135,16 +1158,18 @@ export class BaileysEvents {
   }
 
   /**
-   * Park a change until the delivery it reads as foreign to has been processed: at most three media
-   * download deadlines (a wait for room in the session, then the download), and never more than
-   * CHANGES_PARKED_LIMIT changes at once. Resolves true once it did wait, false when it was not parked.
+   * Park a change until `until` settles or `limitMs` passes, whichever is first: a delivery's processing
+   * (at most three media download deadlines: a wait for room in the session, then the download) or the
+   * hold on an id's outcome. Never more than CHANGES_PARKED_LIMIT changes at once. Resolves true once it
+   * did wait, false when it was not parked.
    * A parked change holds nothing the delivery needs. It gives up its inbound slot, which the delivery
    * may have to take back after waiting for room, and its place in its chat's order, which a change
    * never uses (it is not announced as a message), so it neither starves the delivery nor holds back the
    * messages that follow it in the chat.
    */
-  private async awaitDelivery(
-    done: Promise<void>,
+  private async parkUntil(
+    until: Promise<void>,
+    limitMs: number,
     inbound?: { ticket?: InboundTicket; yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R> },
   ): Promise<boolean> {
     if (this.changesParked >= BaileysEvents.CHANGES_PARKED_LIMIT) return false;
@@ -1154,15 +1179,15 @@ export class BaileysEvents {
       const wait = (): Promise<void> =>
         new Promise<void>(resolve => {
           let wake: (() => void) | null = resolve;
-          // Whichever comes first; the reaction left on a delivery that never settles holds nothing.
+          // Whichever comes first; the reaction left on a promise that never settles holds nothing.
           const end = (): void => {
             clearTimeout(timer);
             wake?.();
             wake = null;
           };
-          const timer = setTimeout(end, 3 * inboundMediaTimeoutMs());
+          const timer = setTimeout(end, limitMs);
           timer.unref();
-          done.then(end, end);
+          until.then(end, end);
         });
       await (inbound?.yieldSlot ? inbound.yieldSlot(wait) : wait());
       return true;

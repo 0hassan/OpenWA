@@ -1314,6 +1314,10 @@ describe('BaileysEvents encrypted edits and reactions', () => {
           copy = msg;
           return Promise.resolve();
         },
+        removeStoredMessage: () => {
+          copy = null;
+          return Promise.resolve();
+        },
         getOnMessage: () => jest.fn(() => ({ settled: answered })),
       });
       return { ...setups, open: (index: number) => opens.get(index)!() };
@@ -1324,8 +1328,8 @@ describe('BaileysEvents encrypted edits and reactions', () => {
         sealed: seal('Message Edit', { target: 'ORIG1', author, modifier: reactor }, editPlain),
       });
 
-    it('is held until the original is stored, then left to the session while the original has no answer', async () => {
-      const { events, onMessageEdited, open } = withHeldReads([1], new Promise(() => undefined));
+    it('is held until the original is stored, and stays held while the original has no answer', async () => {
+      const { events, onMessageEdited, recordMessageEdit, open } = withHeldReads([1], new Promise(() => undefined));
 
       events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
       await flush();
@@ -1334,6 +1338,25 @@ describe('BaileysEvents encrypted edits and reactions', () => {
       expect(onMessageEdited).not.toHaveBeenCalled();
 
       open(1);
+      await flush();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(recordMessageEdit).not.toHaveBeenCalled();
+    });
+
+    it('is applied once the answer says the original was another message and its copy is gone', async () => {
+      let answer!: (outcome: { conflict: boolean }) => void;
+      const answered = new Promise<{ conflict: boolean }>(resolve => (answer = resolve));
+      const { events, onMessageEdited, open } = withHeldReads([1], answered);
+
+      events.handleMessagesUpsert({ type: 'notify', messages: [original()] });
+      await flush();
+      events.handleMessagesUpsert({ type: 'notify', messages: [forged()] });
+      await flush();
+      open(1);
+      await flush();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+
+      answer({ conflict: true });
       await flush();
       expect(onMessageEdited).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'ORIG1', body: 'new text' }));
     });
