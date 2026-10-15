@@ -636,6 +636,37 @@ describe('BaileysEvents record of messages deleted for everyone', () => {
   });
 });
 
+describe('BaileysEvents record of conflicting copies removed', () => {
+  it('forgets the id removed longest ago once it holds its limit', async () => {
+    const limit = BaileysEvents.DELETED_FOR_EVERYONE_LIMIT;
+    const settled = Promise.resolve({ conflict: true });
+    const events = new BaileysEvents(makeHost({ getOnMessage: () => () => ({ settled }) }));
+    const deliver = async (...ids: string[]): Promise<void> => {
+      events.handleMessagesUpsert({
+        type: 'notify',
+        messages: ids.map(id => ({
+          key: { id, remoteJid: '6282222222222@s.whatsapp.net', fromMe: false },
+          messageTimestamp: 1_700_000_000,
+          message: { conversation: 'hi' },
+        })),
+      });
+      for (let i = 0; i < 20; i++) await new Promise(resolve => setImmediate(resolve));
+    };
+    const removals = (events as unknown as { copyRemovals: Map<string, number> }).copyRemovals;
+
+    await deliver(...Array.from({ length: limit }, (_, i) => `M${i}`));
+    expect(removals.size).toBe(limit);
+    // M0 is removed again, which makes it the newest, and one more id pushes the oldest out.
+    await deliver('M0');
+    await deliver('EXTRA');
+
+    expect(removals.size).toBe(limit);
+    expect(removals.get('M0')).toBe(2);
+    expect(removals.has('M1')).toBe(false);
+    expect(removals.get('EXTRA')).toBe(1);
+  });
+});
+
 describe('BaileysEvents live keys of a 1:1 chat', () => {
   // Baileys runs every live key through cleanMessage, which leaves '' where a 1:1 key has no participant.
   const partner = '6282222222222@s.whatsapp.net';

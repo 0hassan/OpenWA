@@ -9601,6 +9601,81 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
         },
       );
 
+      // A copy removed under another id says nothing of the delivery this change waited for: it was never
+      // reported as a conflict, so its key still names what the change is judged against.
+      it.each([
+        ['succeeds', undefined],
+        ['fails', new Error('db locked')],
+      ])(
+        'keeps a forged change from a third chat held when a copy of another id is removed (%s)',
+        async (_, failure) => {
+          const answered = answer();
+          const callbacks = sessionCallbacks();
+          const adapter = await startWith({
+            onMessage: jest.fn((message: IncomingMessage) => ({
+              settled: message.id === 'REUSED' ? answered.promise : Promise.resolve({ conflict: true }),
+            })),
+            ...callbacks,
+          });
+          const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+          // The store keeps nothing, so only the key the delivery arrived under can judge the change.
+          fakeStore.put.mockRejectedValue(new Error('db locked'));
+          if (failure) fakeStore.remove.mockRejectedValue(failure);
+          const open = holdReads([1]);
+          deliverReuse();
+          await settleAll();
+          changeFrom('edit', THIRD);
+          await settleAll();
+
+          fakeSock.fire('messages.upsert', {
+            type: 'notify',
+            messages: [
+              {
+                key: { id: 'UNRELATED', remoteJid: OTHER, fromMe: false },
+                message: { conversation: 'another one' },
+                messageTimestamp: 1700000102,
+              },
+            ],
+          });
+          await settleAll();
+          expect(fakeStore.remove).toHaveBeenCalledWith('db-uuid-1', 'UNRELATED', expect.any(Function));
+
+          open(1);
+          await settleAll();
+          expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+          expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
+
+          answered.resolve({ conflict: false });
+          await settleAll();
+          expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+          expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'REUSED' }));
+        },
+      );
+
+      // The conflict that was reported is the delivery's own: its copy was never stored, so a removal that
+      // fails still says the key it arrived under does not name the message.
+      it('hands the real change on when the removal of the copy of the delivery itself fails', async () => {
+        const callbacks = sessionCallbacks();
+        const adapter = await startWith({
+          onMessage: jest.fn(() => ({ settled: Promise.resolve({ conflict: true }) })),
+          ...callbacks,
+        });
+        const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+        fakeStore.put.mockRejectedValue(new Error('db locked'));
+        fakeStore.remove.mockRejectedValue(new Error('db locked'));
+        const open = holdReads([1]);
+        deliverReuse();
+        await settleAll();
+        changeFrom('edit', PEER);
+        await settleAll();
+        expect(callbacks.onMessageEdited).not.toHaveBeenCalled();
+
+        open(1);
+        await settleAll();
+        expect(callbacks.onMessageEdited).toHaveBeenCalledTimes(1);
+        expect(warn).not.toHaveBeenCalledWith(dropped, expect.anything());
+      });
+
       it('does not hold an edit from the chat the delivery arrived in', async () => {
         const callbacks = sessionCallbacks();
         await startWith({ onMessage: jest.fn(() => ({ settled: answer().promise })), ...callbacks });
@@ -9881,6 +9956,51 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
           answered.resolve(outcome);
           await settleAll();
           await expectUntouched();
+        },
+      );
+
+      // The edit meets the delivery while it is still processed, and the store keeps no copy of it, so the key
+      // it arrived under is all there is to judge by. A copy of another id removed meanwhile does not change that.
+      it.each(outcomes)(
+        "keeps a group message's preview and callbacks clear of another member's edit when a copy of another id is removed meanwhile, when %s",
+        async (_, outcome) => {
+          const answered = answer();
+          const onMessageEdited = jest.fn();
+          const adapter = await startWith({
+            onMessage: jest.fn((message: IncomingMessage) => ({
+              settled: message.id === 'GRP1' ? answered.promise : Promise.resolve({ conflict: true }),
+            })),
+            onMessageEdited,
+          });
+          const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+          fakeStore.put.mockRejectedValue(new Error('db locked'));
+          fakeSock.fire('chats.upsert', [{ id: GROUP, name: 'Team' }]);
+          let openRead!: () => void;
+          const gate = new Promise<void>(resolve => (openRead = resolve));
+          fakeStore.getMessage.mockImplementationOnce(async () => {
+            await gate;
+            return null;
+          });
+          receive('GRP1', { remoteJid: GROUP, participant: MEMBER_1 });
+          await settleAll();
+
+          fireProtocol(
+            { id: 'EDIT_P2', remoteJid: GROUP, participant: MEMBER_2, fromMe: false },
+            { key: { id: 'GRP1' }, type: 14, editedMessage: { conversation: 'FORGED BY P2' } },
+          );
+          await settleAll();
+          receive('OTHER1', { remoteJid: '628444@s.whatsapp.net' });
+          await settleAll();
+          expect(fakeStore.remove).toHaveBeenCalledWith('db-uuid-1', 'OTHER1', expect.any(Function));
+
+          openRead();
+          await settleAll();
+          answered.resolve(outcome);
+          await settleAll();
+
+          expect(await preview(adapter, GROUP)).toBe('original text');
+          expect(onMessageEdited).not.toHaveBeenCalled();
+          expect(warn).toHaveBeenCalledWith(dropped, expect.objectContaining({ targetId: 'GRP1' }));
         },
       );
 

@@ -991,6 +991,38 @@ describe('Baileys inbound messages held for storage', () => {
         await flush();
         expect(h.rows[0]).toEqual(expect.objectContaining({ waMessageId: 'X', body: 'fixed' }));
       });
+
+      // The host keeps no copy and cannot remove one, so the key the delivery arrived under judges the change,
+      // and the removal of the conflicting copy of U fails. A message of another id that conflicts meanwhile has
+      // no say in what X is.
+      it.each([
+        ['PostgreSQL', false],
+        ['SQLite', true],
+      ])(
+        'keeps holding a forged change when another id conflicts while the delivery downloads, on %s',
+        async (_, sqlite) => {
+          const h = heldProjector({ unique: true, sqlite });
+          h.rows.push({ waMessageId: 'U', chatId: CHAT_A, direction: 'incoming', body: 'another real one' });
+          const download = deferred<ReturnType<typeof stream>>();
+          downloadMediaMessage.mockImplementationOnce(() => download.promise);
+          const onMessageEdited = jest.fn(h.callbacks.onMessageEdited);
+          const { events } = build(4, { ...h.callbacks, onMessageEdited });
+
+          upsert(events, media('X', CHAT_B));
+          await flush();
+          upsert(events, change('edit', CHAT_C, 'FORGED_ENV'));
+          await flush();
+          upsert(events, text('U', '628444@s.whatsapp.net'));
+          await flush();
+          expect(h.rows.find(r => r.waMessageId === 'U')?.body).toBe('another real one');
+
+          download.resolve(stream());
+          await flush();
+
+          expect(onMessageEdited).not.toHaveBeenCalled();
+          expect(h.announcedAs('message.edited')).toEqual([]);
+        },
+      );
     });
   });
 });

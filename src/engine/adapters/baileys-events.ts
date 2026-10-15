@@ -348,11 +348,12 @@ export class BaileysEvents {
   private static readonly CHANGES_PARKED_LIMIT = 64;
 
   /**
-   * How many conflicting copies have been removed from the store. A read of the store that was out
-   * while one went may have returned that copy, which is not what the store holds any more (see
-   * targetsForeignMessage).
+   * How many conflicting copies of an id have been removed from the store, oldest id first and bounded
+   * like deletedForEveryone. A read of the store that was out while one went may have returned that
+   * copy, which is not what the store holds any more (see targetsForeignMessage). Counted per id: a
+   * copy removed under another id says nothing of the one a change was judged against.
    */
-  private copyRemovals = 0;
+  private readonly copyRemovals = new Map<string, number>();
 
   /** How long an id stays held for the session's outcome; a receipt not settled by then is let go. */
   private static readonly OUTCOME_HOLD_MS = 5 * 60_000;
@@ -936,7 +937,19 @@ export class BaileysEvents {
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    this.copyRemovals += 1;
+    // Counted even when the removal failed: the session said this delivery is not the message the id names.
+    const removed = this.removalsOf(id) + 1;
+    this.copyRemovals.delete(id); // re-inserted as the newest
+    this.copyRemovals.set(id, removed);
+    if (this.copyRemovals.size > BaileysEvents.DELETED_FOR_EVERYONE_LIMIT) {
+      const [oldest] = this.copyRemovals.keys();
+      this.copyRemovals.delete(oldest);
+    }
+  }
+
+  /** How many conflicting copies of `id` have been removed (see copyRemovals). */
+  private removalsOf(id: string): number {
+    return this.copyRemovals.get(id) ?? 0;
   }
 
   /**
@@ -1105,20 +1118,20 @@ export class BaileysEvents {
     inbound?: { ticket?: InboundTicket; yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R> },
   ): Promise<boolean> {
     if (!targetId) return false;
-    // The key of the delivery in flight a wait was for, and the removals counted when it began.
+    // The key of the delivery in flight a wait was for, and the removals of this id counted when it began.
     let waitedFor: { key: WAMessageKey; removals: number } | undefined;
     // When the wait for the id's hold runs out, however many deliveries hold it in turn.
     let heldUntil: number | undefined;
     let reread = false;
     for (;;) {
-      const removals = this.copyRemovals;
+      const removals = this.removalsOf(targetId);
       // A message still being processed has no stored copy yet, but the projector may already hold it
       // (PostgreSQL), so its own key is checked instead.
       const found = await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets');
       // Without a stored copy the key of the delivery that was being processed stands (it may never have
       // been stored: no store, a failed write), unless a conflicting copy went since the wait for it began:
       // then that delivery was not the message the id names, and nothing says which one is.
-      const removedSince = waitedFor !== undefined && this.copyRemovals !== waitedFor.removals;
+      const removedSince = waitedFor !== undefined && this.removalsOf(targetId) !== waitedFor.removals;
       const original =
         found && !found.processing ? found.key : removedSince ? undefined : (found?.key ?? waitedFor?.key);
       if (!original || !this.readsAsForeign(original, key, checkAuthor, kind)) return false;
@@ -1144,7 +1157,7 @@ export class BaileysEvents {
       // A conflicting copy went while the store was read, and the read may have returned it: it ends the
       // hold only once removed, so the read is the one that can no longer be told from the real copy. Read
       // again, with the copy gone, rather than drop the real author's change against it.
-      if (!reread && this.copyRemovals !== removals) {
+      if (!reread && this.removalsOf(targetId) !== removals) {
         reread = true;
         continue;
       }
