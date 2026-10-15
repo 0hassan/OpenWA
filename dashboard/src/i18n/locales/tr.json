@@ -95,6 +95,7 @@
     "loadingMessages": "Mesajlar yükleniyor...",
     "loadingOlderMessages": "Daha eski mesajlar yükleniyor...",
     "loadOlderMessagesError": "Daha eski mesajlar yüklenemedi. Tekrar denemek için yukarı kaydırın.",
+    "loadOlderMessagesRetryHint": "Tekrar denemek için yukarı kaydırın.",
     "noMessagesInChat": "Henüz mesaj yok. Başlamak için ilk mesajı gönderin!",
     "downloadDocument": "Belgeyi indir",
     "actions": {

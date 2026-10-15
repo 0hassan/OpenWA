@@ -410,15 +410,14 @@ function ChatThread({
         if (!pageLostFocus) keyboardFocusRef.current = null;
       }}
     >
-      {/* Older-page spinner, or the failure in its place. An in-flow sibling before the thread, not
-          an overlay — it pushes the oldest bubble down, which is why useChatScrollPosition reads
-          this container's height at REQUEST time (before this renders), not on whichever commit
-          happens to change it first. Shown whenever there IS a thread to sit above — including a
-          failed older-page fetch with messages already loaded, which must not fall through to the
-          full-screen error below: that would replace the loaded thread with a placeholder,
-          collapsing the scroll container so the failed page can never be retried by scrolling. */}
+      {/* Older-page spinner, or the failure in its place. It takes no room in the thread (Chats.css):
+          a row in flow would push the oldest bubble down when the page is requested and back up when it
+          lands. Shown whenever there IS a thread to sit above, including a failed older-page fetch with
+          messages already loaded, which must not fall through to the full-screen error below: that would
+          replace the loaded thread with a placeholder, collapsing the scroll container so the failed
+          page can never be retried by scrolling. */}
       {!loadingMessages && (loadingOlderMessages || (messagesError && messages.length > 0)) && (
-        <div className="messages-loading-older">
+        <div className={loadingOlderMessages ? 'messages-loading-older' : 'messages-loading-older failed'}>
           {loadingOlderMessages ? (
             <>
               <Loader2 className="animate-spin" size={18} />
@@ -427,7 +426,11 @@ function ChatThread({
           ) : (
             <>
               <AlertCircle size={18} />
-              <span>{t('chats.loadOlderMessagesError')}</span>
+              {/* The whole sentence, or only the retry instruction when the thread is too narrow to fit
+                  the whole one in two lines: Chats.css shows one of them, and hides the other from
+                  assistive technology as well. */}
+              <span className="older-failure-full">{t('chats.loadOlderMessagesError')}</span>
+              <span className="older-failure-hint">{t('chats.loadOlderMessagesRetryHint')}</span>
             </>
           )}
         </div>

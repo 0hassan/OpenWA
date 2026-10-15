@@ -107,6 +107,7 @@
     "loadingMessages": "جارٍ تحميل الرسائل...",
     "loadingOlderMessages": "جارٍ تحميل الرسائل الأقدم...",
     "loadOlderMessagesError": "تعذر تحميل الرسائل الأقدم. مرر لأعلى للمحاولة مرة أخرى.",
+    "loadOlderMessagesRetryHint": "مرر لأعلى للمحاولة مرة أخرى.",
     "noMessagesInChat": "لا توجد رسائل بعد. أرسل الرسالة الأولى للبدء!",
     "downloadDocument": "تنزيل المستند",
     "actions": {

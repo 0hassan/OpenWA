@@ -127,9 +127,15 @@ test('an older page holds the reader by their message, not by every pixel the th
     request.current?.();
     rerender(createElement(Older, { fetching: true }));
 
-    // The page lands: 2000px of history above, and a 230px preview swapped in below m3 meanwhile.
+    // A 230px preview swaps in below m3 while the page is out, on a commit of its own before the page lands.
+    // Nothing is applied for it, and it must not use up what is owed to the page.
+    height += 230;
+    rerender(createElement(Older, { fetching: true }));
+    assert.equal(el.scrollTop, 400, 'a commit while the page was out moved the reader');
+
+    // The page lands: 2000px of history above.
     for (const [id, y] of [...messageTops]) messageTops.set(id, y + 2000);
-    height += 2000 + 230;
+    height += 2000;
     rerender(createElement(Older, { fetching: false }));
 
     assert.equal(el.scrollTop, 400 + 2000, 'the reader moved by more or less than the history above them');

@@ -95,6 +95,7 @@
     "loadingMessages": "Loading messages...",
     "loadingOlderMessages": "Loading older messages...",
     "loadOlderMessagesError": "Couldn't load older messages. Scroll up to retry.",
+    "loadOlderMessagesRetryHint": "Scroll up to retry.",
     "noMessagesInChat": "No messages yet. Send the first message to get started!",
     "downloadDocument": "Download document",
     "actions": {

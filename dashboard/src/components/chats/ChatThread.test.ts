@@ -5,7 +5,7 @@ import '../../test-helpers/register-hooks.ts';
 import { test, before, after, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createElement, createRef } from 'react';
+import { createElement, createRef, type ComponentProps } from 'react';
 import type { Chat } from '../../services/api.ts';
 import type { ChatMessageView } from '../../utils/chatMessages.ts';
 
@@ -79,6 +79,7 @@ function renderThread(
   role: string,
   messages: ChatMessageView[] = [PROMPT],
   activeChat: Chat = CHAT,
+  props: Partial<ComponentProps<typeof ChatThread>> = {},
 ): { clicks: string[]; container: HTMLElement; rerenderWith: (next: ChatMessageView[]) => void } {
   window.sessionStorage.setItem('openwa_user_role', role);
   const clicks: string[] = [];
@@ -107,6 +108,7 @@ function renderThread(
         onClickButton: async (_message, button) => {
           clicks.push(button.id);
         },
+        ...props,
       }),
     );
   const { container, rerender } = rtl.render(tree(messages));
@@ -994,8 +996,8 @@ test('focus held for a control survives the page losing focus, and is given back
   assert.equal(focusedMessage(), 'wamid.3');
 });
 
-// What it got back with the page is not a new focus to classify: an engine that does not call it
-// :focus-visible would otherwise make it one a pointer brought, and the place held for the keyboard is dropped.
+// The focus given back with the page is not classified again: the place held for the keyboard is kept and
+// pointer mode is not entered, whether or not the engine calls that focus :focus-visible.
 test('focus given back with the page keeps what was held, whatever :focus-visible says', () => {
   const [a, b, c]: ChatMessageView[] = ['1', '2', '3'].map(n => ({
     ...PROMPT,
@@ -1154,6 +1156,233 @@ test('the scroll-to-bottom button is sticky inside the scroller, not absolute, a
   const menu = /\.chats-page \.message-actions-menu \{([^}]*)\}/.exec(css)?.[1] ?? '';
   const level = (text: string): number => Number(/z-index:\s*(\d+);/.exec(text)?.[1]);
   assert.ok(level(rule) < level(menu), 'the jump button paints over the actions menu');
+});
+
+// The stylesheet without its comments, and what is read from it. jsdom has no layout, so the declarations are
+// read and evaluated.
+const chatsCss = readFileSync(new URL('../../pages/Chats.css', import.meta.url), 'utf8').replace(
+  /\/\*[\s\S]*?\*\//g,
+  '',
+);
+
+/** The `@container` blocks of a stylesheet: the condition, and what is between the braces. */
+function containerBlocks(source: string): Array<{ condition: string; body: string }> {
+  const blocks: Array<{ condition: string; body: string }> = [];
+  for (const head of source.matchAll(/@container\s*([^{]*)\{/g)) {
+    const from = (head.index ?? 0) + head[0].length;
+    let depth = 1;
+    let at = from;
+    while (depth > 0 && at < source.length) {
+      if (source[at] === '{') depth += 1;
+      else if (source[at] === '}') depth -= 1;
+      at += 1;
+    }
+    blocks.push({ condition: head[1].trim(), body: source.slice(from, at - 1) });
+  }
+  return blocks;
+}
+
+/** The declarations of the rule written with exactly `selector`, by property. */
+function declarationsOf(source: string, selector: string): Record<string, string> {
+  const at = source.indexOf(`${selector} {`);
+  assert.ok(at >= 0, `${selector} has a rule`);
+  const body = source.slice(source.indexOf('{', at) + 1, source.indexOf('}', at));
+  const entries = body
+    .split(';')
+    .map(declaration => declaration.split(':'))
+    .filter(parts => parts.length >= 2)
+    .map(([name, ...value]): [string, string] => [name.trim(), value.join(':').trim()]);
+  return Object.fromEntries(entries);
+}
+
+// A length in px: rem is 16px and em is the given font size, var() is the declared custom property, and calc
+// is plain arithmetic.
+function lengthPx(value: string, vars: Record<string, string> = {}, emPx = 16): number {
+  const expression = value
+    .replace(/var\((--[\w-]+)\)/g, (_, name: string) => `(${vars[name]})`)
+    .replace(/calc/g, '')
+    .replace(/(-?\d*\.?\d+)rem/g, '($1*16)')
+    .replace(/(-?\d*\.?\d+)em/g, `($1*${emPx})`)
+    .replace(/px/g, '');
+  return Function(`return (${expression})`)() as number;
+}
+
+// The older-page indicator sat in flow above the oldest bubble, so it pushed the reader's content down by its
+// height and one gap when the page was requested, and back up when it landed. The loading pill's height and
+// margins add up to minus the thread's gap, so it adds nothing to the scroll height, and the failure is out of
+// flow, so it adds nothing at whatever height its text needs.
+test('the older-page indicator takes no room in the thread, loading or failed', () => {
+  const rule = (selector: string) => declarationsOf(chatsCss, selector);
+  const thread = rule('.chats-page .room-messages');
+  const gap = lengthPx(thread.gap);
+  const padding = lengthPx(thread.padding);
+  const loading = rule('.chats-page .messages-loading-older');
+  const failed = rule('.chats-page .messages-loading-older.failed');
+  const failedText = rule('.chats-page .messages-loading-older.failed > span');
+  const text = rule('.chats-page .messages-loading-older > span');
+  const own = { '--older-row-height': loading['--older-row-height'] };
+
+  const outer =
+    lengthPx(loading['margin-top'], own) + lengthPx(loading.height, own) + lengthPx(loading['margin-bottom'], own);
+  assert.equal(outer, -gap, "the loading indicator's margins and height add up to the thread's gap, minus it");
+  assert.equal(loading.position, 'sticky', 'the loading indicator holds to the top edge of the pane (sticky)');
+  assert.ok(
+    padding + lengthPx(loading['margin-top'], own) >= 0,
+    'the loading indicator is lifted no further than the padding above the first message',
+  );
+  // Sticky offsets are measured from the padding edge, so top is the margin that lifts it: any other value
+  // pushes it down onto the first bubble when the thread is at its top.
+  assert.equal(
+    lengthPx(loading.top, own),
+    lengthPx(loading['margin-top'], own),
+    "the loading indicator's sticky offset is its lift into the padding",
+  );
+  assert.equal(
+    loading['pointer-events'],
+    'none',
+    'the loading indicator passes pointer events to the bubbles under it',
+  );
+
+  // Out of flow, the failure adds nothing to the thread whatever its height, and it stays at the top of the
+  // thread instead of following the reader. Its text wraps up to two lines, and they have to end where the text
+  // of the first message begins: a reader at the top of the thread is on that message.
+  assert.equal(failed.position, 'absolute', 'the failure indicator is out of flow (position: absolute)');
+  assert.ok(lengthPx(failed.top, own) >= 0, 'the failure indicator starts inside the pane (top is not negative)');
+  assert.match(failed['max-width'], /100%/, 'the failure indicator is no wider than the pane (max-width is a share)');
+  assert.equal(failed.height, 'auto', 'the failure indicator is as tall as its text (height: auto)');
+  assert.equal(failedText['white-space'], 'normal', 'the failure text wraps (white-space: normal)');
+  const lineClamp = Number(failedText['-webkit-line-clamp']);
+  assert.equal(lineClamp, 2, 'the failure text is limited to two lines (-webkit-line-clamp: 2)');
+
+  const fontSize = lengthPx(failed['font-size'], own);
+  const line = fontSize * Number(loading['line-height']);
+  const border = lengthPx(loading.border.split(' ')[0], own);
+  const paddingBlock = lengthPx(failed.padding.split(' ')[0], own);
+  const clipRoom = lengthPx(text['padding-block'], own, fontSize);
+  const box = Math.max(lineClamp * line + 2 * (border + paddingBlock), lengthPx(failed['min-height'], own));
+  // The text paints into the room the clip leaves it below the last line, past the border.
+  const ink = border + paddingBlock + lineClamp * line + clipRoom;
+  const bubble = rule('.chats-page .message-bubble');
+  const textStarts = padding + lengthPx(bubble.padding.split(' ')[0], own);
+  assert.ok(
+    lengthPx(failed.top, own) + Math.max(box, ink) <= textStarts,
+    "the failure indicator, at two lines, ends above the first message's text",
+  );
+});
+
+// The text of the indicator clips, for its ellipsis and for the limit on the failure's lines, and a line box is
+// shorter than the glyphs of some scripts: the tails of g and p, Telugu conjuncts below the base, Arabic marks.
+// The padding is the room the clip leaves them and the negative margin takes it back, so the box lays out as
+// the line it is.
+test('the text of the older-page indicator has room to paint beyond its line without taking any', () => {
+  const text = declarationsOf(chatsCss, '.chats-page .messages-loading-older > span');
+  assert.equal(text.overflow, 'hidden', 'the text clips (overflow: hidden)');
+  for (const axis of ['block', 'inline']) {
+    const room = lengthPx(text[`padding-${axis}`]);
+    assert.ok(room > 0, `the text has room to paint beyond its line in the ${axis} direction`);
+    assert.equal(
+      lengthPx(text[`margin-${axis}`]),
+      -room,
+      `the room in the ${axis} direction is taken back by the margin`,
+    );
+  }
+  // The tallest marks seen (Telugu below the base, in WebKit) need a quarter of the size of the text.
+  assert.match(text['padding-block'], /^[\d.]+em$/, 'the room is in em, so it follows the size of the text');
+  assert.ok(
+    Number.parseFloat(text['padding-block']) >= 0.25,
+    'the room above and below a line is a quarter em or more',
+  );
+});
+
+// The failure shows its whole sentence while the thread is wide enough for two lines of it, and only the retry
+// instruction when it is not. The width that decides it is the thread's, not the viewport's: beside the list the
+// thread is narrower than a phone's. Both texts are in the document and the stylesheet shows one.
+test('the failure indicator shows its retry instruction alone in a thread too narrow for the sentence', () => {
+  const thread = declarationsOf(chatsCss, '.chats-page .room-messages');
+  assert.equal(
+    thread['container-type'],
+    'inline-size',
+    'the thread is the container the failure text is sized against',
+  );
+
+  const hint = declarationsOf(chatsCss, '.chats-page .messages-loading-older.failed > .older-failure-hint');
+  assert.equal(hint.display, 'none', 'the retry instruction alone is hidden while the sentence is shown');
+
+  const blocks = containerBlocks(chatsCss);
+  assert.equal(blocks.length, 2, 'the indicator changes at two widths: the failure text, and the loading label');
+  const narrow = blocks.find(block => block.body.includes('.older-failure-hint'));
+  assert.ok(narrow, 'the failure text has a width at which it changes');
+  const limit = /^\(max-width:\s*([\d.]+)rem\)$/.exec(narrow.condition);
+  assert.ok(limit, `the width is a number of rem, not of px or of the viewport: ${narrow.condition}`);
+  // The container is the scroller and the query measures its content box: the client width, which leaves out a
+  // scrollbar, less the padding of 1.5rem on each side.
+  const clientWidth =
+    Number(limit[1]) * 16 + 2 * lengthPx(declarationsOf(chatsCss, '.chats-page .room-messages').padding);
+  assert.ok(
+    clientWidth >= 308,
+    'the sentence is not shown at a client width under the 308px its longest translation needs',
+  );
+  assert.ok(
+    clientWidth < 326,
+    'the sentence is shown at 326px of client width, which a 360px phone has with an overlay scrollbar',
+  );
+  const full = declarationsOf(narrow.body, '.chats-page .messages-loading-older.failed > .older-failure-full');
+  assert.equal(full.display, 'none', 'the whole sentence is hidden in a narrow thread');
+  const shown = declarationsOf(narrow.body, '.chats-page .messages-loading-older.failed > .older-failure-hint');
+  assert.equal(
+    shown.display,
+    '-webkit-box',
+    'the retry instruction is shown in a narrow thread, clamped as the sentence is',
+  );
+});
+
+// The loading label is one line while the pill fits it, and two lines under that, at the size of the failure
+// text. The pill is taller there, and its margins take the height back all the same.
+test('the loading indicator takes two lines in a thread narrower than its longest label, and no more room', () => {
+  const blocks = containerBlocks(chatsCss);
+  const wrapped = blocks.find(block => block.body.includes(':not(.failed)'));
+  assert.ok(wrapped, 'the loading label has a width at which it wraps');
+  const limit = /^\(max-width:\s*([\d.]+)rem\)$/.exec(wrapped.condition);
+  assert.ok(limit, `the width is a number of rem, not of px or of the viewport: ${wrapped.condition}`);
+  const contentPx = Number(limit[1]) * 16;
+  // The French label, the longest of the translations, is 285px wide with its icon, padding and border.
+  assert.ok(contentPx >= 285, 'a thread that holds the longest label on one line is not wrapped');
+  assert.ok(contentPx - 285 < 16, 'the label is not wrapped in a thread with more than a rem to spare');
+
+  const thread = declarationsOf(chatsCss, '.chats-page .room-messages');
+  const gap = lengthPx(thread.gap);
+  const padding = lengthPx(thread.padding);
+  const base = declarationsOf(chatsCss, '.chats-page .messages-loading-older');
+  const pill = declarationsOf(wrapped.body, '.chats-page .messages-loading-older:not(.failed)');
+  const own = { '--older-row-height': pill['--older-row-height'] };
+  assert.equal(
+    lengthPx(base['margin-top'], own) + lengthPx(base.height, own) + lengthPx(base['margin-bottom'], own),
+    -gap,
+    'the taller pill still adds nothing to the thread: its margins and height add up to minus the gap',
+  );
+
+  const text = declarationsOf(wrapped.body, '.chats-page .messages-loading-older:not(.failed) > span');
+  assert.equal(text['white-space'], 'normal', 'the label wraps (white-space: normal)');
+  const lines = Number(text['-webkit-line-clamp']);
+  assert.equal(lines, 2, 'the label is limited to two lines (-webkit-line-clamp: 2)');
+  const line = lengthPx(pill['font-size'], own) * Number(base['line-height']);
+  const border = lengthPx(base.border.split(' ')[0], own);
+  const height = lengthPx(base.height, own);
+  assert.ok(lines * line + 2 * border <= height, 'the two lines fit inside the height of the pill');
+  const bubble = declarationsOf(chatsCss, '.chats-page .message-bubble');
+  const textStarts = padding + lengthPx(bubble.padding.split(' ')[0], own);
+  const top = padding + lengthPx(base['margin-top'], own);
+  assert.ok(top + height <= textStarts, "the wrapped pill ends above the first message's text");
+});
+
+test('a failed older page renders the whole sentence and the retry instruction as two texts', () => {
+  const { container } = renderThread('operator', [PROMPT], CHAT, { messagesError: true });
+  const pill = container.querySelector<HTMLElement>('.messages-loading-older.failed');
+  assert.ok(pill, 'the failure is shown above a loaded thread');
+  const full = pill.querySelector<HTMLElement>('.older-failure-full');
+  const hint = pill.querySelector<HTMLElement>('.older-failure-hint');
+  assert.equal(full?.textContent, "Couldn't load older messages. Scroll up to retry.");
+  assert.equal(hint?.textContent, 'Scroll up to retry.');
 });
 
 // An own bubble is at the end of the pane, and the react icon of its pill is a few pixels from that end: a

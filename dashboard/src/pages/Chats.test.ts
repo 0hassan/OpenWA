@@ -2450,24 +2450,20 @@ test('two media downloads in flight do not clobber each other', async () => {
 
 /** Modelled heights, so a commit that changes the thread's contents changes its scrollHeight. */
 const BUBBLE_PX = 30;
-const OLDER_SPINNER_PX = 46;
 
 /**
  * Give the thread container a scrollable geometry. jsdom lays nothing out, so every offset reads 0
  * and the page would never see a thread it can scroll.
  *
- * `scrollHeight` is a getter over the live DOM rather than a constant: the older-page spinner is an
- * in-flow child of this container, so it grows the thread on its own commit, one commit BEFORE the
- * page lands. A constant cannot tell those two commits apart, and the scroll-restore test below
- * turns entirely on the difference.
+ * `scrollHeight` is a getter over the live DOM rather than a constant, so a commit that adds or
+ * removes bubbles changes it. Only bubbles are modelled: whether the older-page indicator takes room
+ * in the thread is the stylesheet's, and ChatThread.test.ts pins it there.
  */
 function makeScrollable(thread: HTMLElement, scrollTop: number): void {
   Object.defineProperty(thread, 'clientHeight', { value: 600, configurable: true });
   Object.defineProperty(thread, 'scrollHeight', {
     configurable: true,
-    get: () =>
-      thread.querySelectorAll('.message-bubble').length * BUBBLE_PX +
-      (thread.querySelector('.messages-loading-older') ? OLDER_SPINNER_PX : 0),
+    get: () => thread.querySelectorAll('.message-bubble').length * BUBBLE_PX,
   });
   let top = scrollTop;
   Object.defineProperty(thread, 'scrollTop', {
@@ -2541,6 +2537,7 @@ test('a failed older-page fetch does not blank an already-loaded thread', async 
     const inline = thread.querySelector('.messages-loading-older');
     assert.ok(inline, 'expected an inline failure indicator');
     assert.match(inline!.textContent ?? '', /couldn.t load older messages/i);
+    assert.ok(inline!.classList.contains('failed'), 'the failure is styled to stay at the top of the thread');
   });
 });
 
@@ -2593,17 +2590,13 @@ test('the reading position is held across the commit that lands an older page', 
   fireEvent.scroll(thread);
 
   await waitFor(() => assert.ok(thread.querySelector('.messages-loading-older')));
-  assert.equal(thread.scrollHeight, before + OLDER_SPINNER_PX);
 
   releaseOlderPage();
   await within(thread).findByText('paged message 0');
   await waitFor(() => assert.equal(thread.querySelector('.messages-loading-older') === null, true));
 
   // The thread grew upward by the new bubbles, so the row the user was reading has to move down by
-  // exactly that much. The regression this locks out: measuring the growth on the first commit that
-  // changed scrollHeight caught the older-page SPINNER entering the flow, one commit early, and
-  // spent the correction on its ~46px — leaving the real prepend uncorrected and the view thrown a
-  // full page backwards.
+  // exactly that much.
   assert.equal(thread.scrollHeight - before, PAGED_OLDEST.length * BUBBLE_PX);
   assert.equal(thread.scrollTop, PAGED_OLDEST.length * BUBBLE_PX);
 });

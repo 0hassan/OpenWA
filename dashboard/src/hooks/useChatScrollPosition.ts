@@ -253,11 +253,12 @@ export function useChatScrollPosition(
   // backwards at the exact moment they asked for more.
   //
   // The reader's element and its offset are read when the page is REQUESTED and the delta applied on
-  // the commit where the in-flight flag falls — not on the first commit whose height changed, because
-  // the older-page spinner is an in-flow child of this same container (ChatThread) and its own ~46px
-  // arrives one commit earlier. `scrollTop` is read live at apply time, so a deliberate reposition
-  // made during the fetch survives. The pin/restore machinery above is not reused: it writes an
-  // ABSOLUTE target, which is unknowable here.
+  // the commit where the in-flight flag falls, not on the first commit whose height changed, which
+  // may be a live message or a preview decoding while the page is out. The older-page indicator is not
+  // one of those: it takes no room in the thread (Chats.css), so it moves nothing when it appears and
+  // the request-time position is still the reader's when the page lands. `scrollTop` is read live at
+  // apply time, so a deliberate reposition made during the fetch survives. The pin/restore machinery
+  // above is not reused: it writes an ABSOLUTE target, which is unknowable here.
   useLayoutEffect(() => {
     const el = containerRef.current;
     const wasFetching = wasFetchingOlderRef.current;
