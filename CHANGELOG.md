@@ -71,6 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound the inbound media a PostgreSQL session holds before storing it to `INBOUND_MEDIA_CONCURRENCY` payloads, keeping each chat's arrival order.
 - Drop a Baileys edit, revoke or reaction from another chat, an edit from the wrong author, or a one-to-one revoke from the other side, aimed at a message still being downloaded, on SQLite too.
 - Drop a Baileys message that reuses the id of one still being downloaded under another chat or sender, so it cannot take the id or stand in for the original when a later delete is judged.
+- Drop the stored copy of a Baileys message that reuses the id of a message the gateway already holds under another chat or sender, so that message's later edit, delete or reaction, once the delivery has been handled, is no longer ignored as foreign to it.
 - Warn at storage export when a file is larger than the per-entry import cap `STORAGE_IMPORT_MAX_BYTES`.
 - Refuse a `PORT` with surrounding whitespace at boot instead of binding a port the image healthcheck cannot probe.
 - Skip or cancel the Baileys version lookup of a session stopped while it connects, so no proxy dispatcher outlives it.

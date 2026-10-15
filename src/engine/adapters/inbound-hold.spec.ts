@@ -34,8 +34,11 @@ const flush = async (): Promise<void> => {
 };
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
-/** The real projector over a stand-in `messages` table whose inserts a test can stall per message. */
-function heldProjector() {
+/**
+ * The real projector over a stand-in `messages` table whose inserts a test can stall per message. With
+ * `unique`, an insert of an id the table already holds fails as the real table's unique index does.
+ */
+function heldProjector(options: { unique?: boolean } = {}) {
   const rows: Row[] = [];
   const hookStarts: string[] = [];
   const hookedBodies: Record<string, string> = {};
@@ -49,6 +52,9 @@ function heldProjector() {
     create: jest.fn((x: Row) => ({ ...x })),
     insert: jest.fn(async (row: Row) => {
       await stalls.get(String(row.waMessageId));
+      if (options.unique && rows.some(r => r.waMessageId === row.waMessageId)) {
+        throw Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+      }
       rows.push({ ...row });
       return { identifiers: [{ id: `pk-${String(row.waMessageId)}` }], generatedMaps: [] };
     }),
@@ -156,7 +162,31 @@ describe('Baileys inbound messages held for storage', () => {
     destroy: jest.fn(),
   });
 
-  const build = (concurrency: number, callbacks?: EngineEventCallbacks) => {
+  /** The adapter's message store, in memory: what the host reads, writes and deletes copies through. */
+  const memoryStore = () => {
+    const copies = new Map<string, WAMessage>();
+    return {
+      copies,
+      getStoredMessage: (id: string) => Promise.resolve(structuredClone(copies.get(id) ?? null)),
+      putStoredMessage: (msg: WAMessage) => {
+        copies.set(msg.key.id!, structuredClone(msg));
+        return Promise.resolve();
+      },
+      updateStoredMessage: (id: string, change: (stored: WAMessage) => WAMessage | null) => {
+        const held = copies.get(id);
+        const next = held && change(structuredClone(held));
+        if (next) copies.set(id, next);
+        return Promise.resolve();
+      },
+      removeStoredMessage: (id: string, accept: (stored: WAMessage) => boolean) => {
+        const held = copies.get(id);
+        if (held && accept(structuredClone(held))) copies.delete(id);
+        return Promise.resolve();
+      },
+    };
+  };
+
+  const build = (concurrency: number, callbacks?: EngineEventCallbacks, store?: ReturnType<typeof memoryStore>) => {
     const emitted: string[] = [];
     const recordKeyLidMappings = jest.fn();
     const host = {
@@ -179,7 +209,7 @@ describe('Baileys inbound messages held for storage', () => {
       getAdmitInbound: () => callbacks?.admitInbound,
       getOnMessage: () => (m: IncomingMessage, t?: never) => {
         emitted.push(m.id);
-        callbacks?.onMessage?.(m, t);
+        return callbacks?.onMessage?.(m, t);
       },
       getOnMessageCreate: () => callbacks?.onMessageCreate,
       getOnMessageRevoked: () => callbacks?.onMessageRevoked,
@@ -190,6 +220,7 @@ describe('Baileys inbound messages held for storage', () => {
       getOnCall: () => undefined,
       getOnPresenceUpdate: () => undefined,
       getOnCallOutcome: () => undefined,
+      ...store,
     } as unknown as BaileysEventsHost;
     return { events: new BaileysEvents(host), emitted, recordKeyLidMappings };
   };
@@ -635,6 +666,101 @@ describe('Baileys inbound messages held for storage', () => {
     await flush();
     expect(held.recordKeyLidMappings).toHaveBeenCalledTimes(1);
     expect(plain.recordKeyLidMappings).toHaveBeenCalledTimes(1);
+  });
+
+  // A message the table holds from history is not in the adapter's store, so a delivery that reuses its id
+  // from another chat is stored there under its own key before the table refuses its row.
+  describe('a delivery that reuses the id of a message the table holds', () => {
+    const CHAT_A = '628111@s.whatsapp.net';
+    const CHAT_B = '628222@s.whatsapp.net';
+    const seeded = (): Row => ({ waMessageId: 'X', chatId: CHAT_A, direction: 'incoming', body: 'the real one' });
+    /** An edit of X sent from `chat`, under an envelope id of its own. */
+    const editFrom = (chat: string, envelopeId: string, body: string): WAMessage => ({
+      key: { id: envelopeId, remoteJid: chat, fromMe: false },
+      messageTimestamp: 1_700_000_002,
+      message: {
+        protocolMessage: {
+          type: 14,
+          key: { id: 'X', remoteJid: chat, fromMe: false },
+          editedMessage: { conversation: body },
+          timestampMs: 1_700_000_002_000,
+        },
+      },
+    });
+    const realEdit = (): WAMessage => editFrom(CHAT_A, 'EDIT_ENV', 'fixed');
+
+    it('removes the copy it stored, so the real message edit lands on the row', async () => {
+      const h = heldProjector({ unique: true });
+      h.rows.push(seeded());
+      const store = memoryStore();
+      const { events } = build(4, h.callbacks, store);
+
+      upsert(events, text('X', CHAT_B));
+      await flush();
+
+      // The row is not touched and nothing is announced; the copy that stood in for it is gone.
+      expect(h.rows).toEqual([seeded()]);
+      expect(h.announced()).toEqual([]);
+      expect(store.copies.has('X')).toBe(false);
+
+      upsert(events, realEdit());
+      await flush();
+      expect(h.rows[0]).toEqual(expect.objectContaining({ body: 'fixed' }));
+    });
+
+    it('keeps the copy of a re-fire of the message the table holds', async () => {
+      const h = heldProjector({ unique: true });
+      h.rows.push({ ...seeded(), chatId: CHAT_B });
+      const store = memoryStore();
+      const { events } = build(4, h.callbacks, store);
+
+      upsert(events, text('X', CHAT_B));
+      await flush();
+
+      expect(store.copies.get('X')?.key.remoteJid).toBe(CHAT_B);
+      expect(h.announced()).toEqual([]);
+    });
+
+    it('hands the real edit to the session while the repeat is held, and removes the copy once it is refused', async () => {
+      const h = heldProjector({ unique: true });
+      h.rows.push(seeded());
+      const release = h.stall('X');
+      const store = memoryStore();
+      const { events } = build(4, h.callbacks, store);
+
+      upsert(events, text('X', CHAT_B));
+      await flush();
+      expect(store.copies.get('X')?.key.remoteJid).toBe(CHAT_B);
+
+      // Judged against the copy alone it would be foreign, and lost with the copy's removal still to come.
+      upsert(events, realEdit());
+      await flush();
+      expect(h.rows[0]).toEqual(expect.objectContaining({ body: 'fixed' }));
+      expect(store.copies.has('X')).toBe(true);
+
+      release();
+      await flush();
+      expect(store.copies.has('X')).toBe(false);
+      expect(h.rows).toEqual([expect.objectContaining({ chatId: CHAT_A, body: 'fixed' })]);
+    });
+
+    it('still drops an edit from a third chat, before and after the session answers', async () => {
+      const h = heldProjector({ unique: true });
+      h.rows.push(seeded());
+      const release = h.stall('X');
+      const { events } = build(4, h.callbacks, memoryStore());
+
+      upsert(events, text('X', CHAT_B));
+      await flush();
+      upsert(events, editFrom('628333@s.whatsapp.net', 'FORGED_1', 'forged'));
+      await flush();
+      release();
+      await flush();
+      upsert(events, editFrom('628333@s.whatsapp.net', 'FORGED_2', 'forged again'));
+      await flush();
+
+      expect(h.rows).toEqual([seeded()]);
+    });
   });
 });
 

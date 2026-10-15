@@ -7,6 +7,7 @@ import {
   EventResponseEvent,
   GroupEvent,
   IncomingCallEvent,
+  InboundReceipt,
   InboundTicket,
   ParticipantPresence,
   PresenceState,
@@ -221,6 +222,8 @@ export interface BaileysEventsHost {
    * is arriving; false for anything the session did not send (see OwnSendRegistry).
    */
   consumeOwnSend(id: string | null | undefined): boolean;
+  /** Delete a stored message while `shouldRemove` accepts the copy held then; undefined without a store. */
+  removeStoredMessage(messageId: string, shouldRemove: (stored: WAMessage) => boolean): Promise<void> | undefined;
   /** A message this session already delivered or sent, from the persistent store; undefined without a store. */
   getStoredMessage(messageId: string): Promise<WAMessage | null> | undefined;
   /** The currently-registered admitInbound callback, if any (assigned at initialize()). */
@@ -327,6 +330,26 @@ export class BaileysEvents {
    * processing settles, and bounded like deletedForEveryone, which wins over it.
    */
   private readonly editedWhileInFlight = new Map<string, { envelope: WAMessageKey; body: string }>();
+
+  /**
+   * How many deliveries of an id were handed to onMessage and have no outcome yet, by id. The stored
+   * copy of such an id may be a duplicate the session is about to call another message's (the real one
+   * lives in its table only), so a change that reads as foreign to it is the session's to judge, which
+   * it does against the row (see targetsForeignMessage). An entry lasts at most OUTCOME_HOLD_MS. It begins
+   * when the delivery is handed on: a change that arrives while the delivery is still being processed
+   * (limiter wait, media download) is judged against the key it arrived under, as before.
+   */
+  private readonly outcomesPending = new Map<string, number>();
+
+  /**
+   * How many conflicting copies have been removed from the store. A read of the store that was out
+   * while one went may have returned that copy, which is not what the store holds any more (see
+   * targetsForeignMessage).
+   */
+  private copyRemovals = 0;
+
+  /** How long an id stays held for the session's outcome; a receipt not settled by then is let go. */
+  private static readonly OUTCOME_HOLD_MS = 5 * 60_000;
 
   /**
    * Bumped by fenceStoredWrites when the account is unlinked. A message stores its copy only while the
@@ -809,8 +832,8 @@ export class BaileysEvents {
       if (!deleted || opts.ticket?.revoked) {
         const emit = msg.key.fromMe === true ? this.host.getOnMessageCreate() : this.host.getOnMessage();
         // The ticket goes along only where one was issued, so elsewhere the call is unchanged.
-        if (opts.ticket) emit?.(incoming, opts.ticket);
-        else emit?.(incoming);
+        const receipt = opts.ticket ? emit?.(incoming, opts.ticket) : emit?.(incoming);
+        this.watchOutcome(msg.key, receipt);
       }
       this.host.recordMessage(msg, incoming.type);
       if (deleted) {
@@ -824,6 +847,79 @@ export class BaileysEvents {
         err instanceof Error ? err.message : String(err),
       );
     }
+  }
+
+  /**
+   * Act on what the session made of a message handed to onMessage, once it says. A delivery that
+   * reuses the id of a different message the session holds was dropped there as a duplicate, yet its
+   * copy was stored under that id before the emit, and would stand in for the real message when a
+   * later edit, delete or reaction of it is judged. Detached: it never delays inbound handling, and
+   * nothing it does can fail it, whatever the callback returns or rejects with.
+   */
+  private watchOutcome(key: WAMessageKey, receipt: void | InboundReceipt): void {
+    const id = key.id;
+    if (!id || !receipt?.settled) return;
+    // The session holds no entry for a status post, so it judges no change aimed at one: only a message
+    // it holds can stand in for the stored copy there.
+    const release = key.remoteJid === 'status@broadcast' ? undefined : this.holdOutcome(id);
+    void Promise.resolve(receipt.settled)
+      .then(result => (result?.conflict === true ? this.dropConflictingCopy(key, id) : undefined))
+      .catch((err: unknown) =>
+        this.host.logger.warn('Could not act on what the session made of a message', {
+          msgId: id,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      )
+      .finally(() => release?.());
+  }
+
+  /**
+   * Count a delivery of `id` as awaiting the session's outcome, until the returned function is called
+   * or OUTCOME_HOLD_MS passes, whichever is first, so a receipt that never settles (a hook that never
+   * returns) cannot keep the id held for the life of the adapter. Ending twice counts once.
+   */
+  private holdOutcome(id: string): () => void {
+    this.outcomesPending.set(id, (this.outcomesPending.get(id) ?? 0) + 1);
+    let ended = false;
+    const end = (): void => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(timer);
+      const pending = (this.outcomesPending.get(id) ?? 1) - 1;
+      if (pending > 0) this.outcomesPending.set(id, pending);
+      else this.outcomesPending.delete(id);
+    };
+    const timer = setTimeout(end, BaileysEvents.OUTCOME_HOLD_MS);
+    timer.unref();
+    return end;
+  }
+
+  /**
+   * Remove the copy a conflicting delivery stored, so the real message's later changes are judged
+   * against nothing wrong. Only a copy that still carries this delivery's own key goes: the store is
+   * read when the delete runs, behind every write of the id queued before it. Settles once the delete
+   * has run, so the id stays held until then; never rejects.
+   */
+  private async dropConflictingCopy(key: WAMessageKey, id: string): Promise<void> {
+    this.host.logger.warn('Dropping the stored copy of a message that reuses the id of another message', {
+      msgId: id,
+      remoteJid: key.remoteJid,
+    });
+    try {
+      await this.host.removeStoredMessage(
+        id,
+        stored =>
+          stored.key?.remoteJid === key.remoteJid &&
+          keyParticipant(stored.key ?? {}) === keyParticipant(key) &&
+          (stored.key?.fromMe === true) === (key.fromMe === true),
+      );
+    } catch (err) {
+      this.host.logger.warn('Failed to remove the stored copy of a conflicting message', {
+        msgId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    this.copyRemovals += 1;
   }
 
   /**
@@ -981,18 +1077,38 @@ export class BaileysEvents {
     checkAuthor: boolean,
     kind?: 'reaction',
   ): Promise<boolean> {
-    // A message still being processed has no stored copy yet, but the projector may already hold it
-    // (PostgreSQL), so its own key is checked instead.
-    const original = targetId
-      ? (await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets'))?.key
-      : undefined;
-    if (!original) return false;
+    if (!targetId) return false;
+    for (let attempt = 0; ; attempt++) {
+      const removals = this.copyRemovals;
+      // A message still being processed has no stored copy yet, but the projector may already hold it
+      // (PostgreSQL), so its own key is checked instead.
+      const original = (await this.readTarget(targetId, 'checking what an edit, revoke or reaction targets'))?.key;
+      if (!original || !this.readsAsForeign(original, key, checkAuthor, kind)) return false;
+      // The session has not said yet whether the delivery that stored this copy is the message it holds
+      // under the id or a duplicate of another one. Its own judgement stands in: it holds the message and
+      // checks the change against its key and against the stored row, and the stored copy does not.
+      if (this.outcomesPending.has(targetId)) return false;
+      // A conflicting copy went while the store was read, and the read may have returned it: it ends the
+      // hold only once removed, so the read is the one that can no longer be told from the real copy. Read
+      // again, with the copy gone, rather than drop the real author's change against it.
+      if (attempt === 0 && this.copyRemovals !== removals) continue;
+      this.host.logger.warn('Dropping an edit, revoke or reaction aimed at a message from another chat or author', {
+        msgId: key.id ?? 'unknown',
+        targetId,
+        remoteJid: key.remoteJid,
+      });
+      return true;
+    }
+  }
+
+  /** Whether a change arriving under `key` names a message other than the one `original` is. */
+  private readsAsForeign(original: WAMessageKey, key: WAMessageKey, checkAuthor: boolean, kind?: 'reaction'): boolean {
     const broadcast = kind === 'reaction' && !!original.remoteJid?.endsWith('@broadcast');
     if (broadcast && original.fromMe === true) return false;
     const originalChats = [original.remoteJid, original.remoteJidAlt];
     if (broadcast && original.remoteJid !== 'status@broadcast') originalChats.push(original.participant);
     const neutral = (jid: string): string => this.host.toNeutralJid(jid);
-    const foreign =
+    return (
       differentWaIds(originalChats, [key.remoteJid, key.remoteJidAlt], neutral) ||
       (checkAuthor &&
         ((original.fromMe === true) !== (key.fromMe === true) ||
@@ -1001,15 +1117,8 @@ export class BaileysEvents {
               [original.participant, original.participantAlt],
               [key.participant, key.participantAlt],
               neutral,
-            ))));
-    if (foreign) {
-      this.host.logger.warn('Dropping an edit, revoke or reaction aimed at a message from another chat or author', {
-        msgId: key.id ?? 'unknown',
-        targetId,
-        remoteJid: key.remoteJid,
-      });
-    }
-    return foreign;
+            ))))
+    );
   }
 
   /**

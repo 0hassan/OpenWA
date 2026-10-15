@@ -169,6 +169,7 @@ import {
   GroupEvent,
   IncomingCallEvent,
   IncomingMessage,
+  InboundOutcome,
 } from '../interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
@@ -193,6 +194,7 @@ const fakeStore = {
   getMessages: jest.fn().mockResolvedValue([]),
   clearSession: jest.fn().mockResolvedValue(undefined),
   update: jest.fn().mockResolvedValue(undefined),
+  remove: jest.fn().mockResolvedValue(undefined),
 };
 
 // clearAllMocks keeps implementations: a store lookup one test taught to return a message must not
@@ -8978,5 +8980,629 @@ describe('BaileysAdapter keeps the message store in step with edits and deletes'
       { deleteForMe: { deleteMedia: true, key: ownStored.key, timestamp: 1700000000 } },
       PEER,
     );
+  });
+
+  // An id names one message of one chat. A delivery that reuses the id of a message the account holds
+  // only in its messages table (history-synced, or older than the store's cap) finds nothing in the store,
+  // so its copy is stored under that id before the session finds the table already has the id. The
+  // session says so through the outcome of onMessage, and the copy must not outlive it: the real
+  // author's later edit, delete or reaction would be judged against the wrong chat and dropped.
+  describe('a delivery that reuses the id of another message', () => {
+    type Copy = { key: { id: string; remoteJid: string; participant?: string; fromMe?: boolean } };
+    const OTHER = '628222@s.whatsapp.net';
+    const copies = new Map<string, Copy>();
+
+    beforeEach(() => {
+      copies.clear();
+      fakeStore.put.mockReset().mockImplementation((_session: string, msg: Copy) => {
+        copies.set(msg.key.id, structuredClone(msg));
+        return Promise.resolve();
+      });
+      fakeStore.getMessage.mockImplementation((_session: string, id: string) =>
+        Promise.resolve(structuredClone(copies.get(id) ?? null)),
+      );
+      fakeStore.update
+        .mockReset()
+        .mockImplementation((_session: string, id: string, change: (m: Copy) => Copy | null) => {
+          const held = copies.get(id);
+          const next = held && change(structuredClone(held));
+          if (next) copies.set(id, next);
+          return Promise.resolve();
+        });
+      fakeStore.remove.mockReset().mockImplementation((_session: string, id: string, accept: (m: Copy) => boolean) => {
+        const held = copies.get(id);
+        if (held && accept(structuredClone(held))) copies.delete(id);
+        return Promise.resolve();
+      });
+    });
+
+    afterEach(() => {
+      fakeStore.put.mockReset().mockResolvedValue(undefined);
+      fakeStore.update.mockReset().mockResolvedValue(undefined);
+      fakeStore.remove.mockReset().mockResolvedValue(undefined);
+    });
+
+    /** An outcome the test settles itself, so it decides when the session answers. */
+    const answer = () => {
+      let resolve!: (outcome: InboundOutcome | undefined) => void;
+      let reject!: (error: Error) => void;
+      const promise = new Promise<InboundOutcome | undefined>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+
+    const startWith = async (callbacks: Partial<EngineEventCallbacks>): Promise<BaileysAdapter> => {
+      const adapter = newAdapter();
+      await adapter.initialize(callbacks);
+      fakeSock.fire('connection.update', { connection: 'open' });
+      return adapter;
+    };
+
+    /** The reusing delivery: a text from another one-to-one chat, under the id of the real message. */
+    const deliverReuse = (key: Record<string, unknown> = { remoteJid: OTHER, fromMe: false }) =>
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [{ key: { id: 'REUSED', ...key }, message: { conversation: 'late' }, messageTimestamp: 1700000100 }],
+      });
+
+    const settleAll = async (): Promise<void> => {
+      for (let i = 0; i < 6; i++) await settle();
+    };
+
+    const realEdit = () =>
+      fireProtocol(
+        { id: 'EDIT_ENV', remoteJid: PEER, fromMe: false },
+        { key: { id: 'REUSED' }, type: 14, editedMessage: { conversation: 'the real edit' } },
+      );
+
+    it('removes its own copy once the session says the id belongs to another message', async () => {
+      const answered = answer();
+      const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })) });
+      const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+      deliverReuse();
+      await settleAll();
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+
+      expect(fakeStore.remove).toHaveBeenCalledWith('db-uuid-1', 'REUSED', expect.any(Function));
+      expect(copies.has('REUSED')).toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        'Dropping the stored copy of a message that reuses the id of another message',
+        expect.objectContaining({ msgId: 'REUSED', remoteJid: OTHER }),
+      );
+    });
+
+    it('takes the real message edit, delete and reaction that follow, judged against nothing wrong', async () => {
+      const onMessageEdited = jest.fn();
+      const onMessageRevoked = jest.fn();
+      const onMessageReaction = jest.fn();
+      await startWith({
+        onMessage: jest.fn(() => ({ settled: Promise.resolve({ conflict: true }) })),
+        onMessageEdited,
+        onMessageRevoked,
+        onMessageReaction,
+      });
+      deliverReuse();
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+
+      realEdit();
+      fireProtocol({ id: 'REVOKE_ENV', remoteJid: PEER, fromMe: false }, { key: { id: 'REUSED' }, type: 0 });
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [
+          {
+            key: { id: 'REACT_ENV', remoteJid: PEER, fromMe: false },
+            message: { reactionMessage: { key: { id: 'REUSED' }, text: '👍' } },
+            messageTimestamp: 1700000101,
+          },
+        ],
+      });
+      await settleAll();
+
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+      expect(onMessageRevoked).toHaveBeenCalledWith(expect.objectContaining({ id: 'REUSED', chatId: '628111@c.us' }), {
+        fromMe: false,
+      });
+      expect(onMessageReaction).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+    });
+
+    it.each([
+      ['says nothing', undefined],
+      ['reports no conflict', {}],
+      ['reports an explicit no', { conflict: false }],
+    ])('keeps its copy when the session %s, and keeps judging a change against it', async (_name, outcome) => {
+      const onMessageEdited = jest.fn();
+      const adapter = await startWith({
+        onMessage: jest.fn(() => ({ settled: Promise.resolve(outcome) })),
+        onMessageEdited,
+      });
+      const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+      deliverReuse();
+      await settleAll();
+
+      expect(fakeStore.remove).not.toHaveBeenCalled();
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
+
+      // Nothing proved the stored copy is another message's, so the edit from the other chat is foreign to it.
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        'Dropping an edit, revoke or reaction aimed at a message from another chat or author',
+        expect.objectContaining({ targetId: 'REUSED' }),
+      );
+    });
+
+    it('removes a copy only while it still carries the key of the delivery that stored it', async () => {
+      const answered = answer();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })) });
+      deliverReuse({ remoteJid: '120363000@g.us', participant: OTHER, fromMe: false });
+      await settleAll();
+      answered.resolve({ conflict: true });
+      await settleAll();
+      const accept = (fakeStore.remove.mock.calls[0] as [string, string, (m: Copy) => boolean])[2];
+
+      const group = '120363000@g.us';
+      expect(accept({ key: { id: 'REUSED', remoteJid: group, participant: OTHER, fromMe: false } })).toBe(true);
+      expect(accept({ key: { id: 'REUSED', remoteJid: group, participant: OTHER } })).toBe(true); // fromMe left out
+      expect(accept({ key: { id: 'REUSED', remoteJid: PEER, participant: OTHER, fromMe: false } })).toBe(false);
+      expect(accept({ key: { id: 'REUSED', remoteJid: group, participant: PEER, fromMe: false } })).toBe(false);
+      expect(accept({ key: { id: 'REUSED', remoteJid: group, participant: OTHER, fromMe: true } })).toBe(false);
+      expect(accept({ key: { id: 'REUSED', remoteJid: group, fromMe: false } })).toBe(false);
+    });
+
+    it('leaves a copy another write replaced meanwhile', async () => {
+      const answered = answer();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })) });
+      deliverReuse();
+      await settleAll();
+      // The real message's own copy took the id's place before the session answered.
+      copies.set('REUSED', { key: { id: 'REUSED', remoteJid: PEER, fromMe: false } });
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+
+      expect(fakeStore.remove).toHaveBeenCalledTimes(1);
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(PEER);
+    });
+
+    it('judges a change aimed at a status post by its copy, which the session does not hold, and still removes it', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      const adapter = await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+      deliverReuse({ remoteJid: 'status@broadcast', participant: OTHER, fromMe: false });
+      await settleAll();
+      expect(copies.get('REUSED')?.key.remoteJid).toBe('status@broadcast');
+
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        'Dropping an edit, revoke or reaction aimed at a message from another chat or author',
+        expect.objectContaining({ targetId: 'REUSED' }),
+      );
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+    });
+
+    it('hands the real edit to the session while it has not answered, then removes the copy', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      deliverReuse();
+      await settleAll();
+
+      // The edit reads as foreign to the stored copy, which is the delivery the session has yet to judge.
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+    });
+
+    // The read of the real edit runs on the store's clock, not the session's: it can begin under the hold and
+    // return the copy only after the answer removed it and ended the hold.
+    it('hands the real edit to the session when its store read outlasts the hold it began under', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      deliverReuse();
+      await settleAll();
+
+      let openGate!: () => void;
+      const gate = new Promise<void>(resolve => (openGate = resolve));
+      fakeStore.getMessage.mockImplementationOnce(async (_session: string, id: string) => {
+        const seen = structuredClone(copies.get(id) ?? null);
+        await gate;
+        return seen;
+      });
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+
+      openGate();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+    });
+
+    it('hands the real edit to the session when its store read began before the delivery was stored', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+
+      let reading = false;
+      let openGate!: () => void;
+      const gate = new Promise<void>(resolve => (openGate = resolve));
+      fakeStore.getMessage.mockImplementationOnce(async (_session: string, id: string) => {
+        reading = true;
+        await gate;
+        return structuredClone(copies.get(id) ?? null);
+      });
+      realEdit();
+      await settleAll();
+      expect(reading).toBe(true);
+
+      deliverReuse();
+      await settleAll();
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
+
+      openGate();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+    });
+
+    it('reads again when the copy it returned was removed after the hold it began under had ended', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+
+      // The read starts before the delivery is stored, sees its copy, and returns only after the answer
+      // has removed that copy and ended the hold.
+      let stored!: () => void;
+      const copyStored = new Promise<void>(resolve => (stored = resolve));
+      let openGate!: () => void;
+      const gate = new Promise<void>(resolve => (openGate = resolve));
+      fakeStore.getMessage.mockImplementationOnce(async (_session: string, id: string) => {
+        await copyStored;
+        const seen = structuredClone(copies.get(id) ?? null);
+        await gate;
+        return seen;
+      });
+      realEdit();
+      await settleAll();
+
+      deliverReuse();
+      await settleAll();
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
+      stored();
+      await settleAll();
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+
+      openGate();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+    });
+
+    it('still drops a change from a third chat when the answer is no conflict and its read began under the hold', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      deliverReuse();
+      await settleAll();
+
+      let openGate!: () => void;
+      const gate = new Promise<void>(resolve => (openGate = resolve));
+      fakeStore.getMessage.mockImplementationOnce(async (_session: string, id: string) => {
+        const seen = structuredClone(copies.get(id) ?? null);
+        await gate;
+        return seen;
+      });
+      fireProtocol(
+        { id: 'FORGED_ENV', remoteJid: '628333@s.whatsapp.net', fromMe: false },
+        { key: { id: 'REUSED' }, type: 14, editedMessage: { conversation: 'forged' } },
+      );
+      await settleAll();
+
+      answered.resolve({ conflict: false });
+      await settleAll();
+      expect(copies.get('REUSED')?.key.remoteJid).toBe(OTHER);
+
+      openGate();
+      await settleAll();
+      expect(onMessageEdited).not.toHaveBeenCalled();
+    });
+
+    it('keeps the id held until the removal of the copy has run', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      deliverReuse();
+      await settleAll();
+
+      // The delete is queued behind other writes of the id and has not run when the answer comes.
+      let runRemoval!: () => void;
+      const removalQueued = new Promise<void>(resolve => (runRemoval = resolve));
+      fakeStore.remove.mockImplementationOnce(async (_session: string, id: string) => {
+        await removalQueued;
+        copies.delete(id);
+      });
+      answered.resolve({ conflict: true });
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(true);
+
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: 'REUSED', chatId: '628111@c.us' }),
+      );
+      runRemoval();
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+    });
+
+    it('applies the edit of the delivery itself to its copy before the answer, and still removes it', async () => {
+      const answered = answer();
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })), onMessageEdited });
+      deliverReuse();
+      await settleAll();
+
+      fireProtocol(
+        { id: 'OWN_EDIT_ENV', remoteJid: OTHER, fromMe: false },
+        { key: { id: 'REUSED' }, type: 14, editedMessage: { conversation: 'late, edited' } },
+      );
+      await settleAll();
+      expect(fakeStore.update).toHaveBeenCalledWith('db-uuid-1', 'REUSED', expect.any(Function));
+      expect(onMessageEdited).toHaveBeenCalledTimes(1);
+
+      answered.resolve({ conflict: true });
+      await settleAll();
+      expect(copies.has('REUSED')).toBe(false);
+    });
+
+    it('stops judging in the session once every delivery of the id has been answered', async () => {
+      const first = answer();
+      const second = answer();
+      const outcomes = [first.promise, second.promise];
+      const onMessageEdited = jest.fn();
+      await startWith({ onMessage: jest.fn(() => ({ settled: outcomes.shift()! })), onMessageEdited });
+      // Both pass the repeat check before either is stored, as a repeat sent while the first is processed does.
+      fakeSock.fire('messages.upsert', {
+        type: 'notify',
+        messages: [1, 2].map(() => ({
+          key: { id: 'REUSED', remoteJid: OTHER, fromMe: false },
+          message: { conversation: 'late' },
+          messageTimestamp: 1700000100,
+        })),
+      });
+      await settleAll();
+      expect(fakeStore.put).toHaveBeenCalledTimes(2);
+
+      first.resolve(undefined);
+      await settleAll();
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledTimes(1); // the second delivery is still unanswered
+
+      second.resolve(undefined);
+      await settleAll();
+      realEdit();
+      await settleAll();
+      expect(onMessageEdited).toHaveBeenCalledTimes(1); // now judged against the copy again
+    });
+
+    describe('an answer that does not come', () => {
+      const HOLD_MS = 5 * 60_000;
+      const edited = 'Dropping an edit, revoke or reaction aimed at a message from another chat or author';
+
+      beforeEach(() => {
+        jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('stops holding the id for the session after a while, so a change is judged against the copy again', async () => {
+        const onMessageEdited = jest.fn();
+        const adapter = await startWith({
+          onMessage: jest.fn(() => ({ settled: new Promise<InboundOutcome | undefined>(() => undefined) })),
+          onMessageEdited,
+        });
+        const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+        deliverReuse();
+        await settleAll();
+
+        realEdit();
+        await settleAll();
+        expect(onMessageEdited).toHaveBeenCalledTimes(1);
+
+        jest.advanceTimersByTime(HOLD_MS);
+        realEdit();
+        await settleAll();
+
+        expect(onMessageEdited).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(edited, expect.objectContaining({ targetId: 'REUSED' }));
+      });
+
+      it('still removes the copy when the session answers after the hold ended', async () => {
+        const answered = answer();
+        await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })) });
+        deliverReuse();
+        await settleAll();
+        jest.advanceTimersByTime(HOLD_MS);
+
+        answered.resolve({ conflict: true });
+        await settleAll();
+
+        expect(copies.has('REUSED')).toBe(false);
+      });
+
+      it('lets a late answer of one delivery leave the hold of a later delivery of the id alone', async () => {
+        const first = answer();
+        const second = answer();
+        const outcomes = [first.promise, second.promise];
+        const onMessageEdited = jest.fn();
+        const adapter = await startWith({
+          onMessage: jest.fn(() => ({ settled: outcomes.shift()! })),
+          onMessageEdited,
+        });
+        const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+        deliverReuse();
+        await settleAll();
+        jest.advanceTimersByTime(60_000);
+        copies.delete('REUSED'); // the store let it go, so the repeat is not skipped as one it holds
+        deliverReuse();
+        await settleAll();
+
+        jest.advanceTimersByTime(HOLD_MS - 60_000); // the first delivery's hold ends, the second's has a minute left
+        first.resolve(undefined);
+        await settleAll();
+        realEdit();
+        await settleAll();
+
+        expect(onMessageEdited).toHaveBeenCalledTimes(1);
+        expect(warn).not.toHaveBeenCalledWith(edited, expect.anything());
+      });
+
+      it('frees the hold at once when the answer comes', async () => {
+        const answered = answer();
+        await startWith({ onMessage: jest.fn(() => ({ settled: answered.promise })) });
+        const idle = jest.getTimerCount();
+        deliverReuse();
+        await settleAll();
+        expect(jest.getTimerCount()).toBeGreaterThan(idle);
+
+        answered.resolve(undefined);
+        await settleAll();
+
+        expect(jest.getTimerCount()).toBe(idle);
+      });
+    });
+
+    it('is not held up by an answer that rejects, and warns once', async () => {
+      const unhandled: unknown[] = [];
+      const listen = (reason: unknown): number => unhandled.push(reason);
+      process.on('unhandledRejection', listen);
+      try {
+        const onMessage = jest
+          .fn()
+          .mockImplementationOnce(() => ({ settled: Promise.reject(new Error('projector went away')) }))
+          .mockImplementation(() => undefined);
+        const adapter = await startWith({ onMessage });
+        const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+        deliverReuse();
+        await settleAll();
+        fakeSock.fire('messages.upsert', {
+          type: 'notify',
+          messages: [
+            {
+              key: { id: 'NEXT', remoteJid: PEER, fromMe: false },
+              message: { conversation: 'hi' },
+              messageTimestamp: 1,
+            },
+          ],
+        });
+        await settleAll();
+
+        expect(unhandled).toEqual([]);
+        expect(warn).toHaveBeenCalledWith(
+          'Could not act on what the session made of a message',
+          expect.objectContaining({ msgId: 'REUSED', error: 'projector went away' }),
+        );
+        expect(onMessage).toHaveBeenCalledTimes(2);
+        expect(copies.has('REUSED')).toBe(true);
+        expect(copies.has('NEXT')).toBe(true);
+      } finally {
+        process.off('unhandledRejection', listen);
+      }
+    });
+
+    it('is not held up by a callback that throws, or one that answers with something else', async () => {
+      const onMessage = jest
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('callback exploded');
+        })
+        .mockImplementationOnce(() => 'accepted')
+        .mockImplementation(() => undefined);
+      await startWith({ onMessage });
+      for (const id of ['A1', 'A2', 'A3']) {
+        fakeSock.fire('messages.upsert', {
+          type: 'notify',
+          messages: [
+            { key: { id, remoteJid: PEER, fromMe: false }, message: { conversation: id }, messageTimestamp: 1 },
+          ],
+        });
+        await settleAll();
+      }
+
+      expect(onMessage).toHaveBeenCalledTimes(3);
+      expect(fakeStore.remove).not.toHaveBeenCalled();
+    });
+
+    it('logs a store that cannot remove the copy instead of failing', async () => {
+      const unhandled: unknown[] = [];
+      const listen = (reason: unknown): number => unhandled.push(reason);
+      process.on('unhandledRejection', listen);
+      try {
+        fakeStore.remove.mockReset().mockRejectedValueOnce(new Error('SQLITE_BUSY: database is locked'));
+        const adapter = await startWith({
+          onMessage: jest.fn(() => ({ settled: Promise.resolve({ conflict: true }) })),
+        });
+        const warn = jest.spyOn(loggerOf(adapter), 'warn').mockImplementation(() => undefined);
+        deliverReuse();
+        await settleAll();
+
+        expect(unhandled).toEqual([]);
+        expect(warn).toHaveBeenCalledWith(
+          'Failed to remove the stored copy of a conflicting message',
+          expect.objectContaining({ msgId: 'REUSED', error: 'SQLITE_BUSY: database is locked' }),
+        );
+      } finally {
+        process.off('unhandledRejection', listen);
+      }
+    });
+
+    it('does nothing for a callback that returns no answer, as before', async () => {
+      const onMessage = jest.fn();
+      await startWith({ onMessage });
+      deliverReuse();
+      await settleAll();
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(fakeStore.remove).not.toHaveBeenCalled();
+      expect(copies.has('REUSED')).toBe(true);
+    });
   });
 });

@@ -113,6 +113,7 @@ function makeHost(overrides: Partial<BaileysEventsHost> = {}): BaileysEventsHost
     getStoredMessage: () => undefined,
     putStoredMessage: () => undefined,
     updateStoredMessage: () => undefined,
+    removeStoredMessage: () => undefined,
     getOnMessage: () => undefined,
     getOnMessageCreate: () => undefined,
     getOnMessageRevoked: () => undefined,

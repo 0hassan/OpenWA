@@ -850,6 +850,30 @@ export interface InboundTicket {
   readonly revoked: boolean;
 }
 
+/**
+ * What the session made of a message handed to `EngineEventCallbacks.onMessage`, for an engine that
+ * keeps its own copy of messages keyed by id. An engine that keeps none ignores it.
+ */
+export interface InboundOutcome {
+  /**
+   * The session already holds a different message under this id (another chat, another side of the
+   * conversation, or another author), so the delivery was dropped as a duplicate. The engine's copy
+   * under that id is this delivery's, not the message the session holds, and must not stand in for it.
+   * Left out for a delivery that landed and for one the session cannot prove is another message.
+   */
+  conflict?: boolean;
+}
+
+/**
+ * The session's answer to `onMessage`, for an engine that wants to know what became of the message.
+ * Wrapped rather than a bare promise: most engines ignore it, and a promise nobody awaits reads as a
+ * mistake wherever a callback is called.
+ */
+export interface InboundReceipt {
+  /** Settles once the message's row is settled, with what became of it; never rejects. */
+  settled: Promise<InboundOutcome | undefined>;
+}
+
 export interface EngineEventCallbacks {
   onQRCode?: (qr: string) => void;
   onReady?: (phone: string, pushName: string) => void;
@@ -869,7 +893,12 @@ export interface EngineEventCallbacks {
     /** The neutral id of the sender behind a group, status or list message, as `IncomingMessage.author`. */
     author?: string;
   }) => InboundTicket | undefined;
-  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void;
+  /**
+   * Fired for each received message. The session may answer with a receipt for what it makes of the
+   * message once its row is settled (see {@link InboundReceipt}); the engine never waits for it, and
+   * a receipt that fails, or is still unsettled after minutes, is let go of.
+   */
+  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void | InboundReceipt;
   /**
    * Fired for messages the account itself created (outgoing) — including sends composed on a
    * linked phone, which the `message`/`onMessage` event never delivers. Used to emit `message.sent`.

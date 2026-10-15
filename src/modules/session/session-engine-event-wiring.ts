@@ -237,7 +237,7 @@ export class SessionEngineEventWiring {
       ...(host.messages.holdsInbound
         ? { admitInbound: arrival => host.messages.admitInbound(id, engine, arrival) }
         : {}),
-      onMessage: (message, ticket): void => host.messages.handleInboundMessage(id, engine, message, ticket),
+      onMessage: (message, ticket) => host.messages.handleInboundMessage(id, engine, message, ticket),
       onHistoryMessages: messages => {
         if (!host.isLiveEngine(id, engine)) return;
         // Persist for the chat view only; no dispatch (these predate the live session).

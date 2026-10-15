@@ -24,6 +24,8 @@ import {
   IWhatsAppEngine,
   DeliveryStatus,
   IncomingMessage,
+  InboundOutcome,
+  InboundReceipt,
   InboundTicket,
   ReactionEvent,
   EditedMessage,
@@ -341,24 +343,38 @@ export class MessageProjector {
   /**
    * Engine callback body, lifted out of initializeEngine so the wiring table stays readable. With a
    * ticket (PostgreSQL), the hook chain starts in the chat's arrival order and the commit takes the
-   * turn admitInbound reserved; whatever path returns early drops the ticket.
+   * turn admitInbound reserved; whatever path returns early drops the ticket. The receipt, for an
+   * engine that wants to know what became of its message, settles once the commit ends (see
+   * {@link InboundOutcome}); there is none when the message is not committed at all.
    */
-  handleInboundMessage(id: string, engine: IWhatsAppEngine, message: IncomingMessage, ticket?: InboundTicket): void {
+  handleInboundMessage(
+    id: string,
+    engine: IWhatsAppEngine,
+    message: IncomingMessage,
+    ticket?: InboundTicket,
+  ): InboundReceipt | undefined {
     const turn = ticket instanceof InboundTurn ? ticket : undefined;
     try {
-      this.receiveInbound(id, engine, message, turn);
+      return this.receiveInbound(id, engine, message, turn);
     } finally {
       turn?.drop();
     }
   }
 
-  private receiveInbound(id: string, engine: IWhatsAppEngine, message: IncomingMessage, turn?: InboundTurn): void {
+  private receiveInbound(
+    id: string,
+    engine: IWhatsAppEngine,
+    message: IncomingMessage,
+    turn?: InboundTurn,
+  ): InboundReceipt | undefined {
     if (!this.engines.isLive(id, engine)) return;
     if (message.isStatusBroadcast) {
       const ingest = this.ingestInboundStatus(id, engine, message);
       // The status store holds the payload until the ingest settles.
       turn?.holdUntil(ingest);
-      return;
+      // Its own table takes the status whatever the id, and a story is never a row of `messages`: one
+      // that finds a message there under its id reuses that id.
+      return { settled: ingest.then(() => this.judgeRepeat(id, message)) };
     }
     if (this.shouldSkipEphemeralMessage(id, message)) return;
     this.logger.debug(`Message received from ${message.from}`, {
@@ -400,16 +416,19 @@ export class MessageProjector {
           this.prepareInboundMessage(id, this.messageOrEngineCopy(id, 'message:received', data, message)),
         ),
     ).catch(onFailure);
+    const outcome = deferred<InboundOutcome | undefined>();
     this.commitInTurn(id, message, turn, async () => {
       try {
         const finalMessage = await prepared;
-        if (finalMessage) await this.commitInboundMessage(id, engine, finalMessage);
+        if (finalMessage) outcome.resolve(await this.commitInboundMessage(id, engine, finalMessage));
       } catch (err) {
         onFailure(err);
       } finally {
+        outcome.resolve(undefined); // no effect once settled above
         if (!turn) this.untrackInFlight(inFlightKey, inFlight);
       }
     });
+    return { settled: outcome.promise };
   }
 
   /**
@@ -607,21 +626,48 @@ export class MessageProjector {
     id: string,
     engine: IWhatsAppEngine,
     finalMessage: InboundMessageData,
-  ): Promise<void> {
+  ): Promise<InboundOutcome | undefined> {
     const outcome = await this.persistInboundMessage(id, engine, finalMessage);
-    if (!outcome) return;
-    this.dispatchInboundMessage(id, finalMessage, outcome);
+    if (outcome === 'repeat') return this.judgeRepeat(id, finalMessage);
+    if (outcome) this.dispatchInboundMessage(id, finalMessage, outcome);
+    return undefined;
+  }
+
+  /**
+   * Whether a message the insert refused as a repeat is another message than the one holding its id.
+   * A re-fire of the same message is not, but an id reused from another chat, another side of the
+   * conversation or another author of a group is: the engine is told, so its copy under that id does
+   * not stand in for the stored message. Judged by the rule that refuses a change aimed at the row, so
+   * what that rule would refuse to edit is not this message. A row that cannot be read, or that does
+   * not prove a difference, says nothing and the engine keeps its copy.
+   */
+  private async judgeRepeat(id: string, message: InboundMessageData): Promise<InboundOutcome | undefined> {
+    const reason = await this.mutationProjector.foreignRowReason(id, storableWaMessageId(message.id) ?? '', {
+      kind: 'edit',
+      chatId: message.chatId,
+      fromMe: message.fromMe,
+      author: message.author,
+    });
+    if (!reason) return undefined;
+    this.logger.warn('Dropping a message that reuses the id of a different stored message', {
+      sessionId: id,
+      messageId: message.id,
+      reason,
+      action: 'message_id_reused',
+    });
+    return { conflict: true };
   }
 
   /**
    * Build the inbound row and insert it under the UNIQUE dedup oracle. Returns the row plus whether
-   * the insert landed, or null when the pipeline must stop (stale engine, or duplicate re-fire).
+   * the insert landed, 'repeat' when the id already has a row (an engine re-fire, or another message
+   * under the same id), or null when the pipeline must stop (stale engine).
    */
   private async persistInboundMessage(
     id: string,
     engine: IWhatsAppEngine,
     incoming: IncomingMessage,
-  ): Promise<InboundPersistOutcome | null> {
+  ): Promise<InboundPersistOutcome | 'repeat' | null> {
     const metadata = buildMessageMetadata(incoming);
 
     const chatName = incoming.contact?.pushName ?? incoming.contact?.name ?? undefined;
@@ -666,7 +712,7 @@ export class MessageProjector {
     // A duplicate on the retry is ambiguous: the first attempt may have committed before its error,
     // in which case nothing dispatched yet, so dispatch fail-open (without the row-bound hook), and
     // that row still has to take a revoke or edit that arrived in flight.
-    if (outcome.landed === 'dup' && !outcome.retried) return null;
+    if (outcome.landed === 'dup' && !outcome.retried) return 'repeat';
     if (outcome.landed === 'dup') this.applyChangesMadeInFlight(id, incoming.id);
     return { dbMessage, persisted: false };
   }

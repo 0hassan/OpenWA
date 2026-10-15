@@ -925,7 +925,7 @@ export interface EngineEventCallbacks {
     fromMe?: boolean;
     author?: string;
   }) => InboundTicket | undefined; // PostgreSQL: reserves room for a download before the emit, and holds a change to the chat, direction and author it names
-  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void;
+  onMessage?: (message: IncomingMessage, ticket?: InboundTicket) => void | InboundReceipt; // the receipt reports { conflict: true } when the id already held another message; Baileys drops its copy
   onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
   onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;

@@ -1547,6 +1547,22 @@ describe('MessageProjector (inbound projection)', () => {
       expect(received()).toHaveLength(1);
     });
 
+    it('reports nothing for a duplicate of the retry, which may be the message itself', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(busy()).mockRejectedValueOnce(dup());
+      messageRepository.findOne.mockResolvedValue({ chatId: 'other@c.us', direction: 'incoming', author: null });
+
+      const receipt = projector.handleInboundMessage(SESSION_ID, engine, makeIncoming());
+      await flush();
+      await jest.advanceTimersByTimeAsync(PERSIST_RETRY_DELAY_MS);
+      await flush();
+
+      await expect(receipt?.settled).resolves.toBeUndefined();
+      expect(messageRepository.findOne).not.toHaveBeenCalled();
+      expect(received()).toHaveLength(1);
+    });
+
     it('still clears that row when a revoke landed while its hook chain ran', async () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
@@ -1627,6 +1643,185 @@ describe('MessageProjector (inbound projection)', () => {
       expect(messageRepository.insert).toHaveBeenCalledTimes(2);
       expect(persistedHooks()).toHaveLength(1);
       expect(webhookService.dispatch.mock.calls.filter(([, e]) => e === 'message.sent')).toHaveLength(1);
+    });
+  });
+
+  // The table holds one row per id, so a delivery that reuses the id of a message it holds is refused as a
+  // repeat. A re-fire of the same message is a repeat too, and the engine keeps its copy of that one; an id
+  // reused from another chat, side or author is not the message the row holds, and the engine is told so.
+  describe('a repeat of an id the table already holds', () => {
+    const dup = (): Error => Object.assign(new Error('UNIQUE constraint failed'), { code: 'SQLITE_CONSTRAINT_UNIQUE' });
+    const flush = async (): Promise<void> => {
+      for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    };
+    const received = (): unknown[] => webhookService.dispatch.mock.calls.filter(([, e]) => e === 'message.received');
+
+    /** Hand over a delivery whose insert the table refuses; `row` is what it holds under the id. */
+    const repeat = async (
+      over: Partial<IncomingMessage>,
+      row?: Record<string, unknown> | null | Error,
+    ): Promise<unknown> => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      messageRepository.insert.mockRejectedValueOnce(dup());
+      if (row instanceof Error) messageRepository.findOne.mockRejectedValue(row);
+      else if (row !== undefined) messageRepository.findOne.mockResolvedValue(row);
+      const receipt = projector.handleInboundMessage(SESSION_ID, engine, makeIncoming(over));
+      await flush();
+      return receipt?.settled;
+    };
+
+    it('reports a conflict when the row is another chat', async () => {
+      const outcome = await repeat({}, { chatId: '15550002222@c.us', direction: 'incoming', author: null });
+
+      expect(outcome).toEqual({ conflict: true });
+      expect(messageRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { sessionId: SESSION_ID, waMessageId: 'wamid.1' } }),
+      );
+      expect(received()).toHaveLength(0);
+    });
+
+    it('reports a conflict when the row is a message the account sent', async () => {
+      const outcome = await repeat({}, { chatId: '15550001111@c.us', direction: 'outgoing', author: null });
+
+      expect(outcome).toEqual({ conflict: true });
+      expect(received()).toHaveLength(0);
+    });
+
+    it('reports a conflict when the row was written by another member of the group', async () => {
+      const outcome = await repeat(
+        { chatId: '120363000@g.us', from: '120363000@g.us', isGroup: true, kind: 'group', author: '15550002222@c.us' },
+        { chatId: '120363000@g.us', direction: 'incoming', author: '15550003333@c.us' },
+      );
+
+      expect(outcome).toEqual({ conflict: true });
+    });
+
+    it('reports nothing for a re-fire of the message the row holds', async () => {
+      const outcome = await repeat({}, { chatId: '15550001111@c.us', direction: 'incoming', author: null });
+
+      expect(outcome).toBeUndefined();
+      expect(received()).toHaveLength(0);
+    });
+
+    it('reports nothing for a re-fire of a group message by its own author', async () => {
+      const outcome = await repeat(
+        { chatId: '120363000@g.us', from: '120363000@g.us', isGroup: true, kind: 'group', author: '15550002222@c.us' },
+        { chatId: '120363000@g.us', direction: 'incoming', author: '15550002222@c.us' },
+      );
+
+      expect(outcome).toBeUndefined();
+    });
+
+    it('reports nothing when the row names the same chat in the other id dialect', async () => {
+      const outcome = await repeat(
+        { chatId: '15550001111@c.us' },
+        { chatId: '15550001111@s.whatsapp.net', direction: 'incoming', author: null },
+      );
+
+      expect(outcome).toBeUndefined();
+    });
+
+    it('reports nothing for a chat it cannot compare with the row, as a lid against a phone number', async () => {
+      const outcome = await repeat(
+        { chatId: '99887766@lid' },
+        { chatId: '15550001111@c.us', direction: 'incoming', author: null },
+      );
+
+      expect(outcome).toBeUndefined();
+    });
+
+    it('judges the message a hook left, as the row it would have written', async () => {
+      hookManager.execute.mockImplementation((_event: string, data: IncomingMessage) =>
+        Promise.resolve({ continue: true, data: { ...data, chatId: 'routed@c.us' } }),
+      );
+
+      const outcome = await repeat({}, { chatId: 'routed@c.us', direction: 'incoming', author: null });
+
+      expect(outcome).toBeUndefined();
+    });
+
+    it.each([
+      ['has no row to read', null],
+      ['cannot be read', new Error('SQLITE_BUSY: database is locked')],
+    ])('reports nothing when the id %s, so the engine keeps its copy', async (_name, row) => {
+      const outcome = await repeat({}, row);
+
+      expect(outcome).toBeUndefined();
+      expect(received()).toHaveLength(0);
+    });
+
+    it('reports nothing for a message whose row landed', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+
+      const receipt = projector.handleInboundMessage(SESSION_ID, engine, makeIncoming());
+      await flush();
+
+      await expect(receipt?.settled).resolves.toBeUndefined();
+      expect(messageRepository.findOne).not.toHaveBeenCalled();
+      expect(received()).toHaveLength(1);
+    });
+
+    it('answers nothing for a message it never commits', () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      const retired = makeEngine();
+
+      expect(projector.handleInboundMessage(SESSION_ID, retired, makeIncoming())).toBeUndefined();
+    });
+
+    it('settles with nothing when the hook chain fails', async () => {
+      const engine = makeEngine();
+      engines.set(SESSION_ID, engine);
+      hookManager.execute.mockRejectedValueOnce(new Error('hook exploded'));
+
+      const receipt = projector.handleInboundMessage(SESSION_ID, engine, makeIncoming());
+      await flush();
+
+      await expect(receipt?.settled).resolves.toBeUndefined();
+      expect(messageRepository.insert).not.toHaveBeenCalled();
+    });
+
+    describe('a status post', () => {
+      const status = { isStatusBroadcast: true, chatId: 'status@broadcast', from: 'status@broadcast' };
+
+      it('reports a conflict when a message of a chat holds its id', async () => {
+        statusStore.ingest.mockResolvedValue({ row: {}, created: true });
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+        messageRepository.findOne.mockResolvedValue({
+          chatId: '15550002222@c.us',
+          direction: 'incoming',
+          author: null,
+        });
+
+        const receipt = projector.handleInboundMessage(
+          SESSION_ID,
+          engine,
+          makeIncoming({ ...status, author: '15550001111@c.us' }),
+        );
+        await flush();
+
+        await expect(receipt?.settled).resolves.toEqual({ conflict: true });
+        expect(statusStore.ingest).toHaveBeenCalledTimes(1);
+      });
+
+      it('reports nothing for a story no message shares an id with', async () => {
+        statusStore.ingest.mockResolvedValue({ row: {}, created: true });
+        const engine = makeEngine();
+        engines.set(SESSION_ID, engine);
+
+        const receipt = projector.handleInboundMessage(
+          SESSION_ID,
+          engine,
+          makeIncoming({ ...status, author: '15550001111@c.us' }),
+        );
+        await flush();
+
+        await expect(receipt?.settled).resolves.toBeUndefined();
+        expect(statusStore.ingest).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
