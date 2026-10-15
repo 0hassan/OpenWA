@@ -2304,6 +2304,68 @@ describe('every workflow job declares a bounded timeout', () => {
 });
 
 /**
+ * A job that names no `permissions` of its own inherits the workflow's block, and no job-level check sees
+ * that: `contents: write` or `write-all` there would hand the token to every lint, test and build job of the
+ * file, and a missing block falls back to the repository default, which may be read-write. Every workflow
+ * therefore holds the block at `contents: read`, and the jobs that need more name it themselves, where the
+ * allow-lists and job checks see it. A workflow that is added has to be added here.
+ */
+describe('every workflow holds the token at contents: read for the jobs that name no permissions', () => {
+  type PermissionedWorkflow = { permissions?: Record<string, string> | string | null };
+  const workflows = fs.readdirSync(workflowDir).filter(f => f.endsWith('.yml') || f.endsWith('.yaml'));
+  const HELD: Record<string, string> = { contents: 'read' };
+  const NAMED = [
+    'ci.yml',
+    'java-sdk-release.yml',
+    'js-sdk-release.yml',
+    'php-sdk-release.yml',
+    'python-sdk-release.yml',
+    'release.yml',
+    'sdk-ci.yml',
+    'security-scan.yml',
+    'split-php-sdk.yml',
+  ];
+
+  const grantProblems = (workflow: PermissionedWorkflow): string[] => {
+    const held = workflow.permissions;
+    if (held === undefined || held === null) return ['no workflow-level permissions block'];
+    if (typeof held === 'string') return [`permissions: ${held}`];
+    return [...new Set([...Object.keys(held), ...Object.keys(HELD)])].flatMap(scope => {
+      const level = Object.hasOwn(held, scope) ? held[scope] : 'none';
+      const wanted = Object.hasOwn(HELD, scope) ? HELD[scope] : 'none';
+      return level === wanted ? [] : [`permission ${scope}: ${level}`];
+    });
+  };
+
+  it('has every workflow of the repository named', () => {
+    expect(workflows.slice().sort()).toEqual(NAMED);
+  });
+
+  it.each(NAMED)('%s: the workflow-level block is contents: read and nothing else', file => {
+    expect(grantProblems(workflowOf(file) as PermissionedWorkflow)).toEqual([]);
+  });
+
+  it.each(['ci.yml', 'release.yml', 'js-sdk-release.yml'])('%s: refuses a block that grants more or none', file => {
+    // `undefined` is a workflow that has no block.
+    const copy = (permissions: PermissionedWorkflow['permissions']): string[] => {
+      const workflow = JSON.parse(JSON.stringify(workflowOf(file))) as PermissionedWorkflow;
+      if (permissions === undefined) delete workflow.permissions;
+      else workflow.permissions = permissions;
+      return grantProblems(workflow);
+    };
+    expect(copy({ contents: 'write' })).toEqual(['permission contents: write']);
+    expect(copy({ contents: 'read', packages: 'write' })).toEqual(['permission packages: write']);
+    expect(copy({ contents: 'read', 'id-token': 'write' })).toEqual(['permission id-token: write']);
+    expect(copy('write-all')).toEqual(['permissions: write-all']);
+    expect(copy('read-all')).toEqual(['permissions: read-all']);
+    expect(copy(undefined)).toEqual(['no workflow-level permissions block']);
+    expect(copy({})).toEqual(['permission contents: none']);
+    // A scope held at none grants nothing, the same as one that is not named.
+    expect(copy({ contents: 'read', packages: 'none' })).toEqual([]);
+  });
+});
+
+/**
  * The dashboard's unit tests stalled for half an hour on a leaked timer and still reported green,
  * because node:test waits for the event loop to drain and nothing bounded it. The per-test timeout
  * turns that into a failure naming the file; the step timeout backstops a hang the runner cannot
