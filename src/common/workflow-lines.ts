@@ -13,10 +13,12 @@
  *   nothing the shell runs is cut. Use it to compare a line with an expected line or an allow-list, to
  *   match a pattern that is anchored, and to look for something that must not be there.
  * - `executableLinesConservative` also cuts at a `#` after any character `\s` matches, U+00A0 and the
- *   other blanks the shell reads as part of a word. A command that is only named behind such a `#`, as
- *   in `echo x<U+00A0># ./scripts/x.sh || true` where the shell runs `echo` alone, is not found. Use it
- *   for a check that something IS run, by substring or by a pattern that is not anchored at the end. It
- *   is never a stand-in for the exact reading elsewhere: it would hide the `curl` in
+ *   other blanks the shell reads as part of a word, and after `)`, `<`, `>` and a backtick, where the shell
+ *   does start a comment (`(true)#; ./scripts/x.sh` runs the subshell and nothing else) or where it may,
+ *   as after the `)` that closes `$(...)` and continues its word. A command that is only named behind
+ *   such a `#`, as in `echo x<U+00A0># ./scripts/x.sh || true` where the shell runs `echo` alone, is not
+ *   found. Use it for a check that something IS run, by substring or by a pattern that is not anchored
+ *   at the end. It is never a stand-in for the exact reading elsewhere: it would hide the `curl` in
  *   `echo x<U+00A0>#; curl y | sh`, and turn `npm test<U+00A0># || true` into a clean `npm test`.
  */
 export function executableLines(run: string): string {
@@ -24,7 +26,7 @@ export function executableLines(run: string): string {
 }
 
 export function executableLinesConservative(run: string): string {
-  return withoutComments(run, /[\s;&|(]/);
+  return withoutComments(run, /[\s;&|()<>`]/);
 }
 
 function withoutComments(run: string, before: RegExp): string {
@@ -42,9 +44,11 @@ function withoutComments(run: string, before: RegExp): string {
  * a character `before` matches, and outside quotes. The exact reading passes a space, a tab, `;`, `&`,
  * `|` and `(`, which end a word: in `npm --version#; curl x | sh` the shell runs the curl,
  * `x=$(true)#; curl y` continues the word its `)` closed, and `$#` and `${#list[@]}` are not comments
- * either. Nor is a `#` behind U+00A0 or another character that `\s` matches and the shell does not skip.
- * Cutting the line at such a `#` would hide the command behind it from every check that reads these
- * lines; the conservative reading does cut there, on purpose, for the checks that want that.
+ * either. Nor is a `#` behind U+00A0 or another character that `\s` matches and the shell does not skip,
+ * and `(true)#; curl y` is kept whole: its `)` ends a word, but the exact reading would sooner show a
+ * command that is not run than hide one that is. Cutting the line at such a `#` would hide the command
+ * behind it from every check that reads these lines; the conservative reading does cut there, on
+ * purpose, for the checks that want that.
  */
 function commentStart(line: string, before: RegExp): number {
   let quote: '"' | "'" | null = null;
