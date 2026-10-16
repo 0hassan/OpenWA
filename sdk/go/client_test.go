@@ -1207,6 +1207,7 @@ func TestWebhookEventWireValues(t *testing.T) {
 		EventMessageReceived:      "message.received",
 		EventMessageSent:          "message.sent",
 		EventMessageAck:           "message.ack",
+		EventMessageReceipt:       "message.receipt",
 		EventMessageFailed:        "message.failed",
 		EventMessageRevoked:       "message.revoked",
 		EventMessageReaction:      "message.reaction",

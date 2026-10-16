@@ -931,6 +931,7 @@ export interface EngineEventCallbacks {
   // that cannot wait, or is still waiting when the time runs out, is dropped.
   onMessageCreate?: (message: IncomingMessage, ticket?: InboundTicket) => void; // outgoing (incl. linked-phone sends)
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
+  onMessageReceipt?: (event: MessageReceiptEvent) => void; // per-recipient group/status receipts (Baileys only)
   onMessageRevoked?: (message: RevokedMessage, actor?: { fromMe: boolean }) => void;
   onMessageReaction?: (event: ReactionEvent) => void;
   onMessageEdited?: (message: EditedMessage) => void;

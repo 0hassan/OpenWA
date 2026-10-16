@@ -828,6 +828,25 @@ export interface CallOutcomeEvent {
   timestamp: number;
 }
 
+/** What one recipient did with an outgoing message. `played` applies to voice notes and view-once media. */
+export type MessageReceiptStatus = 'delivered' | 'read' | 'played';
+
+/**
+ * One recipient's receipt for a message the account sent (group and status messages, where WhatsApp
+ * reports each participant separately). Receipts from the account's own linked devices are dropped
+ * by the adapter, so `participant` is always someone else.
+ */
+export interface MessageReceiptEvent {
+  messageId: string;
+  /** Neutral id of the chat the message was sent to (the group, or `status@broadcast`). */
+  chatId: string;
+  /** Neutral id of the recipient the receipt came from. */
+  participant: string;
+  status: MessageReceiptStatus;
+  /** Unix seconds the recipient reached this status (engine timestamp). */
+  timestamp: number;
+}
+
 /**
  * A message's place in its session from the moment it arrives until its row is written (see
  * `EngineEventCallbacks.admitInbound`). The engine hands it back with the message it emits.
@@ -917,6 +936,11 @@ export interface EngineEventCallbacks {
    * carries no chat, and the emitted payload then omits the field rather than guess.
    */
   onMessageAck?: (messageId: string, status: DeliveryStatus, chatId?: string) => void;
+  /**
+   * Fired once per recipient as each one receives, reads or plays a message the account sent to a
+   * group or status. Baileys only: whatsapp-web.js has no per-participant receipt event.
+   */
+  onMessageReceipt?: (event: MessageReceiptEvent) => void;
   /**
    * `actor.fromMe` says whether the account itself made the revoke (from its phone). Only an engine that
    * receives the raw protocol message can say; whatsapp-web.js leaves it out.

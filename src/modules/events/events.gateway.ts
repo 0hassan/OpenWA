@@ -61,7 +61,8 @@ import type {
   WSPongResponse,
 } from './dto/ws-messages.dto';
 import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
-import type { DeliveryStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import type { DeliveryStatus, MessageReceiptStatus } from '../../engine/interfaces/whatsapp-engine.interface';
+import { WILDCARD_EXCLUDED_EVENTS } from '../../common/utils/wildcard-events';
 
 // The events a chat-restricted key may receive, each delivered only for a chat inside its allowlist.
 // group.join_request is not one of them: it names the people asking to join, who are outside the
@@ -70,6 +71,7 @@ const CHAT_EVENTS = new Set([
   'message.received',
   'message.sent',
   'message.ack',
+  'message.receipt',
   'message.revoked',
   'message.reaction',
   'message.edited',
@@ -811,11 +813,12 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // them receives the event exactly once (Socket.IO dedups recipients per
     // broadcast). Four separate .emit() calls would deliver one copy per room.
     // `except` is resolved by the adapter, so the exclusion also holds across nodes with Redis.
-    const broadcast = this.server
-      .to(buildRoomName(sessionId, event))
-      .to(buildRoomName(sessionId, '*'))
-      .to(buildRoomName('*', event))
-      .to(buildRoomName('*', '*'));
+    // An event in WILDCARD_EXCLUDED_EVENTS skips the two event-'*' rooms: only sockets that named it
+    // (for one session or for all) receive it.
+    const named = this.server.to(buildRoomName(sessionId, event)).to(buildRoomName('*', event));
+    const broadcast = WILDCARD_EXCLUDED_EVENTS.includes(event)
+      ? named
+      : named.to(buildRoomName(sessionId, '*')).to(buildRoomName('*', '*'));
     (exceptRoom ? broadcast.except(exceptRoom) : broadcast).emit('message', eventMessage);
     if (!CHAT_EVENTS.has(event) || data === null || typeof data !== 'object') return;
     const value = data as Record<string, unknown>;
@@ -841,12 +844,12 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         if (resolved.status === 'rejected') throw resolved.reason;
         const ids = resolved.value;
         if (!ids?.length) return;
-        const rooms = ids.flatMap(id => [
-          chatRoom(sessionId, event, id),
-          chatRoom(sessionId, '*', id),
-          chatRoom('*', event, id),
-          chatRoom('*', '*', id),
-        ]);
+        const rooms = ids.flatMap(id => {
+          const namedRooms = [chatRoom(sessionId, event, id), chatRoom('*', event, id)];
+          return WILDCARD_EXCLUDED_EVENTS.includes(event)
+            ? namedRooms
+            : [...namedRooms, chatRoom(sessionId, '*', id), chatRoom('*', '*', id)];
+        });
         this.server.to(rooms).emit('message', eventMessage);
       })
       .catch(error =>
@@ -972,6 +975,24 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     data: { id: string; messageId: string; status: DeliveryStatus; ack: number; chatId?: string },
   ) {
     this.emitToRooms(sessionId, 'message.ack', data);
+  }
+
+  /**
+   * Emit one recipient's receipt for a group or status message the account sent. Mirrors the
+   * `message.receipt` webhook. Not delivered to '*' subscriptions (see WILDCARD_EXCLUDED_EVENTS).
+   */
+  emitMessageReceipt(
+    sessionId: string,
+    data: {
+      id: string;
+      messageId: string;
+      chatId: string;
+      participant: string;
+      status: MessageReceiptStatus;
+      timestamp: number;
+    },
+  ) {
+    this.emitToRooms(sessionId, 'message.receipt', data);
   }
 
   /**

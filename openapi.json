@@ -19364,7 +19364,7 @@
           },
           "events": {
             "type": "array",
-            "description": "Event types to subscribe to. '*' subscribes to all events.",
+            "description": "Event types to subscribe to. '*' subscribes to all events except `message.receipt`, which must be named explicitly.",
             "example": [
               "message.received",
               "session.status"
@@ -19376,6 +19376,7 @@
                 "message.received",
                 "message.sent",
                 "message.ack",
+                "message.receipt",
                 "message.failed",
                 "message.revoked",
                 "message.reaction",
@@ -19473,6 +19474,7 @@
                 "message.received",
                 "message.sent",
                 "message.ack",
+                "message.receipt",
                 "message.failed",
                 "message.revoked",
                 "message.reaction",
@@ -19565,7 +19567,7 @@
           },
           "events": {
             "type": "array",
-            "description": "Event types to subscribe to. '*' subscribes to all events.",
+            "description": "Event types to subscribe to. '*' subscribes to all events except `message.receipt`, which must be named explicitly.",
             "minItems": 1,
             "items": {
               "type": "string",
@@ -19573,6 +19575,7 @@
                 "message.received",
                 "message.sent",
                 "message.ack",
+                "message.receipt",
                 "message.failed",
                 "message.revoked",
                 "message.reaction",

@@ -162,6 +162,32 @@ describe('chat-scoped WebSocket rooms', () => {
     expect(events(unrestricted)).toHaveLength(2);
   });
 
+  it('delivers receipts only to named subscriptions within the allowed session and chat', async () => {
+    const group = '120363000000000001@g.us';
+    const named = await connect('named', [group], ['s1'], 's1', ['message.receipt']);
+    const allSessions = await connect('all-sessions', [group], null, '*', ['message.receipt']);
+    const outside = await connect('outside', ['120363000000000002@g.us'], ['s1'], 's1', ['message.receipt']);
+    const wildcard = await connect('wildcard', [group]);
+    const receipt = {
+      id: 'OUT1',
+      messageId: 'OUT1',
+      chatId: group,
+      participant: PHONE,
+      status: 'read' as const,
+      timestamp: 1700000000,
+    };
+
+    gateway.emitMessageReceipt('s1', receipt);
+    gateway.emitMessageReceipt('s2', receipt);
+    gateway.emitMessageReceipt('s1', { ...receipt, chatId: 'status@broadcast' });
+    await flush();
+
+    expect(events(named).map(frame => frame.payload.sessionId)).toEqual(['s1']);
+    expect(events(allSessions).map(frame => frame.payload.sessionId)).toEqual(['s1', 's2']);
+    expect(events(outside)).toHaveLength(0);
+    expect(events(wildcard)).toHaveLength(0);
+  });
+
   it('refuses a subscribe that can never fit before it builds a single room name', async () => {
     const chats = Array.from({ length: 450 }, (_, index) => `62811${String(index).padStart(7, '0')}@c.us`);
     const restricted = await connect('restricted', chats);
