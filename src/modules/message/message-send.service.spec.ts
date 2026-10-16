@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, FindOperator, In, Repository } from 'typeorm';
@@ -1326,6 +1327,7 @@ describe('MessageSendService', () => {
             button: { id: 'yes', text: 'Sim' },
           },
         }),
+        { transaction: false },
       );
     });
 
@@ -1717,6 +1719,73 @@ describe('MessageSendService', () => {
 
       expect(result.messageId).toBe('wa-msg-1'); // transient persist faults never fail the send
       expect(repository.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  // The own-send echo of a Baileys API send carries a media-less marker. When the REST writer then
+  // loses the race for the same waMessageId, the bytes it sent must replace that marker: merged in the
+  // opposite order the marker survives, the sent bytes are lost, and a single send deletes the only
+  // row that held them. The merge itself runs against a real table, since the mocks above hand back
+  // an echo row whose metadata already equals the incoming one.
+  describe('inline media against an own-send echo row (real database)', () => {
+    let ds: DataSource;
+    let rows: Repository<Message>;
+    let real: MessageSendService;
+    const media = { mimetype: 'image/png', data: 'QUJD' };
+
+    beforeEach(async () => {
+      ds = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Message], synchronize: true });
+      await ds.initialize();
+      rows = ds.getRepository(Message);
+      real = new MessageSendService(
+        rows,
+        sessionService as unknown as SessionService,
+        engines,
+        hookManager as HookManager,
+        templateService as unknown as TemplateService,
+        inertPacing(),
+      );
+      await rows.insert({
+        id: randomUUID(),
+        sessionId: 'sess-1',
+        waMessageId: 'wa-msg-1',
+        chatId: '621@c.us',
+        from: '628123456789',
+        to: '621@c.us',
+        type: 'image',
+        direction: MessageDirection.OUTGOING,
+        status: MessageStatus.SENT,
+        metadata: { media: { mimetype: 'image/png', omitted: true, sizeBytes: 3 } },
+      });
+    });
+
+    afterEach(async () => {
+      await ds.destroy();
+    });
+
+    it('replaces the echo marker with the bytes of a single send', async () => {
+      await real.sendImage('sess-1', { chatId: '621@c.us', base64: media.data, mimetype: media.mimetype });
+
+      // One row is left: the echo's, now carrying the bytes. The row count shows the unique index
+      // collided, which is what routes the write through the merge.
+      const stored = await rows.find();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].metadata).toEqual({ media });
+    });
+
+    it('replaces the echo marker with the bytes of a bulk item', async () => {
+      await real.saveOutgoingMessage('sess-1', {
+        waMessageId: 'wa-msg-1',
+        chatId: '621@c.us',
+        type: 'image',
+        status: MessageStatus.SENT,
+        timestamp: 1706868000,
+        metadata: { media },
+      });
+
+      const stored = await rows.find();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].metadata).toEqual({ media });
     });
   });
 

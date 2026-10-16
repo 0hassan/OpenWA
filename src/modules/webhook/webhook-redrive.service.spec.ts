@@ -1,11 +1,12 @@
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
 import { WebhookDeliveryService } from './webhook-delivery.service';
 import { MAX_WEBHOOK_REDRIVE_LIMIT, WebhookRedriveService } from './webhook-redrive.service';
+import { MAX_TIMER_MS } from '../../common/services/shutdown-budget';
 import { recordWebhookDeliveryFailure } from './utils/record-delivery-failure';
 
 describe('WebhookRedriveService', () => {
@@ -15,6 +16,7 @@ describe('WebhookRedriveService', () => {
   let primary: Webhook;
   let otherSession: Webhook;
   let retentionHours: number;
+  let drainMs: number;
   let delivery: { redeliver: jest.MockedFunction<WebhookDeliveryService['redeliver']> };
   let service: WebhookRedriveService;
 
@@ -61,11 +63,15 @@ describe('WebhookRedriveService', () => {
       ),
     );
     retentionHours = 24;
+    drainMs = 5000;
     delivery = {
       redeliver: jest.fn<
         ReturnType<WebhookDeliveryService['redeliver']>,
         Parameters<WebhookDeliveryService['redeliver']>
       >(async (webhook, sessionId, event, key, data) => {
+        // A preflight refusal (a body over the payload cap after the hooks): reported as failed, with
+        // nothing recorded, so the row keeps the attempt count it had.
+        if (data.refuse === true) return 'failed';
         if (data.fail === true) {
           const recorded = await recordWebhookDeliveryFailure(
             failures,
@@ -92,7 +98,9 @@ describe('WebhookRedriveService', () => {
       webhooks,
       failures,
       delivery as unknown as WebhookDeliveryService,
-      { get: () => retentionHours } as unknown as ConfigService,
+      {
+        get: (key: string) => (key === 'webhook.shutdownDrainMs' ? drainMs : retentionHours),
+      } as unknown as ConfigService,
     );
   });
 
@@ -122,6 +130,66 @@ describe('WebhookRedriveService', () => {
     );
     expect(await failures.count()).toBe(0);
     expect(await service.redrive({})).toMatchObject({ delivered: 0, remaining: 0 });
+  });
+
+  it('counts a replay the delivery path refused before sending, so that row does not head every batch', async () => {
+    const refused = await addFailure({ attempts: 1, payload: { id: 'big', refuse: true } });
+    const other = await addFailure({ attempts: 1, createdAt: new Date(Date.now() - 30_000) });
+
+    expect(await service.redrive({ limit: 1 })).toMatchObject({ failed: 1, remaining: 2 });
+    // The recorder raised nothing for a refusal, so the redrive counts the attempt itself, once.
+    expect((await failures.findOneByOrFail({ id: refused.id })).attempts).toBe(2);
+
+    await service.redrive({ limit: 1 });
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).toEqual([refused.idempotencyKey, other.idempotencyKey]);
+  });
+
+  it('raises the attempts of a replay the recorder already counted by one, not two', async () => {
+    const row = await addFailure({ attempts: 3, payload: { id: 'm', fail: true } });
+    await service.redrive({});
+    expect((await failures.findOneByOrFail({ id: row.id })).attempts).toBe(4);
+  });
+
+  it('reads each retained payload only as its replay starts, never the whole batch at once', async () => {
+    for (let i = 0; i < 6; i++) await addFailure({ payload: { id: `m${i}`, body: 'x'.repeat(200) } });
+    const statements: string[] = [];
+    jest.spyOn(ds.logger, 'logQuery').mockImplementation(query => void statements.push(query));
+
+    await service.redrive({});
+
+    // A batch holds up to 500 rows but runs four replays at a time; loading the bodies with the batch
+    // held every one of them in memory for the whole call.
+    const selectList = (statement: string) => /^SELECT\s+(.*?)\s+FROM\s/is.exec(statement)?.[1] ?? '';
+    const payloadReads = statements.filter(
+      statement => /webhook_delivery_failures/i.test(statement) && /payload/i.test(selectList(statement)),
+    );
+    expect(payloadReads).toHaveLength(6);
+    expect(delivery.redeliver).toHaveBeenCalledTimes(6);
+  });
+
+  it('skips a row that lost its copy between the batch and its replay, without sending an empty event', async () => {
+    const rows: WebhookDeliveryFailure[] = [];
+    for (let i = 0; i < 5; i++) {
+      rows.push(await addFailure({ createdAt: new Date(Date.now() - 120_000 + i * 1000), payload: { id: `m${i}` } }));
+    }
+    // Four replays run at once, so the fifth row's body is read only after one of them ends. Remove it from
+    // inside the first replay, the way a second node or the payload retention sweep would.
+    delivery.redeliver.mockImplementationOnce(async (webhook, _sessionId, _event, key) => {
+      await failures.delete({ id: rows[4].id });
+      await failures.delete({ webhookId: webhook.id, idempotencyKey: key });
+      return 'delivered';
+    });
+
+    expect(await service.redrive({})).toEqual({
+      redriven: 4,
+      delivered: 4,
+      enqueued: 0,
+      failed: 0,
+      skipped: 1,
+      remaining: 0,
+    });
+    expect(delivery.redeliver).toHaveBeenCalledTimes(4);
+    expect(delivery.redeliver.mock.calls.map(call => call[3])).not.toContain(rows[4].idempotencyKey);
   });
 
   it('selects eligible subscriptions before the batch limit, past more than 100 old unavailable rows', async () => {
@@ -332,5 +400,106 @@ describe('WebhookRedriveService', () => {
 
     expect(await service.redrive({})).toMatchObject({ delivered: 10, remaining: 0 });
     expect(peak).toBe(4);
+  });
+
+  it('stops a batch at shutdown and waits for the replays in hand', async () => {
+    for (let i = 0; i < 6; i++) await addFailure();
+    const deliver = delivery.redeliver.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let inHand!: () => void;
+    const fourInHand = new Promise<void>(resolve => (inHand = resolve));
+    delivery.redeliver.mockImplementation(async (...args) => {
+      if (delivery.redeliver.mock.calls.length === 4) inHand();
+      await gate;
+      return deliver(...args);
+    });
+
+    const batch = service.redrive({});
+    await fourInHand;
+    // The batch has read its rows; a call queued behind it must read none.
+    const select = jest.spyOn(SelectQueryBuilder.prototype, 'getMany');
+    const queued = service.redrive({});
+    let destroyed = false;
+    const destroy = service.onModuleDestroy().then(() => (destroyed = true));
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+    expect(destroyed).toBe(false);
+
+    release();
+    await destroy;
+    expect(await batch).toMatchObject({ delivered: 4, remaining: 2 });
+    expect(await queued).toMatchObject({ delivered: 0, remaining: 2 });
+    expect(select).not.toHaveBeenCalled();
+    expect(delivery.redeliver).toHaveBeenCalledTimes(4);
+  });
+
+  describe('shutdown wait bound', () => {
+    const holdReplay = async (): Promise<() => void> => {
+      await addFailure();
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      const deliver = delivery.redeliver.getMockImplementation()!;
+      delivery.redeliver.mockImplementation(async (...args) => {
+        await gate;
+        return deliver(...args);
+      });
+      void service.redrive({});
+      await new Promise(resolve => setImmediate(resolve));
+      expect(delivery.redeliver).toHaveBeenCalledTimes(1);
+      return release;
+    };
+
+    it('stops waiting for a replay that never settles after WEBHOOK_SHUTDOWN_DRAIN_MS and logs it', async () => {
+      drainMs = 30;
+      const release = await holdReplay();
+      const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+      const startedAt = Date.now();
+
+      await service.onModuleDestroy();
+
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(25);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('redrive still running'),
+        expect.objectContaining({ action: 'webhook_redrive_shutdown_timeout', waitMs: 30 }),
+      );
+      release();
+    });
+
+    it('caps the wait at the largest timer delay when the drain exceeds it', async () => {
+      drainMs = 2 ** 31 + 1000;
+      const release = await holdReplay();
+      const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+
+      const destroy = service.onModuleDestroy();
+      release();
+      await destroy;
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_MS, false);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('returns without waiting when the drain is 0', async () => {
+      drainMs = 0;
+      const release = await holdReplay();
+      const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+
+      await service.onModuleDestroy();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      release();
+    });
+
+    it('resolves as soon as the replay settles and logs nothing', async () => {
+      drainMs = 60_000;
+      const release = await holdReplay();
+      const warn = jest.spyOn(service['logger'], 'warn').mockImplementation(() => undefined);
+
+      const destroy = service.onModuleDestroy();
+      release();
+      await destroy;
+
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });

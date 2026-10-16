@@ -8,9 +8,9 @@ import { WebhookProcessor } from './processors/webhook.processor';
 import { IngressProcessor } from './processors/ingress.processor';
 import { QUEUE_NAMES } from './queue-names';
 import { queueConnectionOptions } from './redis-connection';
+import { ShutdownSafeQueue } from './shutdown-safe-queue';
 import { Webhook } from '../webhook/entities/webhook.entity';
-import { WebhookOutboxService } from '../webhook/webhook-outbox.service';
-import { WebhookOutboxEvent } from '../webhook/entities/webhook-outbox-event.entity';
+import { WebhookOutboxModule } from '../webhook/webhook-outbox.module';
 import { WebhookDeliveryFailure } from '../webhook/entities/webhook-delivery-failure.entity';
 import { IntegrationDeliveryFailure } from '../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../integration/entities/ingress-event.entity';
@@ -31,15 +31,17 @@ export const WEBHOOK_QUEUE_JOB_OPTIONS = {
   removeOnFail: { age: 86400, count: 5000 },
 } as const;
 
+// Read when registerQueue runs below, so it has to be set before the @Module decorator is evaluated.
+BullModule.queueClass = ShutdownSafeQueue;
+
 @Module({
   imports: [
     // Required for WebhookProcessor to inject Repository<Webhook> + Repository<WebhookDeliveryFailure>;
     // IngressProcessor to inject Repository<IntegrationDeliveryFailure> + Repository<IngressEvent> (all on
     // the 'data' connection).
-    TypeOrmModule.forFeature(
-      [Webhook, WebhookDeliveryFailure, WebhookOutboxEvent, IntegrationDeliveryFailure, IngressEvent],
-      'data',
-    ),
+    TypeOrmModule.forFeature([Webhook, WebhookDeliveryFailure, IntegrationDeliveryFailure, IngressEvent], 'data'),
+    // Required for WebhookProcessor to inject the one WebhookOutboxService the webhook module also uses.
+    WebhookOutboxModule,
     // Required for WebhookProcessor/IngressProcessor to inject HookManager
     HooksModule,
     // Required for IngressProcessor to inject PluginLoaderService (already @Global(), imported
@@ -74,7 +76,7 @@ export const WEBHOOK_QUEUE_JOB_OPTIONS = {
       adapter: BullMQAdapter,
     }),
   ],
-  providers: [WebhookProcessor, IngressProcessor, WebhookOutboxService],
+  providers: [WebhookProcessor, IngressProcessor],
   exports: [BullModule],
 })
 export class QueueModule {}

@@ -3,6 +3,7 @@ import { FindOperator, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { WebhookOutboxService } from '../../webhook/webhook-outbox.service';
 import { WebhookProcessor } from './webhook.processor';
+import { MAX_WORKER_CLOSE_WAIT_MS } from './close-worker';
 import { Webhook } from '../../webhook/entities/webhook.entity';
 import { WebhookDeliveryFailure } from '../../webhook/entities/webhook-delivery-failure.entity';
 import { HookManager } from '../../../core/hooks';
@@ -61,7 +62,13 @@ describe('WebhookProcessor', () => {
     repo = {
       update: jest.fn().mockResolvedValue({ affected: 1 }),
       // The live row matches makeJob()'s snapshot unless a test says otherwise.
-      findOne: jest.fn().mockResolvedValue({ id: 'wh-1', active: true, url: 'https://8.8.8.8/hook', events: ['*'] }),
+      findOne: jest.fn().mockResolvedValue({
+        id: 'wh-1',
+        active: true,
+        sessionId: 'sess-1',
+        url: 'https://8.8.8.8/hook',
+        events: ['*'],
+      }),
     };
     // Stateful like the real table: the recorder counts existing rows for the delivery before it
     // inserts, so a constant would leave that guard unexercised here and let a duplicated row pass.
@@ -147,6 +154,25 @@ describe('WebhookProcessor', () => {
     expect(hookManager.execute).toHaveBeenCalledWith('webhook:delivered', expect.anything(), expect.anything());
   });
 
+  // With the queue on, the worker is the only party that retires a queued outbox row: left open, the
+  // reconciler replays every queued delivery to the receiver again.
+  it('retires the outbox row once the receiver answers 2xx', async () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await processor.process(makeJob());
+
+    expect(outbox.close).toHaveBeenCalledTimes(1);
+    expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+  });
+
+  it('keeps the outbox row when an attempt fails with retries left', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
+
+    await expect(processor.process(makeJob({ maxRetries: 3 }, 0))).rejects.toThrow();
+
+    expect(outbox.close).not.toHaveBeenCalled();
+  });
+
   it('sets X-OpenWA-Retry-Count to the attempt number', async () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200 });
 
@@ -173,7 +199,13 @@ describe('WebhookProcessor', () => {
 
   it('persists a durable delivery-failure record on the final attempt (with parsed HTTP status)', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 503, statusText: 'Service Unavailable' });
-    repo.findOne.mockResolvedValue({ id: 'wh-x', active: true, url: 'https://8.8.8.8/h', events: ['*'] });
+    repo.findOne.mockResolvedValue({
+      id: 'wh-x',
+      active: true,
+      sessionId: 'sess-1',
+      url: 'https://8.8.8.8/h',
+      events: ['*'],
+    });
 
     await expect(
       processor.process(makeJob({ maxRetries: 3, webhookId: 'wh-x', url: 'https://8.8.8.8/h' }, 2)),
@@ -300,7 +332,13 @@ describe('WebhookProcessor', () => {
   // message — the resolved internal IP is a recon oracle. The server-side logger.error keeps full detail.
   it('redacts the resolved internal IP from the webhook:error payload and DLQ row on an SSRF block', async () => {
     process.env.WEBHOOK_SSRF_PROTECT = 'true';
-    repo.findOne.mockResolvedValue({ id: 'wh-1', active: true, url: 'https://169.254.169.254/h', events: ['*'] });
+    repo.findOne.mockResolvedValue({
+      id: 'wh-1',
+      active: true,
+      sessionId: 'sess-1',
+      url: 'https://169.254.169.254/h',
+      events: ['*'],
+    });
     // final attempt (attemptsMade=0, maxRetries=1 → 1 >= 1) so the hook + DLQ fire
     await expect(processor.process(makeJob({ url: 'https://169.254.169.254/h', maxRetries: 1 }, 0))).rejects.toThrow();
 
@@ -362,12 +400,13 @@ describe('WebhookProcessor', () => {
 
   // The job is a snapshot from enqueue time; the operator may have changed the webhook since.
   describe('stale snapshot', () => {
-    const live = { id: 'wh-1', active: true, url: 'https://8.8.8.8/hook', events: ['*'] };
+    const live = { id: 'wh-1', active: true, sessionId: 'sess-1', url: 'https://8.8.8.8/hook', events: ['*'] };
 
     it.each([
       ['deleted', null],
       ['disabled', { ...live, active: false }],
       ['unsubscribed', { ...live, events: ['message.sent'] }],
+      ['reassigned', { ...live, sessionId: 'sess-2' }],
     ])('does not POST, retry or dead-letter a job for a %s webhook', async (_label, row) => {
       repo.findOne.mockResolvedValue(row);
       mockFetch.mockResolvedValue({ ok: true, status: 200 });
@@ -379,6 +418,15 @@ describe('WebhookProcessor', () => {
       expect(mockFetch).not.toHaveBeenCalled();
       expect(failureRepo.insert).not.toHaveBeenCalled();
       expect(hookManager.execute).not.toHaveBeenCalled();
+    });
+
+    it('retires the outbox row of a job whose webhook is gone, so the sweep does not replay it', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await processor.process(makeJob());
+
+      expect(outbox.close).toHaveBeenCalledTimes(1);
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
     });
 
     it('treats a failed webhook read as a failed attempt: retried, and dead-lettered on the last one', async () => {
@@ -433,7 +481,13 @@ describe('WebhookProcessor', () => {
     it('records a dead-letter row, metric, and webhook:error for a job failed by a double stall', async () => {
       const failuresBefore = getWebhookDeliveryFailuresTotal();
       // Re-pointed since enqueue: the row names the URL a retry would have used, not the snapshot's.
-      repo.findOne.mockResolvedValue({ id: 'wh-stall', active: true, url: 'https://8.8.8.8/s', events: ['*'] });
+      repo.findOne.mockResolvedValue({
+        id: 'wh-stall',
+        active: true,
+        sessionId: 'sess-1',
+        url: 'https://8.8.8.8/s',
+        events: ['*'],
+      });
 
       await processor.onWorkerFailed(
         makeJob({ webhookId: 'wh-stall', url: 'https://8.8.8.8/old' }, 1),
@@ -462,6 +516,7 @@ describe('WebhookProcessor', () => {
     it.each([
       ['deleted', null],
       ['disabled', { id: 'wh-1', active: false, url: 'https://8.8.8.8/hook', events: ['*'] }],
+      ['reassigned', { id: 'wh-1', active: true, sessionId: 'sess-2', url: 'https://8.8.8.8/hook', events: ['*'] }],
     ])('files nothing for a job whose webhook was %s', async (_label, row) => {
       repo.findOne.mockResolvedValue(row);
 
@@ -491,6 +546,29 @@ describe('WebhookProcessor', () => {
       await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
 
       expect(failureRepo.insert).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'k', attempts: 1 }));
+    });
+
+    // A failed job leaves its outbox row as the only replay copy, so it is retired once a failure row owns
+    // the event, whether that row is new or was already on record, and not before.
+    it.each<[string, typeof failureRows]>([
+      ['a new row', []],
+      ['a row already on record', [{ webhookId: 'wh-1', idempotencyKey: 'k', attempts: 3 }]],
+    ])('retires the outbox row once the stall is recorded in %s', async (_label, existing) => {
+      failureRows.push(...existing);
+
+      await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
+
+      expect(outbox.close).toHaveBeenCalledTimes(1);
+      expect(outbox.close).toHaveBeenCalledWith('wh-1', 'k', 'dispatched');
+    });
+
+    it('keeps the outbox row when the stall row cannot be written', async () => {
+      failureRepo.insert.mockRejectedValue(new Error('disk unavailable'));
+
+      await processor.onWorkerFailed(makeJob({}, 1), new Error('job stalled more than allowable limit'));
+
+      expect(failureRepo.insert).toHaveBeenCalledTimes(1);
+      expect(outbox.close).not.toHaveBeenCalled();
     });
 
     it('still records the stall against the enqueue-time URL when the webhook row cannot be read', async () => {
@@ -675,6 +753,37 @@ describe('WebhookProcessor', () => {
       a.release();
       b.release();
       await Promise.all(jobs);
+    });
+  });
+
+  describe('onModuleDestroy', () => {
+    // The wait for running jobs is the delivery timeout plus 5 s of bookkeeping, capped at the worker close cap.
+    const settleAfter = async (timeoutMs: number): Promise<number> => {
+      jest.useFakeTimers();
+      try {
+        configService.get.mockImplementation((key: string, def?: unknown) =>
+          key === 'webhook.timeout' ? timeoutMs : def,
+        );
+        (processor as unknown as { _worker: unknown })._worker = {
+          name: 'webhook',
+          close: () => new Promise<void>(() => undefined),
+        };
+        let doneAt = -1;
+        const started = Date.now();
+        void processor.onModuleDestroy().then(() => (doneAt = Date.now() - started));
+        await jest.advanceTimersByTimeAsync(MAX_WORKER_CLOSE_WAIT_MS + 1);
+        return doneAt;
+      } finally {
+        jest.useRealTimers();
+      }
+    };
+
+    it('waits for the delivery timeout plus 5 s when that is under the close cap', async () => {
+      expect(await settleAfter(2_000)).toBe(7_000);
+    });
+
+    it('waits no longer than the close cap for a long delivery timeout', async () => {
+      expect(await settleAfter(25_000)).toBe(MAX_WORKER_CLOSE_WAIT_MS);
     });
   });
 });

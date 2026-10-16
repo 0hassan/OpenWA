@@ -943,6 +943,7 @@ export type WebhookEvent =
   | 'session.reconnect_loop'
   | 'session.restriction'
   | 'presence.update'
+  | 'event.response'
   | 'call.accepted'
   | 'call.rejected'
   | 'call.missed'

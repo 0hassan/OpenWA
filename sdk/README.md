@@ -1,5 +1,7 @@
 # OpenWA SDKs
 
+This document describes SDK 0.6.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later.
+
 Official client libraries for [OpenWA](https://github.com/rmyndharis/OpenWA), the
 open-source WhatsApp API Gateway. OpenWA is an independent project, not
 affiliated with or endorsed by WhatsApp or Meta.
@@ -86,7 +88,7 @@ const client = new OpenWAClient({
 
 const session = await client.sessions.create({ name: 'my-session' });
 await client.sessions.start(session.id);
-// Link the account before sending: scan sessions.getQrCode or use sessions.requestPairingCode,
+// Link the account before sending: scan sessions.getQrCode (or use sessions.requestPairingCode for a number with no linked session),
 // then wait for status 'ready'. An unlinked session answers the send with 409.
 const result = await client.messages.sendText(session.id, {
   chatId: '628123456789@c.us',
@@ -103,7 +105,7 @@ try {
   await client.messages.sendText(/* … */);
 } catch (e) {
   if (e instanceof OpenWAConflictError) {
-    /* engine not ready (409) */
+    /* a conflicting state (409): typically a session not ready, or a keyed send pending or unconfirmed */
   }
 }
 ```
@@ -127,7 +129,7 @@ client = OpenWAClient(
 
 session = client.sessions.create({"name": "my-session"})
 client.sessions.start(session["id"])
-# Link the account before sending: scan sessions.get_qr_code or use sessions.request_pairing_code,
+# Link the account before sending: scan sessions.get_qr_code (or use sessions.request_pairing_code for a number with no linked session),
 # then wait for status "ready". An unlinked session answers the send with 409.
 result = client.messages.send_text(session["id"], {
     "chatId": "628123456789@c.us",
@@ -156,7 +158,7 @@ $client = new Client([
 
 $session = $client->sessions->create(['name' => 'my-session']);
 $client->sessions->start($session['id']);
-// Link the account before sending: scan sessions->getQrCode or use sessions->requestPairingCode,
+// Link the account before sending: scan sessions->getQrCode (or use sessions->requestPairingCode for a number with no linked session),
 // then wait for status 'ready'. An unlinked session answers the send with 409.
 $result = $client->messages->sendText($session['id'], [
     'chatId' => '628123456789@c.us',
@@ -174,7 +176,7 @@ handler is a `MockHandler` — no global state, no network.
 <dependency>
   <groupId>com.rmyndharis</groupId>
   <artifactId>openwa</artifactId>
-  <version>0.5.1</version>
+  <version>0.6.0</version>
 </dependency>
 ```
 
@@ -189,7 +191,7 @@ OpenWAClient client = new OpenWAClient("http://localhost:2785", "owa_k1_…");
 
 SessionResponse session = client.sessions.create(CreateSessionRequest.builder().name("my-session").build());
 client.sessions.start(session.id());
-// Link the account before sending: scan sessions.getQrCode or use sessions.requestPairingCode,
+// Link the account before sending: scan sessions.getQrCode (or use sessions.requestPairingCode for a number with no linked session),
 // then wait for status READY. An unlinked session answers the send with 409.
 MessageResponse result = client.messages.sendText(session.id(),
     SendTextRequest.builder()
@@ -232,7 +234,7 @@ if err != nil {
 if _, err := client.Sessions.Start(ctx, session.ID); err != nil {
     log.Fatal(err)
 }
-// Link the account before sending: scan Sessions.QRCode or use Sessions.RequestPairingCode,
+// Link the account before sending: scan Sessions.QRCode (or use Sessions.RequestPairingCode for a number with no linked session),
 // then wait for status "ready". An unlinked session answers the send with 409.
 res, err := client.Messages.SendText(ctx, session.ID, openwa.SendTextRequest{
     ChatID: "628123456789@c.us",
@@ -272,9 +274,13 @@ testing, retry, tracing, or metrics. See [`go/README.md`](go/README.md).
   `WebhookDelivery`.
 - **Redirects are never followed.** A `3xx` surfaces to the caller rather than
   being followed, so the API key is never re-sent to a redirect target.
-- **Default per-request timeout** is 30s (configurable). Path segments (chat /
-  message ids) are percent-encoded; a base-URL path prefix (e.g. behind a proxy
-  at `/v1`) is preserved.
+- **Default timeout** is 30s (configurable). `0` turns it off in the JavaScript,
+  Python and PHP clients; the Go client reads `0` as the 30s default and the Java
+  builder refuses it. The JavaScript, PHP, Go and Java clients bound the whole call,
+  response body included. The Python client's is per network operation
+  (connect, read, write, pool), so a response that keeps trickling bytes is not
+  cut off. Path segments (chat / message ids) are percent-encoded; a base-URL path
+  prefix (e.g. behind a proxy at `/v1`) is preserved.
 
 ## Development
 

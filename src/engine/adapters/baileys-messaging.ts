@@ -43,6 +43,8 @@ import { EngineTransportError } from '../../common/errors/engine-transport.error
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { parseWaId, userPart } from '../identity/wa-id';
 import { BAILEYS_QUERY_BUDGET_MS, withQueryDeadline } from './baileys-query-deadline';
+import { ConcurrencyLimiter } from '../../common/utils/concurrency-limiter';
+import { describeAudio } from './baileys-audio-probe';
 
 /**
  * Messaging-domain operations extracted from BaileysAdapter. The adapter keeps the public
@@ -137,6 +139,57 @@ export async function loadSharp() {
   }
 }
 
+/**
+ * Refuse SVG input process-wide. OpenWA never needs it, yet a sticker and the thumbnail of every outbound
+ * image hand caller-supplied bytes to sharp, which autodetects SVG and parses it with librsvg: a native
+ * decoder with a memory-safety record that is the largest attack surface on those two routes. The block is
+ * libvips state shared by every importer of sharp, Baileys included, so it has to be set before the first
+ * decode and not by the first sticker. Best effort: a sharp that cannot load has nothing to block, and the
+ * routes that need it report that themselves (see loadSharp).
+ */
+export async function blockSvgDecoding(): Promise<void> {
+  try {
+    (await import('sharp')).default.block({ operation: ['VipsForeignLoadSvg'] });
+  } catch {
+    // sharp could not load, so there is no decoder to block.
+  }
+}
+
+/**
+ * Refuse a picture the image decoder cannot read, before Baileys hands it to that decoder: its own
+ * conversion rejects such a file with an error nothing maps, which reached the client as a 500. An SVG is
+ * one since blockSvgDecoding, and so is a file that is no image at all. Only the header is read. A sharp
+ * that cannot load is left to the library, which reports that itself.
+ */
+export async function assertReadableImage(data: Buffer): Promise<void> {
+  const sharp = await import('sharp').then(
+    module => module.default,
+    () => undefined,
+  );
+  if (!sharp) return;
+  try {
+    await sharp(data).metadata();
+  } catch (error) {
+    throw new BadRequestException(
+      `The picture could not be read as an image (SVG is not accepted): ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * Animation frames a sticker conversion accepts: a 10-second animation at 50 fps. Each frame is
+ * resized and encoded at 512x512 (a few ms apiece), so cost is linear in the frame count, and a
+ * GIF of 1x1 frames packs tens of thousands of them into well under a megabyte.
+ */
+export const MAX_STICKER_FRAMES = 500;
+
+/**
+ * Conversions running at once, process-wide. Each sharp call (the frame scan, then the pipeline)
+ * holds a libuv threadpool worker (4 by default) for its whole run, and that pool also serves fs,
+ * dns.lookup, crypto and zlib.
+ */
+const stickerConversions = new ConcurrencyLimiter(2);
+
 async function toWebpSticker(data: Buffer, mimetype: string): Promise<Buffer> {
   if (isWebpBuffer(data)) {
     return data;
@@ -156,11 +209,24 @@ async function toWebpSticker(data: Buffer, mimetype: string): Promise<Buffer> {
   // deferral the adapters already use for the engine libraries themselves.
   const sharp = await loadSharp();
   try {
-    return await sharp(data, { animated: true })
-      .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
-      .webp()
-      .toBuffer();
+    const image = sharp(data, { animated: true });
+    return await stickerConversions.run(async () => {
+      // Counting frames only scans the file, so an oversized animation is refused before any decode.
+      // The scan still runs on the threadpool and grows faster than the frame count, so it holds the
+      // same slot as the pipeline.
+      const { pages = 1 } = await image.metadata();
+      if (pages > MAX_STICKER_FRAMES) {
+        throw new BadRequestException(
+          `The sticker animation has ${pages} frames; at most ${MAX_STICKER_FRAMES} can be converted.`,
+        );
+      }
+      return image
+        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp()
+        .toBuffer();
+    });
   } catch (error) {
+    if (error instanceof BadRequestException) throw error;
     // Bytes that do not decode as the image they claim to be. Refuse before the socket rather than
     // ship them mislabelled — that is the whole point.
     throw new BadRequestException(
@@ -415,13 +481,16 @@ export class BaileysMessaging {
   async sendAudioMessage(chatId: string, media: MediaInput): Promise<MessageResult> {
     this.host.ensureReady();
     const { data, mimetype } = await resolveMediaBuffer(media, this.host.sessionProxyUrl(), 'audio/mpeg');
+    const ptt = media.ptt ?? false;
     return this.sendContent(
       chatId,
       // Audio carries no caption, so a mention here tags the recipient through contextInfo without
       // visible @text. It is still forwarded: the route accepts `mentions` (SendAudioMessageDto
       // extends SendMediaMessageDto) and whatsapp-web.js sends it, so dropping it here made the same
       // request notify participants on one engine and silently not on the other.
-      { audio: data, mimetype, ptt: media.ptt ?? false, ...this.withMentions(media.mentions) },
+      // The duration and a voice note's waveform come from describeAudio, never from Baileys, which
+      // would read the file in this process.
+      { audio: data, mimetype, ptt, ...(await describeAudio(data, ptt)), ...this.withMentions(media.mentions) },
       await this.quoteOption(media.quotedMessageId),
     );
   }
@@ -601,18 +670,15 @@ export class BaileysMessaging {
     // revoke, yet the send resolves, so it would report a deletion that never happened. WhatsApp Web
     // deletes such a message for the account alone instead, and so does this. A group whose member
     // list shows no row for the account proves nothing either way, so the revoke still goes out there.
-    // Whichever branch runs, the text leaves this account's view, so it must not stay the chat
-    // preview. The echo of an own revoke is skipped as an own send, so the inbound path never clears it.
+    // Whichever branch runs, the text leaves this account's view, so clear the preview immediately.
     const chatJid = target.key.remoteJid ?? chatId;
     // The preview of a received broadcast-list message is kept in its sender's chat.
     const previewJid = baileysChatJid(chatJid, target.key.participant, target.key.fromMe === true);
     if (forEveryone && (target.key.fromMe === true || (await this.selfIsGroupAdmin(target.key.remoteJid)) !== false)) {
       await this.send(await this.toDeliverableJid(chatId), { delete: target.key });
       this.host.recordMessageEdit(previewJid, messageId, '', 'revoked');
-      // The echo of this delete is skipped as an own send, so the stored copy is emptied here, as
-      // processInboundMessage does for a delete made from the phone or by the other side. Recorded
-      // first, so the message stays deleted even if the store write fails or a repeat delivery of the
-      // original is stored after it.
+      // Clear the stored copy before the buffered echo arrives. Record the deletion first so it
+      // survives a failed store write or a repeat delivery of the original.
       this.host.markDeletedForEveryone(messageId);
       await this.changeStored(messageId, stored => ({ ...stored, message: null }));
       return;
@@ -678,10 +744,9 @@ export class BaileysMessaging {
     const editContent = { text: body, ...this.withMentions(mentions), edit: target.key };
     const b = await this.host.loadLib();
     await this.send(jid, this.previewSafe(editContent), this.previewSafeOptions(editContent));
-    // The edit's echo is skipped as an own send, so the chat preview follows it from here.
+    // Update the preview and raw copy immediately, ahead of the buffered echo.
     this.host.recordMessageEdit(target.key.remoteJid ?? chatId, messageId, body);
-    // Same reason as deleteMessage: the stored copy is what a later quote carries, and this edit's
-    // echo never reaches processInboundMessage.
+    // A later quote must carry the updated text even before the edit's echo arrives.
     await this.changeStored(messageId, stored => {
       const content = b.normalizeMessageContent(stored.message ?? undefined);
       return content && setBaileysText(content, body) ? stored : null;
@@ -830,8 +895,8 @@ export class BaileysMessaging {
   }
 
   /**
-   * Every message this delegate sends goes through here so its id is recorded before the library
-   * echoes it back. Baileys re-emits each own send through `messages.upsert` tagged `append`, the
+   * Every send goes through here. Content message ids are recorded before the library echoes
+   * them back. Baileys re-emits each own send through `messages.upsert` tagged `append`, the
    * same tag WhatsApp uses to replay what the account typed on its phone while the gateway was
    * down, and the id is the only thing that tells the two apart (see handleMessagesUpsert). The
    * record is synchronous on the send's own continuation, ahead of the library's buffered echo.
@@ -866,7 +931,8 @@ export class BaileysMessaging {
       if (this.host.getSocketOrNull() !== sock) throw new EngineNotReadyError();
       throw error;
     }
-    this.host.rememberOwnSend(sent?.key?.id);
+    // Mutations are announced by their library echo; no local callback replaces it.
+    if (!('react' in content || 'delete' in content || 'edit' in content)) this.host.rememberOwnSend(sent?.key?.id);
     return sent;
   }
 
