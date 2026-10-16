@@ -21,6 +21,8 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useSessionsQuery } from '../hooks/queries';
 import { contactApi, type CheckNumberResponse } from '../services/api';
 import { useToast } from '../hooks/useToast';
+import { useRole } from '../hooks/useRole';
+import { escapeCsvCell } from '../utils/csv';
 import './NumberChecker.css';
 
 export type CheckStatus = 'registered' | 'unregistered' | 'failed';
@@ -36,6 +38,7 @@ export function NumberChecker() {
   useDocumentTitle('Number Checker - OpenWA');
   const navigate = useNavigate();
   const toast = useToast();
+  const { canWrite } = useRole();
 
   const { data: sessions = [], isLoading: loadingSessions } = useSessionsQuery();
   const readySessions = useMemo(
@@ -79,20 +82,21 @@ export function NumberChecker() {
   const formatNumberForCheck = useCallback(
     (raw: string, applyPrefix = autoPrefix91) => {
       let digits = raw.replace(/[^0-9]/g, '');
+      const isInternational = raw.trim().startsWith('+') || digits.startsWith('00');
       // 1. If international dial exit code 00 is present (e.g. 009196...), strip '00'
       if (digits.startsWith('00') && digits.length >= 12) {
         digits = digits.substring(2);
       }
       // 2. If user entered +91 with domestic trunk 0 (e.g. +91 096... -> 13 digits), strip trunk 0
-      if (digits.length === 13 && digits.startsWith('910')) {
+      if (applyPrefix && digits.length === 13 && digits.startsWith('910')) {
         digits = '91' + digits.substring(3);
       }
       // 3. If domestic 11 digits starting with 0 (e.g. 096xxxxxxxx), strip leading 0
-      if (digits.length === 11 && digits.startsWith('0')) {
+      if (applyPrefix && !isInternational && digits.length === 11 && digits.startsWith('0')) {
         digits = digits.substring(1);
       }
       // 4. If exactly 10 digits and autoPrefix is true: impose India country code (+91)
-      if (applyPrefix && digits.length === 10) {
+      if (applyPrefix && !isInternational && digits.length === 10) {
         return '91' + digits;
       }
       // 5. If 12 digits (already has country code, e.g. 91xxxxxxxxxx) or any other format: keep as-is
@@ -121,11 +125,12 @@ export function NumberChecker() {
 
     for (const raw of lines) {
       let d = raw.replace(/[^0-9]/g, '');
+      const isInternational = raw.startsWith('+') || d.startsWith('00');
       if (d.startsWith('00') && d.length >= 12) d = d.substring(2);
-      if (d.length === 13 && d.startsWith('910')) d = '91' + d.substring(3);
-      if (d.length === 11 && d.startsWith('0')) d = d.substring(1);
+      if (autoPrefix91 && d.length === 13 && d.startsWith('910')) d = '91' + d.substring(3);
+      if (autoPrefix91 && !isInternational && d.length === 11 && d.startsWith('0')) d = d.substring(1);
 
-      if (d.length === 10) {
+      if (!isInternational && d.length === 10) {
         tenDigitsCount++;
       } else if (d.length === 12) {
         twelveDigitsCount++;
@@ -150,6 +155,7 @@ export function NumberChecker() {
 
   // Perform single check
   const handleSingleCheck = async () => {
+    if (!canWrite || isCheckingSingle) return;
     const formatted = formatNumberForCheck(phoneNumber);
     if (!formatted) {
       toast.error('Please enter a phone number to check.');
@@ -199,6 +205,7 @@ export function NumberChecker() {
 
   // Perform batch check
   const handleStartBatch = async () => {
+    if (!canWrite || isCheckingBatch) return;
     const numbers = batchParsedStats.list;
 
     if (numbers.length === 0) {
@@ -282,8 +289,7 @@ export function NumberChecker() {
     const rows = batchResults
       .map(r => {
         const hasWa = r.status === 'failed' ? 'Error' : r.exists ? 'Yes' : 'No';
-        const errorText = (r.error || '').replace(/"/g, '""');
-        return `"${r.number}","${hasWa}","${r.whatsappId || ''}","${errorText}","${r.timestamp}"`;
+        return [r.number, hasWa, r.whatsappId, r.error, r.timestamp].map(escapeCsvCell).join(',');
       })
       .join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
@@ -294,6 +300,7 @@ export function NumberChecker() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const registeredCount = batchResults.filter(r => r.status === 'registered').length;
@@ -389,7 +396,7 @@ export function NumberChecker() {
                   <button
                     className="nc-btn nc-btn-primary"
                     onClick={handleSingleCheck}
-                    disabled={isCheckingSingle || !phoneNumber.trim() || readySessions.length === 0}
+                    disabled={!canWrite || isCheckingSingle || !phoneNumber.trim() || readySessions.length === 0}
                   >
                     {isCheckingSingle ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
                     {isCheckingSingle ? 'Checking...' : 'Check'}
@@ -411,7 +418,8 @@ export function NumberChecker() {
 
                 {phoneNumber.trim() && (
                   <div className="nc-format-preview">
-                    {phoneNumber.replace(/[^0-9]/g, '').length === 10 && autoPrefix91 ? (
+                    {phoneNumber.replace(/[^0-9]/g, '').length === 10 &&
+                    singleFormattedNumber === '91' + phoneNumber.replace(/[^0-9]/g, '') ? (
                       <span className="nc-format-pill highlight">
                         Will check as: <strong>+{singleFormattedNumber}</strong> (10 digits &rarr; auto-prefixed with
                         91)
@@ -695,7 +703,7 @@ export function NumberChecker() {
               <button
                 className="nc-btn nc-btn-primary"
                 onClick={handleStartBatch}
-                disabled={!batchInput.trim() || readySessions.length === 0}
+                disabled={!canWrite || !batchInput.trim() || readySessions.length === 0}
               >
                 <UserCheck size={18} /> Start Batch Check
               </button>

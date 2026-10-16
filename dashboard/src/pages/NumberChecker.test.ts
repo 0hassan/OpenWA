@@ -10,6 +10,7 @@ let rtl: RTL;
 let NumberChecker: typeof import('./NumberChecker.tsx').NumberChecker;
 let ToastProvider: typeof import('../components/Toast.tsx').ToastProvider;
 let MemoryRouter: typeof import('react-router-dom').MemoryRouter;
+let RoleProvider: typeof import('../components/RoleProvider.tsx').RoleProvider;
 let defaultFetch: typeof fetch;
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -29,13 +30,18 @@ function createTestQueryClient() {
   });
 }
 
-function renderComponent() {
+function renderComponent(role = 'operator') {
+  sessionStorage.setItem('openwa_user_role', role);
   const queryClient = createTestQueryClient();
   return rtl.render(
     createElement(
       QueryClientProvider,
       { client: queryClient },
-      createElement(ToastProvider, null, createElement(MemoryRouter, null, createElement(NumberChecker))),
+      createElement(
+        RoleProvider,
+        null,
+        createElement(ToastProvider, null, createElement(MemoryRouter, null, createElement(NumberChecker))),
+      ),
     ),
   );
 }
@@ -61,12 +67,14 @@ before(async () => {
   rtl = await import('@testing-library/react');
   ({ MemoryRouter } = await import('react-router-dom'));
   ({ ToastProvider } = await import('../components/Toast.tsx'));
+  ({ RoleProvider } = await import('../components/RoleProvider.tsx'));
   ({ NumberChecker } = await import('./NumberChecker.tsx'));
 });
 
 afterEach(() => {
   rtl.cleanup();
   globalThis.fetch = defaultFetch;
+  sessionStorage.clear();
 });
 
 test('NumberChecker: renders single check form and tabs', () => {
@@ -83,7 +91,118 @@ test('NumberChecker: switches to bulk / batch tab when clicked', () => {
   assert.ok(headings.length >= 1);
 });
 
-test('NumberChecker: a rejected lookup is recorded as failed with error status, not as unregistered', async () => {
+for (const [raw, autoPrefix, expected] of [
+  ['+65 8123 4567', true, '6581234567'],
+  ['0065 8123 4567', true, '6581234567'],
+  ['09876543210', false, '09876543210'],
+  ['9109876543210', false, '9109876543210'],
+  ['9876543210', true, '919876543210'],
+  ['09876543210', true, '919876543210'],
+] as const) {
+  test(`NumberChecker: checks ${raw} as ${expected} with auto-prefix ${autoPrefix}`, async () => {
+    const lookups: string[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/contacts/check/')) {
+        const number = url.split('/contacts/check/')[1];
+        lookups.push(number);
+        return Promise.resolve(jsonResponse({ number, exists: false, whatsappId: null }));
+      }
+      return defaultFetch(input);
+    }) as typeof fetch;
+
+    const { container } = renderComponent();
+    await rtl.screen.findByRole('option', { name: /Primary Session/ });
+    if (!autoPrefix) rtl.fireEvent.click(rtl.screen.getByRole('checkbox'));
+    rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: raw } });
+    if (raw.startsWith('+') || raw.startsWith('00')) {
+      assert.ok(!container.querySelector('.nc-format-preview')?.textContent?.includes('auto-prefixed'));
+    }
+    rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+    await rtl.screen.findByText('Not Registered', { selector: '.nc-status-badge' });
+    assert.deepEqual(lookups, [expected]);
+  });
+}
+
+test('NumberChecker: bulk parsing deduplicates explicit international numbers without adding +91', async () => {
+  const lookups: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/contacts/check/')) {
+      const number = url.split('/contacts/check/')[1];
+      lookups.push(number);
+      return Promise.resolve(jsonResponse({ number, exists: false, whatsappId: null }));
+    }
+    return defaultFetch(input);
+  }) as typeof fetch;
+
+  renderComponent();
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), {
+    target: { value: '+65 8123 4567\n0065 8123 4567' },
+  });
+  assert.match(rtl.screen.getByText(/ten-digit/).textContent ?? '', /0 ten-digit/);
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+  await rtl.screen.findByText('+6581234567');
+  assert.deepEqual(lookups, ['6581234567']);
+});
+
+test('NumberChecker: viewers cannot start single or bulk lookups, including with Enter', async () => {
+  const lookups: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/contacts/check/')) {
+      lookups.push(url);
+      return Promise.resolve(jsonResponse({ number: '919876543210', exists: false, whatsappId: null }));
+    }
+    return defaultFetch(input);
+  }) as typeof fetch;
+
+  renderComponent('viewer');
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  const input = rtl.screen.getByPlaceholderText(/9876543210/);
+  rtl.fireEvent.change(input, { target: { value: '9876543210' } });
+  assert.equal((rtl.screen.getByRole('button', { name: 'Check' }) as HTMLButtonElement).disabled, true);
+  await rtl.act(async () => rtl.fireEvent.keyDown(input, { key: 'Enter' }));
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '9876543210' } });
+  assert.equal((rtl.screen.getByRole('button', { name: /Start Batch Check/i }) as HTMLButtonElement).disabled, true);
+  assert.deepEqual(lookups, []);
+});
+
+test('NumberChecker: CSV export neutralizes error formulas and releases its object URL', async t => {
+  const downloads: Blob[] = [];
+  t.mock.method(URL, 'createObjectURL', (blob: Blob) => {
+    downloads.push(blob);
+    return 'blob:number-checker-csv';
+  });
+  const revoke = t.mock.method(URL, 'revokeObjectURL');
+  t.mock.method(HTMLAnchorElement.prototype, 'click', () => {});
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    if (String(input).includes('/contacts/check/')) {
+      return Promise.resolve(jsonResponse({ message: '=HYPERLINK("https://example.com","lookup")' }, 500));
+    }
+    return defaultFetch(input);
+  }) as typeof fetch;
+
+  renderComponent();
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Bulk/i }));
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9612345678/i), { target: { value: '919999999999' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+  await rtl.screen.findByText('Failed', { selector: '.nc-status-badge' });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Export Results/i }));
+
+  assert.equal(downloads.length, 1);
+  assert.ok((await downloads[0].text()).includes(`"'=HYPERLINK(""https://example.com"",""lookup"")"`));
+  assert.equal(revoke.mock.callCount(), 1);
+  assert.deepEqual(revoke.mock.calls[0].arguments, ['blob:number-checker-csv']);
+  assert.equal(document.querySelector('a[download]'), null);
+});
+
+test('NumberChecker: a rejected lookup is recorded as failed with error status, not as unregistered', async t => {
+  t.mock.method(HTMLAnchorElement.prototype, 'click', () => {});
   const recordedDownloads: Blob[] = [];
   const realCreateObjectURL = URL.createObjectURL;
   URL.createObjectURL = (blob: Blob) => {
@@ -144,8 +263,8 @@ test('NumberChecker: a rejected lookup is recorded as failed with error status, 
 
     assert.equal(recordedDownloads.length, 1);
     const csvContent = await recordedDownloads[0].text();
-    assert.ok(csvContent.includes('"919999999999","Error","","Rate limit exceeded (HTTP 429)"'));
-    assert.ok(!csvContent.includes('"919999999999","No"'));
+    assert.ok(csvContent.includes('919999999999,Error,,Rate limit exceeded (HTTP 429),'));
+    assert.ok(!csvContent.includes('919999999999,No,'));
   } finally {
     URL.createObjectURL = realCreateObjectURL;
   }
