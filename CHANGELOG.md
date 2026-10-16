@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Refuse media exports and file counts when local directories cannot be fully enumerated.
+
 ## [0.25.0] - 2026-10-15
 
 ### Added
@@ -14,16 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow chat-restricted API keys to subscribe to chat WebSocket events.
 - Allow chat-restricted MCP keys to read and send within their chat allowlist using the REST authorization rules.
 - Carry `chatId` in `message.ack` and `message.failed` payloads so a webhook `chatId` or `kind` filter scopes delivery events per chat.
-- Filter stored messages by time, direction, type or message reference, with stable message-time pagination; the JavaScript, Python, Java and Go SDKs take these filters from the next SDK release after 0.5.1, and the PHP SDK already forwards any query key.
+- Filter stored messages by time, direction, type or message reference, with stable message-time pagination; the JavaScript, Python, Java and Go SDKs take these filters from SDK 0.6.0, and the PHP SDK already forwards any query key.
 - Scope built-in message search and group detail/settings to a chat-restricted key's allowed chats; reject plugin search for these keys.
-- Expose poll choices and selection mode in message events, stored messages and history, and poll choices in dashboard chats; the SDKs type the poll of a live history message from the next SDK release after 0.5.1.
-- Expose optional last-message types in chat lists and, from the next SDK release after 0.5.1, in the SDKs.
-- Add bounded webhook failure redrive with optional payload retention; the SDKs expose it from the next SDK release after 0.5.1.
+- Expose poll choices and selection mode in message events, stored messages and history, and poll choices in dashboard chats; the SDKs type the poll of a live history message from SDK 0.6.0.
+- Expose optional last-message types in chat lists and, from SDK 0.6.0, in the SDKs.
+- Add bounded webhook failure redrive with optional payload retention; the SDKs expose it from SDK 0.6.0.
 - Add `startupProbe.periodSeconds` and `startupProbe.failureThreshold` to the Helm chart's values, defaulting to the 5 s and 60 the chart rendered before, so a large messages table can be given a longer boot budget.
-- Expose caller-supplied send idempotency keys in all five SDKs from the next SDK release after 0.5.1; the 0.5.1 JavaScript and PHP packages ignore the extra argument.
+- Expose caller-supplied send idempotency keys in all five SDKs from SDK 0.6.0; the 0.5.1 JavaScript and PHP packages ignore the extra argument.
 - Add optional 24-hour idempotency keys to twelve single-recipient send routes.
 - Add opt-in archive-only chat media with dashboard previews.
-- Report RSVPs to WhatsApp events as an `event.response` webhook and WebSocket event on Baileys; the JavaScript, Python, Go and Java SDKs list the event name from the next SDK release after 0.5.1 (#1788, thanks @jelasus).
+- Report RSVPs to WhatsApp events as an `event.response` webhook and WebSocket event on Baileys; the JavaScript, Python, Go and Java SDKs list the event name from SDK 0.6.0 (#1788, thanks @jelasus).
 
 ### Changed
 
@@ -97,8 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Probe the configured `PORT` in the Docker image healthcheck instead of a fixed 2785.
 - Cap the total bytes one storage import extracts at `STORAGE_IMPORT_MAX_TOTAL_BYTES`.
 - Close the Baileys session proxy's fetch dispatcher when the session disconnects, logs out or is destroyed.
-- Java SDK (next SDK release after 0.5.1): the request timeout also bounds the response body, so a stalled body raises `OpenWATimeoutError`.
-- Java SDK (next SDK release after 0.5.1): the default transport speaks HTTP/1.1, so calls to a gateway over plain `http://` no longer fail with `HTTP/1.1 header parser received no bytes`.
+- Java SDK (0.6.0): the request timeout also bounds the response body, so a stalled body raises `OpenWATimeoutError`.
+- Java SDK (0.6.0): the default transport speaks HTTP/1.1, so calls to a gateway over plain `http://` no longer fail with `HTTP/1.1 header parser received no bytes`.
 - Keep a new dashboard template draft when an earlier template save finishes.
 - Stop the dashboard Chats page from marking the open chat read on a newly selected session.
 - Refuse bulk batches once shutdown begins, and answer `503` for a batch saved during shutdown instead of sending it.
@@ -159,22 +163,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop a dashboard backup export or media download answered after sign-out from saving its file.
 - Parse a dashboard message made of many code spans or code blocks in linear time, so one long message no longer freezes the tab for seconds.
 - Render a dashboard message body over 4096 characters without links, so link detection no longer freezes the tab on a very long body.
-- Python SDK (next SDK release after 0.5.1): an error with an empty body names the response's status text instead of `None`.
-- Python SDK (next SDK release after 0.5.1): a `timeout` of `None`, 0 or infinity means no timeout, a four-value tuple takes the same for each element, an `httpx.Timeout` is passed to httpx as given, and a negative, NaN or non-number raises `ValueError`.
-- Python SDK (next SDK release after 0.5.1): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
-- JavaScript and PHP SDKs (next SDK release after 0.5.1): printing or dumping a client no longer shows its API key, and the PHP client keeps its default header values out of a dump, an export and a cast as well.
-- Python and PHP SDKs (next SDK release after 0.5.1): the API key is trimmed, and one with a control or non-ASCII character is refused when the client is built, without repeating it.
-- JavaScript SDK (next SDK release after 0.5.1): the API key is trimmed, and a key or default header value with a control or non-Latin-1 character is refused when the client is built, naming the header and never repeating the value.
-- Go SDK (next SDK release after 0.5.1): the API key is trimmed, and one with a control character is refused when the client is built, without repeating it.
-- Python and PHP SDKs (next SDK release after 0.5.1): a default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
-- Java SDK (next SDK release after 0.5.1): a connection failure names its exception class and keeps it as the cause instead of ending in `null`.
-- Java SDK (next SDK release after 0.5.1): a key or default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
-- Java SDK (next SDK release after 0.5.1): a logged `HttpRequestData` shows neither the key nor the body.
-- Go SDK (next SDK release after 0.5.1): `WithIdempotencyKey` sends the header only on the twelve routes that honor it, so a request to any other route is no longer re-sent by `net/http` after a dropped connection.
-- Go SDK (next SDK release after 0.5.1): an error answer from a proxy reads its own `message` or the status text.
-- PHP SDK (next SDK release after 0.5.1): an omitted participant list in `approveMembershipRequests` and `rejectMembershipRequests` goes out as `{}`.
-- PHP SDK (next SDK release after 0.5.1): an error body whose `error` is not a string maps to the SDK's exception instead of raising a `TypeError`.
-- Every SDK package ships the MIT license text from the next SDK release after 0.5.1.
+- Python SDK (0.6.0): an error with an empty body names the response's status text instead of `None`.
+- Python SDK (0.6.0): a `timeout` of `None`, 0 or infinity means no timeout, a four-value tuple takes the same for each element, an `httpx.Timeout` is passed to httpx as given, and a negative, NaN or non-number raises `ValueError`.
+- Python SDK (0.6.0): `WebhookFilterCondition` and `CustomLinkPreview` require the keys the gateway requires.
+- JavaScript and PHP SDKs (0.6.0): printing or dumping a client no longer shows its API key, and the PHP client keeps its default header values out of a dump, an export and a cast as well.
+- Python and PHP SDKs (0.6.0): the API key is trimmed, and one with a control or non-ASCII character is refused when the client is built, without repeating it.
+- JavaScript SDK (0.6.0): the API key is trimmed, and a key or default header value with a control or non-Latin-1 character is refused when the client is built, naming the header and never repeating the value.
+- Go SDK (0.6.0): the API key is trimmed, and one with a control character is refused when the client is built, without repeating it.
+- Python and PHP SDKs (0.6.0): a default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
+- Java SDK (0.6.0): a connection failure names its exception class and keeps it as the cause instead of ending in `null`.
+- Java SDK (0.6.0): a key or default header value with a control or non-ASCII character is refused when the client is built, naming the header and never repeating the value.
+- Java SDK (0.6.0): a logged `HttpRequestData` shows neither the key nor the body.
+- Go SDK (0.6.0): `WithIdempotencyKey` sends the header only on the twelve routes that honor it, so a request to any other route is no longer re-sent by `net/http` after a dropped connection.
+- Go SDK (0.6.0): an error answer from a proxy reads its own `message` or the status text.
+- PHP SDK (0.6.0): an omitted participant list in `approveMembershipRequests` and `rejectMembershipRequests` goes out as `{}`.
+- PHP SDK (0.6.0): an error body whose `error` is not a string maps to the SDK's exception instead of raising a `TypeError`.
+- Every SDK package ships the MIT license text from SDK 0.6.0.
 
 ### Documentation
 
@@ -208,7 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Boot fails on a `PORT` with surrounding whitespace or a whitespace-only `PORT`; remove the padding.
 - Boot fails on a `WEBHOOK_SHUTDOWN_DRAIN_MS` that is not a non-negative integer (for example `30s`) instead of silently using 5000.
 - Aged undispatched ingress events are dead-lettered instead of deleted; some may already have been delivered, so check before redriving them.
-- Java SDK (next SDK release after 0.5.1): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
+- Java SDK (0.6.0): the request timeout (default 30 s) also bounds the response body; raise it for large media downloads.
 - With `OPENWA_DATA_DIR` set, `backup.sh` and `restore.sh` read the default SQLite databases and `./data/...` paths in `./.env` under it; pass a path in the environment to keep it in the working directory.
 - A storage import stops at `STORAGE_IMPORT_MAX_TOTAL_BYTES` (default 10 GiB); raise it before importing a larger export.
 - ⚠️ **Breaking (API).** Creating or updating an API key with more than 2000 `allowedChats` entries answers `400`; a stored longer list keeps working on the REST routes, but over `/events` a subscribe that would hold more than 4096 rooms (the subscribed events times the key's chat ids, two per phone number) is refused with `TOO_MANY_SUBSCRIPTIONS`, so shorten it.

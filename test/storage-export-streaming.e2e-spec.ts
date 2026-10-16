@@ -2,8 +2,82 @@
 jest.unmock('archiver');
 
 import { randomBytes } from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Readable } from 'stream';
+import { ConfigService } from '@nestjs/config';
 import { createExportStream, ExportFileSource, importFromStream } from '../src/common/storage/storage-transfer';
+import { StorageService } from '../src/common/storage/storage.service';
+
+describe('Local storage export completeness', () => {
+  let localPath: string;
+  let storage: StorageService;
+
+  beforeEach(() => {
+    localPath = fs.mkdtempSync(path.join(os.tmpdir(), 'openwa-export-'));
+    storage = new StorageService({
+      get: (key: string) => ({ 'storage.type': 'local', 'storage.localPath': localPath })[key],
+    } as unknown as ConfigService);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    storage.onModuleDestroy();
+    fs.rmSync(localPath, { recursive: true, force: true });
+  });
+
+  it.each(['EACCES', 'EIO'])('refuses an export and count when directory enumeration fails with %s', async code => {
+    await storage.putFile('nested/media.bin', Buffer.from('preserve this file'));
+    const error = Object.assign(new Error(`Cannot enumerate storage: ${code}`), { code });
+    jest.spyOn(fs.promises, 'readdir').mockRejectedValue(error);
+
+    await expect(storage.createExportStream()).rejects.toBe(error);
+    await expect(storage.getFileCount()).rejects.toBe(error);
+    expect((await storage.getFile('nested/media.bin')).toString()).toBe('preserve this file');
+  });
+
+  it('refuses an export and count when an accepted key exceeds the traversal depth', async () => {
+    const key = [...Array<string>(20).fill('nested'), 'media.bin'].join('/');
+    await storage.putFile(key, Buffer.from('deep media'));
+
+    expect((await storage.getFile(key)).toString()).toBe('deep media');
+    await expect(storage.createExportStream()).rejects.toThrow(/maximum traversal depth/);
+    await expect(storage.getFileCount()).rejects.toThrow(/maximum traversal depth/);
+  });
+
+  it('still treats a missing local fallback directory as empty', async () => {
+    fs.rmSync(localPath, { recursive: true });
+    const logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn(), debug: jest.fn() };
+
+    expect(await storage.getFileCount()).toEqual({ count: 0, sizeBytes: 0 });
+    const output = await storage.createExportStream();
+    await expect(importFromStream(output, jest.fn(), logger as never)).resolves.toEqual({ imported: 0, failed: 0 });
+  });
+
+  it('exports every readable file with its original bytes', async () => {
+    const source = new Map([
+      ['root.bin', Buffer.from('root media')],
+      ['nested/media.bin', Buffer.from('nested media')],
+    ]);
+    for (const [key, bytes] of source) await storage.putFile(key, bytes);
+    const imported = new Map<string, Buffer>();
+    const logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn(), debug: jest.fn() };
+
+    const output = await storage.createExportStream();
+    await expect(
+      importFromStream(
+        output,
+        (key, bytes) => {
+          imported.set(key, bytes);
+          return Promise.resolve();
+        },
+        logger as never,
+      ),
+    ).resolves.toEqual({ imported: source.size, failed: 0 });
+    expect(imported).toEqual(source);
+  });
+});
 
 /**
  * The storage export runs against the real archiver here (the unit config stubs it). An export of a
