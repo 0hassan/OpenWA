@@ -31,7 +31,7 @@ export async function listLocalFiles(localPath: string): Promise<string[]> {
 /**
  * Full local enumeration as a stream — no count cap. Async + iterative (a work queue, not
  * recursion) so a deep/wide media tree can't block the event loop or stack-overflow; still
- * bounded by the max directory depth so a pathological tree can't descend unbounded.
+ * bounded by the max directory depth. An incomplete traversal fails instead of hiding files.
  */
 export async function* iterateLocalFiles(localPath: string, prefix = ''): AsyncGenerator<string> {
   // Iterative BFS: a queue of [relativeDir, depth] avoids unbounded call-stack growth. A prefix
@@ -42,14 +42,17 @@ export async function* iterateLocalFiles(localPath: string, prefix = ''): AsyncG
 
   while (queue.length > 0) {
     const { dir, depth } = queue.shift()!;
-    if (depth >= LOCAL_TRAVERSAL_MAX_DEPTH) continue;
+    if (depth >= LOCAL_TRAVERSAL_MAX_DEPTH) {
+      throw new Error(`Storage directory exceeds the maximum traversal depth: ${dir}`);
+    }
 
     const fullPath = path.join(localPath, dir);
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(fullPath, { withFileTypes: true });
-    } catch {
-      continue; // dir vanished or unreadable — skip rather than abort the whole traversal
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      continue; // A directory removed during enumeration has no files left to export.
     }
 
     for (const entry of entries) {
