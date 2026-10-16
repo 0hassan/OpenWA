@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   UserCheck,
@@ -23,7 +23,11 @@ import { contactApi, type CheckNumberResponse } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import './NumberChecker.css';
 
-interface CheckResultItem extends CheckNumberResponse {
+export type CheckStatus = 'registered' | 'unregistered' | 'failed';
+
+export interface CheckResultItem extends CheckNumberResponse {
+  status: CheckStatus;
+  error?: string | null;
   avatarUrl?: string | null;
   timestamp: string;
 }
@@ -58,8 +62,15 @@ export function NumberChecker() {
   const [isCheckingBatch, setIsCheckingBatch] = useState(false);
   const [batchResults, setBatchResults] = useState<CheckResultItem[]>([]);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
-  const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered'>('all');
-  const cancelBatchRef = useRef(false);
+  const [batchFilter, setBatchFilter] = useState<'all' | 'registered' | 'unregistered' | 'failed'>('all');
+  const batchRunIdRef = useRef<number>(0);
+
+  useEffect(() => {
+    const runRef = batchRunIdRef;
+    return () => {
+      runRef.current++;
+    };
+  }, []);
 
   // Auto-prefix country code state
   const [autoPrefix91, setAutoPrefix91] = useState(true);
@@ -164,6 +175,8 @@ export function NumberChecker() {
 
       const item: CheckResultItem = {
         ...res,
+        status: res.exists ? 'registered' : 'unregistered',
+        error: null,
         avatarUrl: avatar,
         timestamp: new Date().toLocaleTimeString(),
       };
@@ -197,64 +210,81 @@ export function NumberChecker() {
       return;
     }
 
+    const runId = ++batchRunIdRef.current;
     setIsCheckingBatch(true);
-    cancelBatchRef.current = false;
     setBatchResults([]);
     setBatchProgress({ current: 0, total: numbers.length });
 
     const results: CheckResultItem[] = [];
 
     for (let i = 0; i < numbers.length; i++) {
-      if (cancelBatchRef.current) break;
+      if (batchRunIdRef.current !== runId) return;
 
       const num = numbers[i];
       try {
         const res = await contactApi.checkNumber(currentSession, num);
+        if (batchRunIdRef.current !== runId) return;
+
         const item: CheckResultItem = {
           ...res,
+          status: res.exists ? 'registered' : 'unregistered',
+          error: null,
           timestamp: new Date().toLocaleTimeString(),
         };
         results.push(item);
         setBatchResults([...results]);
-      } catch {
+      } catch (err) {
+        if (batchRunIdRef.current !== runId) return;
+
+        const errorMsg = err instanceof Error ? err.message : 'Lookup failed';
         results.push({
           number: num,
           exists: false,
           whatsappId: null,
+          status: 'failed',
+          error: errorMsg,
           timestamp: new Date().toLocaleTimeString(),
         });
         setBatchResults([...results]);
       }
 
+      if (batchRunIdRef.current !== runId) return;
       setBatchProgress({ current: i + 1, total: numbers.length });
 
       if (i < numbers.length - 1 && batchDelay > 0) {
         await new Promise(resolve => setTimeout(resolve, batchDelay));
+        if (batchRunIdRef.current !== runId) return;
       }
     }
 
+    if (batchRunIdRef.current !== runId) return;
     setIsCheckingBatch(false);
     toast.success(`Completed checking ${results.length} numbers.`);
   };
 
   const handleStopBatch = () => {
-    cancelBatchRef.current = true;
+    batchRunIdRef.current++;
     setIsCheckingBatch(false);
   };
 
   // Filter batch results
   const filteredBatchResults = useMemo(() => {
-    if (batchFilter === 'registered') return batchResults.filter(r => r.exists);
-    if (batchFilter === 'unregistered') return batchResults.filter(r => !r.exists);
+    if (batchFilter === 'registered') return batchResults.filter(r => r.status === 'registered');
+    if (batchFilter === 'unregistered') return batchResults.filter(r => r.status === 'unregistered');
+    if (batchFilter === 'failed') return batchResults.filter(r => r.status === 'failed');
     return batchResults;
   }, [batchResults, batchFilter]);
 
   // Export batch results as CSV
   const handleExportCSV = () => {
     if (batchResults.length === 0) return;
-    const header = 'Phone Number,Has WhatsApp,WhatsApp ID,Checked At\n';
+    const header = 'Phone Number,Has WhatsApp,WhatsApp ID,Error,Checked At\n';
     const rows = batchResults
-      .map(r => `"${r.number}","${r.exists ? 'Yes' : 'No'}","${r.whatsappId || ''}","${r.timestamp}"`)
+      .map(r => {
+        const hasWa = r.status === 'failed' ? 'Error' : r.exists ? 'Yes' : 'No';
+        const errorText = (r.error || '').replace(/"/g, '""');
+        return `"${r.number}","${hasWa}","${r.whatsappId || ''}","${errorText}","${r.timestamp}"`;
+      })
       .join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -266,8 +296,9 @@ export function NumberChecker() {
     document.body.removeChild(link);
   };
 
-  const registeredCount = batchResults.filter(r => r.exists).length;
-  const unregisteredCount = batchResults.filter(r => !r.exists).length;
+  const registeredCount = batchResults.filter(r => r.status === 'registered').length;
+  const unregisteredCount = batchResults.filter(r => r.status === 'unregistered').length;
+  const failedCount = batchResults.filter(r => r.status === 'failed').length;
 
   return (
     <div className="number-checker">
@@ -529,9 +560,13 @@ export function NumberChecker() {
                     <tr key={`${item.number}-${idx}`}>
                       <td style={{ fontWeight: 600 }}>+{item.number}</td>
                       <td>
-                        {item.exists ? (
+                        {item.status === 'registered' ? (
                           <span className="nc-status-badge registered">
                             <CheckCircle2 size={13} /> Registered
+                          </span>
+                        ) : item.status === 'failed' ? (
+                          <span className="nc-status-badge error" title={item.error || 'Failed'}>
+                            <AlertCircle size={13} /> Failed
                           </span>
                         ) : (
                           <span className="nc-status-badge unregistered">
@@ -703,11 +738,19 @@ export function NumberChecker() {
                   <div className="nc-stat-label">Registered</div>
                 </div>
                 <div className="nc-stat-box">
-                  <div className="nc-stat-number" style={{ color: 'var(--error-text)' }}>
+                  <div className="nc-stat-number" style={{ color: 'var(--text-secondary)' }}>
                     {unregisteredCount}
                   </div>
                   <div className="nc-stat-label">Not Registered</div>
                 </div>
+                {failedCount > 0 && (
+                  <div className="nc-stat-box">
+                    <div className="nc-stat-number" style={{ color: 'var(--error-text)' }}>
+                      {failedCount}
+                    </div>
+                    <div className="nc-stat-label">Failed</div>
+                  </div>
+                )}
                 <div className="nc-stat-box">
                   <div className="nc-stat-number">{Math.max(0, batchProgress.total - batchProgress.current)}</div>
                   <div className="nc-stat-label">Remaining</div>
@@ -735,6 +778,14 @@ export function NumberChecker() {
                   >
                     Not Registered ({unregisteredCount})
                   </button>
+                  {failedCount > 0 && (
+                    <button
+                      className={`nc-filter-btn ${batchFilter === 'failed' ? 'active' : ''}`}
+                      onClick={() => setBatchFilter('failed')}
+                    >
+                      Failed ({failedCount})
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -754,10 +805,28 @@ export function NumberChecker() {
                       <td style={{ color: 'var(--text-muted)' }}>{idx + 1}</td>
                       <td style={{ fontWeight: 600 }}>+{item.number}</td>
                       <td>
-                        {item.exists ? (
+                        {item.status === 'registered' ? (
                           <span className="nc-status-badge registered">
                             <CheckCircle2 size={13} /> Registered
                           </span>
+                        ) : item.status === 'failed' ? (
+                          <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '0.25rem' }}>
+                            <span className="nc-status-badge error" title={item.error || 'Lookup failed'}>
+                              <AlertCircle size={13} /> Failed
+                            </span>
+                            {item.error && (
+                              <span
+                                style={{
+                                  fontSize: '0.75rem',
+                                  color: 'var(--error-text)',
+                                  maxWidth: '240px',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {item.error}
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="nc-status-badge unregistered">
                             <XCircle size={13} /> Unregistered
