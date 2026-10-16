@@ -12,7 +12,7 @@ A synchronous client built on [Guzzle](https://docs.guzzlephp.org/), PSR-4 autol
 composer require rmyndharis/openwa
 ```
 
-Requires PHP 8.1+ and Guzzle 7. The namespace is `OpenWA\`.
+Requires PHP 8.1+ and Guzzle 7.9+ or 8.x. The namespace is `OpenWA\`.
 
 ## Usage
 
@@ -50,6 +50,8 @@ $client = new Client([
     'httpClient' => $mockGuzzleClient,
 ]);
 ```
+
+The optional `defaultHeaders` map accepts strings, scalar values, null, and non-empty lists of those values. Numbers, booleans, and null are converted to text. An empty list is rejected by header name before any request is sent because Guzzle 8 cannot represent a header with zero values. Use `''` for an empty header value.
 
 ## Messaging
 
