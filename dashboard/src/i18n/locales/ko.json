@@ -62,6 +62,7 @@
     "dashboard": "대시보드",
     "sessions": "세션",
     "chats": "채팅",
+    "numberChecker": "번호 확인",
     "webhooks": "웹훅",
     "templates": "템플릿",
     "apiKeys": "API 키",

@@ -64,6 +64,7 @@
     "dashboard": "Tableau de bord",
     "sessions": "Sessions",
     "chats": "Discussions",
+    "numberChecker": "Vérificateur de numéros",
     "webhooks": "Webhooks",
     "templates": "Templates",
     "apiKeys": "Clés API",

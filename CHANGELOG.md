@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation.
+
 ### Fixed
 
 - Refuse media exports and file counts when local directories cannot be fully enumerated.

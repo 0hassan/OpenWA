@@ -62,6 +62,7 @@
     "dashboard": "Dashboard",
     "sessions": "Sessions",
     "chats": "Chats",
+    "numberChecker": "Number Checker",
     "webhooks": "Webhooks",
     "templates": "Templates",
     "apiKeys": "API Keys",
