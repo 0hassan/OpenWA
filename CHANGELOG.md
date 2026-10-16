@@ -10,10 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation.
+- Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
+
+### Changed
+
+- Support Guzzle 8 in the PHP SDK while retaining Guzzle 7 compatibility (#1870).
+- Reject empty PHP SDK `defaultHeaders` lists before sending requests; use `''` for an empty header value (#1870).
 
 ### Fixed
 
 - Refuse media exports and file counts when local directories cannot be fully enumerated.
+- Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885).
+- Exclude local repository metadata from Java SDK Maven Central bundles built with Maven 3.10 (#1879).
 
 ## [0.25.0] - 2026-10-15
 
@@ -30,7 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `startupProbe.periodSeconds` and `startupProbe.failureThreshold` to the Helm chart's values, defaulting to the 5 s and 60 the chart rendered before, so a large messages table can be given a longer boot budget.
 - Expose caller-supplied send idempotency keys in all five SDKs from SDK 0.6.0; the 0.5.1 JavaScript and PHP packages ignore the extra argument.
 - Add optional 24-hour idempotency keys to twelve single-recipient send routes.
-- Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
 - Add opt-in archive-only chat media with dashboard previews.
 - Report RSVPs to WhatsApp events as an `event.response` webhook and WebSocket event on Baileys; the JavaScript, Python, Go and Java SDKs list the event name from SDK 0.6.0 (#1788, thanks @jelasus).
 
