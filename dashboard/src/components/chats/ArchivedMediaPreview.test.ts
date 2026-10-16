@@ -255,7 +255,7 @@ test('an archived audio player reports its arrival so a bottom-pinned thread sta
     }),
   );
   await rtl.waitFor(() => assert.ok(container.querySelector('audio.chat-audio-media'), 'audio did not render'));
-  assert.equal(reports, 1, 'the thread is told once that the placeholder became a player');
+  await rtl.waitFor(() => assert.equal(reports, 1, 'the thread is told once that the placeholder became a player'));
 });
 
 test('previews mounted together start their fetches apart, so a burst stays under the gateway throttle', async () => {
