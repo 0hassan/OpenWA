@@ -2566,6 +2566,134 @@ describe('WhatsAppWebJsAdapter ready reconciliation (#251/#273)', () => {
     expect(onQRCode).toHaveBeenCalledTimes(1);
   });
 
+  it.each([EngineStatus.AUTHENTICATING, EngineStatus.READY, EngineStatus.ACTION_REQUIRED])(
+    'ignores a QR event while the session is %s',
+    async status => {
+      jest.useFakeTimers();
+      const encode = qrcode.toDataURL as unknown as jest.Mock;
+      encode.mockClear();
+      const adapter = newAdapter();
+      const { client, onStateChanged } = attachFakeClient(adapter);
+      const onQRCode = jest.fn();
+      (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+      client.emit('authenticated');
+      if (status === EngineStatus.READY) client.emit('ready');
+      if (status === EngineStatus.ACTION_REQUIRED) {
+        (adapter as unknown as { lifecycle: { setStatus: (status: EngineStatus) => void } }).lifecycle.setStatus(
+          status,
+        );
+      }
+      onStateChanged.mockClear();
+
+      client.emit('qr', '2@buffered');
+      await Promise.resolve();
+
+      expect(encode).not.toHaveBeenCalled();
+      expect(adapter.getStatus()).toBe(status);
+      expect(adapter.getQRCode()).toBeNull();
+      expect(onQRCode).not.toHaveBeenCalled();
+      expect(onStateChanged).not.toHaveBeenCalled();
+    },
+  );
+
+  it('publishes QR rotations while the session is awaiting linking', async () => {
+    (qrcode.toDataURL as unknown as jest.Mock)
+      .mockResolvedValueOnce('data:image/png;base64,FIRSTQR')
+      .mockResolvedValueOnce('data:image/png;base64,NEXTQR');
+    const adapter = newAdapter();
+    const { client } = attachFakeClient(adapter);
+    const onQRCode = jest.fn();
+    (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+
+    client.emit('qr', '2@first');
+    await Promise.resolve();
+    expect(adapter.getQRCode()).toBe('data:image/png;base64,FIRSTQR');
+    client.emit('qr', '2@next');
+    await Promise.resolve();
+
+    expect(adapter.getStatus()).toBe(EngineStatus.QR_READY);
+    expect(adapter.getQRCode()).toBe('data:image/png;base64,NEXTQR');
+    expect(onQRCode.mock.calls).toEqual([['data:image/png;base64,FIRSTQR'], ['data:image/png;base64,NEXTQR']]);
+  });
+
+  it.each(['failed', 'replaced', 'teardown'])(
+    'drops a QR whose encode finishes after the client is %s',
+    async state => {
+      let finishEncode!: (value: string) => void;
+      (qrcode.toDataURL as unknown as jest.Mock).mockReturnValueOnce(
+        new Promise<string>(resolve => {
+          finishEncode = resolve;
+        }),
+      );
+      const adapter = newAdapter();
+      const { client, onStateChanged } = attachFakeClient(adapter);
+      const onQRCode = jest.fn();
+      (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+      client.emit('qr', '2@rendering');
+      if (state === 'failed') {
+        (adapter as unknown as { lifecycle: { setStatus: (status: EngineStatus) => void } }).lifecycle.setStatus(
+          EngineStatus.FAILED,
+        );
+      } else if (state === 'replaced') {
+        attachFakeClient(adapter);
+        (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+      } else {
+        client.destroy = jest.fn().mockResolvedValue(undefined);
+        await adapter.disconnect();
+      }
+      const status = adapter.getStatus();
+      onStateChanged.mockClear();
+
+      finishEncode('data:image/png;base64,LATEQR');
+      await Promise.resolve();
+
+      expect(adapter.getStatus()).toBe(status);
+      expect(adapter.getQRCode()).toBeNull();
+      expect(onQRCode).not.toHaveBeenCalled();
+      expect(onStateChanged).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([EngineStatus.AUTHENTICATING, EngineStatus.READY, EngineStatus.ACTION_REQUIRED])(
+    'drops a QR whose encode finishes after the session becomes %s',
+    async status => {
+      jest.useFakeTimers();
+      let finishEncode!: (value: string) => void;
+      (qrcode.toDataURL as unknown as jest.Mock).mockReturnValueOnce(
+        new Promise<string>(resolve => {
+          finishEncode = resolve;
+        }),
+      );
+      const adapter = newAdapter();
+      const { client, onReady, onStateChanged } = attachFakeClient(adapter, { eventsAttached: true });
+      const onQRCode = jest.fn();
+      (adapter as unknown as { callbacks: { onQRCode: jest.Mock } }).callbacks.onQRCode = onQRCode;
+
+      client.emit('qr', '2@rendering');
+      client.emit('authenticated');
+      if (status === EngineStatus.READY) client.emit('ready');
+      if (status === EngineStatus.ACTION_REQUIRED) {
+        (adapter as unknown as { lifecycle: { setStatus: (status: EngineStatus) => void } }).lifecycle.setStatus(
+          status,
+        );
+      }
+      expect(adapter.getStatus()).toBe(status);
+      onStateChanged.mockClear();
+      finishEncode('data:image/png;base64,LATEQR');
+      await Promise.resolve();
+
+      expect(adapter.getStatus()).toBe(status);
+      expect(adapter.getQRCode()).toBeNull();
+      expect(onQRCode).not.toHaveBeenCalled();
+      expect(onStateChanged).not.toHaveBeenCalled();
+      expect(onReady).toHaveBeenCalledTimes(status === EngineStatus.READY ? 1 : 0);
+      if (status === EngineStatus.READY) {
+        client.pupPage.evaluate.mockResolvedValue([]);
+        await expect(adapter.getChats()).resolves.toEqual([]);
+      }
+    },
+  );
+
   // The cached QR belongs to the page that produced it. A Chromium crash or tab close while the operator
   // is looking at the QR is the reachable vector: handlePuppeteerDeath fires at QR_READY, the session
   // keeps the engine registered across its reconnect backoff, and GET /qr kept answering 200 with a code
