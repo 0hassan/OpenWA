@@ -123,6 +123,36 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
     expect(res.total).toBe(0);
   });
 
+  it('applies inclusive millisecond windows to rows and paginated totals', async () => {
+    const timestamps = [-2, -1, 0, 1, 2, 1_700_000_000, 1_700_000_001];
+    for (const timestamp of timestamps) {
+      await ds.query(
+        `INSERT INTO "messages" ("id","sessionId","chatId","from","to","body","timestamp") ` +
+          `VALUES ($1,'s1','c1','a@c.us','dest@c.us','boundarywindow',$2)`,
+        [`boundary-${timestamp}`, timestamp],
+      );
+    }
+    const windows = [
+      { dateFrom: 1000, dateTo: 2000, want: [2, 1] },
+      { dateFrom: 1001, dateTo: 1999, want: [] },
+      { dateFrom: 0, dateTo: 0, want: [0] },
+      { dateFrom: -1999, dateTo: -1, want: [-1] },
+      { dateFrom: -2000, dateTo: -1001, want: [-2] },
+      { dateFrom: 0.5, dateTo: 1999.5, want: [1] },
+      { dateFrom: 1000, dateTo: 1000, want: [1] },
+      { dateFrom: 2000, dateTo: 1000, want: [] },
+      { dateFrom: 1_700_000_000_001, dateTo: 1_700_000_001_000, want: [1_700_000_001] },
+    ];
+    for (const { want, ...bounds } of windows) {
+      const result = await provider.search({ q: 'boundarywindow', ...bounds });
+      expect(result.hits.map(hit => hit.timestamp)).toEqual(want);
+      expect(result.total).toBe(want.length);
+      const page = await provider.search({ q: 'boundarywindow', ...bounds, limit: 1, offset: 1 });
+      expect(page.hits.map(hit => hit.timestamp)).toEqual(want.slice(1, 2));
+      expect(page.total).toBe(want.length);
+    }
+  });
+
   it('reports healthy', async () => {
     expect((await provider.health()).ok).toBe(true);
   });

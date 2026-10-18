@@ -409,7 +409,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
     // silently exclude all results.
     if (q.dateFrom != null) {
       where.push(`${prefix}"timestamp" >= ${ph()}`);
-      params.push(Math.floor(q.dateFrom / 1000));
+      params.push(Math.ceil(q.dateFrom / 1000));
     }
     if (q.dateTo != null) {
       where.push(`${prefix}"timestamp" <= ${ph()}`);
