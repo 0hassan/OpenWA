@@ -337,7 +337,7 @@ export class PluginSandboxBridge {
 
     const onSearchProviderRegister = this.buildSearchProviderRegistrar(pluginId, plugin);
 
-    const onWorkerExit = this.buildWorkerExitHandler(pluginId, logRelayState);
+    const onWorkerExit = this.buildWorkerExitHandler(pluginId, logRelayState, () => host);
 
     // A worker whose event loop stays blocked after a dispatch timeout (a synchronous loop in plugin
     // code) would otherwise keep running and queue every later dispatch for the full budget each.
@@ -646,6 +646,7 @@ export class PluginSandboxBridge {
   private buildWorkerExitHandler(
     pluginId: string,
     logRelayState: SandboxLogRelayState,
+    getSourceHost: () => PluginWorkerHost,
   ): (code: number, intentional: boolean, reason?: string) => void {
     return (code: number, intentional: boolean, reason?: string): void => {
       // Final log-relay flush: the per-window drop warn above only fires when a new line arrives in a
@@ -658,9 +659,10 @@ export class PluginSandboxBridge {
         );
         logRelayState.dropped = 0;
       }
-      // Always release the search-provider slot so the registry can fall back to builtin-fts. On a crash
-      // this is the only cleanup; on a deliberate disable/enable-failure the explicit unregister already
-      // ran, making this a harmless no-op.
+      // A replacement owns its provider, hooks and status. An absent host still needs cleanup after
+      // markWorkerFailed removed the retiring worker before its termination completed.
+      const currentHost = this.sandboxHosts.get(pluginId);
+      if (currentHost && currentHost !== getSourceHost()) return;
       unregisterPluginSearchProvider(this.hostServices.getSearchRegistryPort(), pluginId);
       if (intentional) return; // routine disable/enable-failure already logged and expected
       // Unexpected crash after a successful enable: the worker is gone. Drop the dead host +

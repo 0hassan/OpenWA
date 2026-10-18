@@ -191,7 +191,15 @@ describe('ChatMediaArchiveService', () => {
         { assertSendAllowed: () => Promise.resolve(), recordSendSuccess: () => undefined } as never,
         fakeConfigService({ 'features.simulateTyping': false }),
       );
-      jest.spyOn(repository, 'update').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+      const update = repository.update.bind(repository);
+      let mergeFailed = false;
+      jest.spyOn(repository, 'update').mockImplementation((where, patch) => {
+        if (!mergeFailed && patch.metadata && typeof where === 'object' && where !== null && 'waMessageId' in where) {
+          mergeFailed = true;
+          return Promise.reject(new Error('SQLITE_BUSY'));
+        }
+        return update(where, patch);
+      });
       const media = { mimetype: 'image/png', data: PNG.toString('base64') };
       if (mode === 'bulk') {
         await sender.saveOutgoingMessage('sess-1', {
@@ -204,6 +212,7 @@ describe('ChatMediaArchiveService', () => {
       } else {
         await sender.sendImage('sess-1', { chatId: row.chatId, base64: media.data, mimetype: media.mimetype });
       }
+      expect(mergeFailed).toBe(true);
       const retained = await repository.findOneByOrFail({ sessionId: 'sess-1', waMessageId: IsNull() });
       expect(retained.status).toBe(MessageStatus.SENT);
       expect(retained.metadata.media).toEqual(media);

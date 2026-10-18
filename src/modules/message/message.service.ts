@@ -15,6 +15,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
 import { MessageSendService, SaveOutgoingMessageData } from './message-send.service';
+import { SessionWriteScope } from '../../common/utils/session-write-scope';
 // Type-only: the module binds this class to PLUGIN_MESSAGE_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginMessagePort } from '../../core/plugins/plugin-host-ports';
@@ -288,8 +289,12 @@ export class MessageService implements PluginMessagePort {
   }
 
   /** Persist an outbound row; exposed for the bulk path, which reuses the send-persistence rules. */
-  saveOutgoingMessage(sessionId: string, data: SaveOutgoingMessageData): Promise<Message> {
-    return this.sender.saveOutgoingMessage(sessionId, data);
+  saveOutgoingMessage(
+    sessionId: string,
+    data: SaveOutgoingMessageData,
+    lifetime?: SessionWriteScope,
+  ): Promise<Message> {
+    return this.sender.saveOutgoingMessage(sessionId, data, lifetime);
   }
 
   /**

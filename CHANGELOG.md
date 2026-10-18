@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep deleted sessions free of late message, status and bulk writes.
+- Retain sending limits while hooks or preparation are pending, including across UTC midnight.
+- Preserve whatsapp-web.js readiness when an earlier QR render completes.
+- Cancel stale Message Tester actions after logout, key changes or leaving the page.
+- Load all authorized chat pages in the dashboard.
+- Bound Redis cache commands and discard expired operations during reconnect.
+- Preserve literal request values in custom ingress acknowledgments.
+- Honor inclusive millisecond lower bounds in built-in search.
+- Preserve replacement plugin search providers during worker recovery.
 - Refuse media exports and file counts when local directories cannot be fully enumerated.
 - Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885).
 - Exclude local repository metadata from Java SDK Maven Central bundles built with Maven 3.10 (#1879).

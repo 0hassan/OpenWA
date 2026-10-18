@@ -567,6 +567,13 @@ export class WwebjsLifecycle {
     // this.client while the old page can still flush a buffered event through its bindings, so the
     // qr, authenticated and ready listeners fence on this identity before touching this.client.
     const source = this.client;
+    const canPublishQr = (): boolean =>
+      this.client === source &&
+      !this.tearingDown &&
+      !this.disconnectReported &&
+      ![EngineStatus.AUTHENTICATING, EngineStatus.READY, EngineStatus.ACTION_REQUIRED, EngineStatus.FAILED].includes(
+        this.getStatus(),
+      );
 
     // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.client.on('qr', async (qr: string) => {
@@ -577,14 +584,7 @@ export class WwebjsLifecycle {
       // finished adapter to QR_READY and publish a QR that links a phantom device. Mirrors the
       // 'authenticated' guard below; the normal first QR is unaffected (initialize() moves the status to
       // INITIALIZING before any client exists, so the latch is still clear).
-      if (
-        this.client !== source ||
-        this.tearingDown ||
-        this.disconnectReported ||
-        this.status === EngineStatus.FAILED
-      ) {
-        return;
-      }
+      if (!canPublishQr()) return;
       this.qrShown = true;
       // qrcode.toDataURL() is an awaited macrotask: a 'disconnected' (or a teardown nulling this.client)
       // that lands during the encode leaves the pre-await guard stale. Encode to a LOCAL so the stored
@@ -594,17 +594,9 @@ export class WwebjsLifecycle {
         // Post-await fence: the encode resolved, but the source client may have disconnected or been
         // replaced while we were waiting. Re-check the live client identity and the finished flags before
         // assigning state, publishing a QR, or driving any downstream callback/webhook — a late encode for
-        // a dead/finished adapter must be dropped, not resurrected. The status is read through getStatus()
-        // (not `this.status`) so the pre-await guard's narrowing does not elide this comparison:
-        // setStatus(FAILED) can run on another tick during the await.
-        if (
-          this.client !== source ||
-          this.tearingDown ||
-          this.disconnectReported ||
-          this.getStatus() === EngineStatus.FAILED
-        ) {
-          return;
-        }
+        // a dead/finished adapter must be dropped. Authentication or an operator-required state reached
+        // during encoding also makes this QR obsolete.
+        if (!canPublishQr()) return;
         this.qrCode = encodedQr;
         this.setStatus(EngineStatus.QR_READY);
         this.host.getCallbacks().onQRCode?.(this.qrCode);

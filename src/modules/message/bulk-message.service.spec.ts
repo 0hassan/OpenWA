@@ -1,3 +1,4 @@
+import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   BadRequestException,
@@ -419,7 +420,11 @@ describe('BulkMessageService.processBatch', () => {
   });
 
   const runProcessBatch = (): Promise<void> =>
-    (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch('b1');
+    (
+      service as unknown as {
+        processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+      }
+    ).processBatch('b1', false, captureSessionWrites(repo, 's1'));
 
   const inFlightMarkers = (): Map<string, boolean> =>
     (service as unknown as { processingBatches: Map<string, boolean> }).processingBatches;
@@ -997,6 +1002,7 @@ describe('BulkMessageService.processBatch', () => {
         type: 'text',
         status: MessageStatus.SENT,
       }),
+      expect.anything(),
     );
   });
 
@@ -1027,10 +1033,12 @@ describe('BulkMessageService.processBatch', () => {
         body: 'clip',
         metadata: { media: { mimetype: 'video/mp4', data: 'AAAA', filename: undefined } },
       }),
+      expect.anything(),
     );
     expect(messageService.saveOutgoingMessage).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({ chatId: 'c1@c.us', body: 'hi', metadata: undefined }),
+      expect.anything(),
     );
   });
 
@@ -1048,6 +1056,7 @@ describe('BulkMessageService.processBatch', () => {
     expect(messageService.saveOutgoingMessage).toHaveBeenCalledWith(
       's1',
       expect.objectContaining({ metadata: { media: { mimetype: 'image/jpeg', data: 'AAAA', filename: undefined } } }),
+      expect.anything(),
     );
   });
 
@@ -1285,7 +1294,11 @@ describe('BulkMessageService.processBatch', () => {
       'c0@c.us',
       expect.objectContaining({ ptt: true, mimetype: 'audio/ogg; codecs=opus' }),
     );
-    expect(messageService.saveOutgoingMessage).toHaveBeenCalledWith('s1', expect.objectContaining({ type: 'voice' }));
+    expect(messageService.saveOutgoingMessage).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ type: 'voice' }),
+      expect.anything(),
+    );
   });
 
   it('strips base64 media payloads from the stored batch once it completes (footprint)', async () => {
@@ -2121,7 +2134,11 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     // createBatch's own fire-and-forget processBatch saw no persisted row (findOne → undefined);
     // drive the processing explicitly with the created batch now "in the DB".
     repo.findOne.mockResolvedValue(batch);
-    await (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch(batch.id);
+    await (
+      service as unknown as {
+        processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+      }
+    ).processBatch(batch.id, false, captureSessionWrites(repo, batch.sessionId));
 
     expect(engine.sendTextMessage).toHaveBeenCalledTimes(2);
     expect(engine.sendTextMessage).toHaveBeenNthCalledWith(1, 'a@c.us', 'first');
@@ -2145,7 +2162,11 @@ describe('BulkMessageService.createBatch base64 media cap', () => {
     const batch = await service.createBatch('s1', dto);
     // Same fire-and-forget caveat as above — drive processing explicitly with the batch "in the DB".
     repo.findOne.mockResolvedValue(batch);
-    await (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch(batch.id);
+    await (
+      service as unknown as {
+        processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+      }
+    ).processBatch(batch.id, false, captureSessionWrites(repo, batch.sessionId));
 
     expect(engine.sendTextMessage).toHaveBeenCalledTimes(1);
     expect(engine.sendTextMessage).toHaveBeenCalledWith('a@c.us', 'part 1');

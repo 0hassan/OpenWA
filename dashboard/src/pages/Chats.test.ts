@@ -55,7 +55,8 @@ let statuses: StatusUpdate[] = [];
 
 // Answers a session's chat list in place of the fixture, keyed by the session id in the URL (before
 // the rewrite below folds session-2 onto session-1), so a test can land two lists in any order.
-let chatsResponder: ((sessionId: string) => Promise<Response>) | null = null;
+let chatsResponder: ((sessionId: string, offset: number, signal?: AbortSignal | null) => Promise<Response>) | null =
+  null;
 
 const CHAT: Chat = {
   id: '15550001111@c.us',
@@ -301,8 +302,13 @@ function installFetchStub(): void {
     if (method === 'GET' && path === `/api/sessions/${SESSION.id}/channels`) {
       return Promise.resolve(jsonResponse(channels));
     }
-    if (method === 'GET' && path === `/api/sessions/${SESSION.id}/chats`) {
-      if (chatsResponder) return chatsResponder(url.includes(`/sessions/${SESSION_2.id}/`) ? SESSION_2.id : SESSION.id);
+    if (method === 'GET' && /^\/api\/sessions\/[^/]+\/chats(?:\?|$)/.test(path)) {
+      if (chatsResponder)
+        return chatsResponder(
+          url.includes(`/sessions/${SESSION_2.id}/`) ? SESSION_2.id : SESSION.id,
+          Number(new URL(url, 'http://localhost').searchParams.get('offset')),
+          init?.signal,
+        );
       return Promise.resolve(jsonResponse([CHAT, CHAT_2]));
     }
     if (method === 'GET' && path.startsWith(`/api/sessions/${SESSION.id}/contacts/profile-pictures`)) {
@@ -851,7 +857,11 @@ test('a message arriving the moment the chat list commits updates the listed row
     await waitFor(() => assert.ok(screen.queryByLabelText('3 unread messages'), 'the arrival did not reach the row'));
     await flush();
     assert.ok(delivered, 'the frame was never delivered');
-    assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1, 'a listed chat refetched the list');
+    assert.equal(
+      countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`),
+      1,
+      'a listed chat refetched the list',
+    );
     assert.ok(screen.queryByLabelText('3 unread messages'), 'a refetch overwrote the live row');
   } finally {
     observer.disconnect();
@@ -863,7 +873,7 @@ test('a socket reconnect refetches the chat list so the sidebar shows what arriv
   resetFetchCalls();
   renderChats();
   await screen.findByText('Alice');
-  const chatsPath = `/api/sessions/${SESSION.id}/chats`;
+  const chatsPath = `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`;
   assert.equal(countFetchCalls('GET', chatsPath), 1);
 
   // While the socket was down, Alice wrote again and a new chat started.
@@ -899,7 +909,7 @@ test('a message that lands while a reconnect refetch is out survives the older s
   assert.ok(socket, 'expected the page to have opened a socket');
   act(() => socket.receive('disconnect', 'transport close'));
   act(() => socket.receive('connect'));
-  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 2));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 2));
 
   act(() =>
     socket.receive('message', {
@@ -998,7 +1008,7 @@ test('a reconnect whose refetch fails while the engine starts sends no mark-as-r
   act(() => socket.receive('connect'));
 
   await new Promise(resolve => setTimeout(resolve, 1_000));
-  assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1);
+  assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1);
   assert.ok(
     !findFetchCall('POST', `/api/sessions/${SESSION.id}/chats/read`),
     'a mark-as-read went out while the engine was starting',
@@ -1024,7 +1034,7 @@ test('a reconnect refetch that settles after the open chat was left keeps its un
   assert.ok(socket, 'expected the page to have opened a socket');
   act(() => socket.receive('disconnect', 'transport close'));
   act(() => socket.receive('connect'));
-  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
 
   // The user moves on to Carol before the refetch lands; Alice's new message was never seen.
   fireEvent.click(await screen.findByText('Carol'));
@@ -1062,7 +1072,7 @@ test('a reconnect refetch that settles after the page was left sends no mark-as-
   assert.ok(socket, 'expected the page to have opened a socket');
   act(() => socket.receive('disconnect', 'transport close'));
   act(() => socket.receive('connect'));
-  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
 
   // The operator opens another page before the refetch lands; the gap messages were never seen.
   unmount();
@@ -1129,7 +1139,7 @@ test('a reconnect refetch overtaken by a newer list still marks the open chat re
   assert.ok(socket, 'expected the page to have opened a socket');
   act(() => socket.receive('disconnect', 'transport close'));
   act(() => socket.receive('connect'));
-  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
 
   act(() =>
     socket.receive('message', {
@@ -1190,7 +1200,9 @@ test("a reconnect refetch that settles after a session switch leaves the new ses
     assert.ok(socket, 'expected the page to have opened a socket');
     act(() => socket.receive('disconnect', 'transport close'));
     act(() => socket.receive('connect'));
-    await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`) >= 2, true));
+    await waitFor(() =>
+      assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`) >= 2, true),
+    );
 
     fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
       target: { value: SESSION_2.id },
@@ -1894,7 +1906,7 @@ test('every message for a chat the sidebar does not list refetches the list, and
       },
     });
   // Each arrival renders before the next, the shape of live traffic.
-  const chatsPath = `/api/sessions/${SESSION.id}/chats`;
+  const chatsPath = `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`;
   for (const [index, id] of ['wamid.dave.1', 'wamid.dave.2', 'wamid.dave.3'].entries()) {
     receive(id);
     await waitFor(() => assert.equal(countFetchCalls('GET', chatsPath), index + 1, 'an arrival did not refetch'));
@@ -1948,7 +1960,7 @@ test('a message deleted for everyone in a chat never opened refetches the chat l
   resetFetchCalls();
 
   revoke(CHAT_2.id, 'wamid.carol.1');
-  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats`), 1));
+  await waitFor(() => assert.equal(countFetchCalls('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`), 1));
 });
 
 test('a delayed poll echo cannot restore a revoked message or its sidebar preview', async () => {
@@ -2830,4 +2842,111 @@ test('an edit arriving after the newest message was deleted for everyone does no
     'the edit of a deleted message came back as the sidebar preview',
   );
   assert.ok(!within(room).queryByText('late edit'), 'the edit of a deleted message came back into the thread');
+});
+
+const LARGE_CHAT_PAGE: Chat[] = [
+  CHAT,
+  ...Array.from({ length: 999 }, (_, i) => ({ ...CHAT_2, id: `large-${i}@c.us`, name: `Conversation ${i}` })),
+];
+const TAIL_CHAT: Chat = { ...CHAT_2, id: 'tail@c.us', name: 'Tail conversation' };
+
+test('a conversation past the first 1000 is searchable and opens from the sidebar', async () => {
+  chatsResponder = (_sessionId, offset) => Promise.resolve(jsonResponse(offset === 0 ? LARGE_CHAT_PAGE : [TAIL_CHAT]));
+  const { container } = renderChats();
+  await rtl.screen.findByText('Tail conversation');
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText('Search chats...'), { target: { value: 'Tail conversation' } });
+  assert.equal(container.querySelectorAll('.chat-item-card').length, 1);
+  rtl.fireEvent.click(rtl.screen.getByText('Tail conversation'));
+  await rtl.within(container.querySelector('.room-header') as HTMLElement).findByText('Tail conversation');
+});
+
+for (const action of ['switch session', 'unmount'] as const) {
+  test(`a chat list stops paging after ${action}`, async () => {
+    twoSessions = true;
+    const offsets: number[] = [];
+    let signal: AbortSignal | null | undefined;
+    let release!: (response: Response) => void;
+    const pending = new Promise<Response>(resolve => {
+      release = resolve;
+    });
+    chatsResponder = (sessionId, offset, requestSignal) => {
+      if (sessionId === SESSION_2.id) return Promise.resolve(jsonResponse([CHAT_2]));
+      offsets.push(offset);
+      signal = requestSignal;
+      return offset === 0 ? Promise.resolve(jsonResponse(LARGE_CHAT_PAGE)) : pending;
+    };
+    const view = renderChats();
+    await rtl.waitFor(() => assert.deepEqual(offsets, [0, 1000]));
+    if (action === 'switch session') {
+      rtl.fireEvent.change(view.container.querySelector('select.session-selector') as HTMLSelectElement, {
+        target: { value: SESSION_2.id },
+      });
+      await rtl.screen.findByText('Carol');
+    } else view.unmount();
+    assert.equal(signal?.aborted, true);
+    await rtl.act(async () => {
+      release(jsonResponse(LARGE_CHAT_PAGE));
+      await new Promise(resolve => setImmediate(resolve));
+    });
+    assert.deepEqual(offsets, [0, 1000]);
+    if (action === 'switch session') assert.equal(rtl.screen.queryByText('Alice'), null);
+    twoSessions = false;
+  });
+}
+
+test('a failed later chat page keeps the previously loaded sidebar', async () => {
+  renderChats();
+  await rtl.screen.findByText('Alice');
+  chatsResponder = (_sessionId, offset) =>
+    Promise.resolve(
+      offset === 0 ? jsonResponse(LARGE_CHAT_PAGE) : jsonResponse({ message: 'Later page unavailable' }, 500),
+    );
+  const socket = lastSocket()!;
+  rtl.act(() => socket.receive('disconnect', 'transport close'));
+  rtl.act(() => socket.receive('connect'));
+  await rtl.waitFor(() => assert.ok(findFetchCall('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=1000`)));
+  await flush();
+  assert.ok(rtl.screen.queryByText('Alice'));
+  assert.equal(rtl.screen.queryByText('Conversation 1'), null);
+});
+
+test('a live sidebar row survives movement outside a paginated reconnect snapshot', async () => {
+  renderChats();
+  await rtl.screen.findByText('Alice');
+  let release!: (response: Response) => void;
+  const pending = new Promise<Response>(resolve => {
+    release = resolve;
+  });
+  chatsResponder = (_sessionId, offset) =>
+    offset === 0
+      ? Promise.resolve(
+          jsonResponse(
+            Array.from({ length: 1000 }, (_, i) => ({ ...CHAT_2, id: `snapshot-${i}@c.us`, name: `Snapshot ${i}` })),
+          ),
+        )
+      : pending;
+  const socket = lastSocket()!;
+  rtl.act(() => socket.receive('disconnect', 'transport close'));
+  rtl.act(() => socket.receive('connect'));
+  await rtl.waitFor(() => assert.ok(findFetchCall('GET', `/api/sessions/${SESSION.id}/chats?limit=1000&offset=1000`)));
+  rtl.act(() =>
+    receiveEvent('message.received', {
+      id: 'live-during-paging',
+      chatId: CHAT.id,
+      from: CHAT.id,
+      to: 'me',
+      body: 'Updated during paging',
+      type: 'text',
+      fromMe: false,
+      timestamp: 1_700_004_000,
+    }),
+  );
+  await rtl.screen.findByText('Updated during paging');
+  await rtl.act(async () => {
+    release(jsonResponse([TAIL_CHAT]));
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  await rtl.screen.findByText('Tail conversation');
+  assert.equal(rtl.screen.getAllByText('Updated during paging').length, 1);
+  assert.ok(rtl.screen.queryByLabelText('3 unread messages'));
 });

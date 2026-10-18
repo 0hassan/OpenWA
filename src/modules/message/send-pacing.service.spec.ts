@@ -1,3 +1,4 @@
+import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import {
   BadRequestException,
   HttpException,
@@ -84,6 +85,15 @@ const expectPacingRefusal = async (promise: Promise<unknown>): Promise<Record<st
 
 describe('SendPacingService', () => {
   beforeEach(() => resetSendPacingRefusals());
+
+  it('settles an admission only once', async () => {
+    const { service } = build({ warmupSchedule: [1] });
+    const settle = await service.assertSendAllowed('s1', 'first@c.us', { whilePreparing: true });
+    settle?.(true);
+    settle?.();
+
+    await expectPacingRefusal(service.assertSendAllowed('s1', 'second@c.us'));
+  });
 
   describe('when disabled', () => {
     // The disabled path must cost nothing and change nothing — a deployment that has not opted in
@@ -328,7 +338,7 @@ describe('send paths consult the governor', () => {
 
     // The recipient must reach the governor too: without it the cold-reachout rule has nothing to
     // classify and silently degrades to the overall cap.
-    expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us');
+    expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us', { whilePreparing: true });
     // The ordering decision, pinned: a paced-out send is never offered to plugins, so no
     // `message:sending` fires and nothing is persisted or sent.
     expect(hookManager.execute).not.toHaveBeenCalled();
@@ -421,7 +431,15 @@ describe('send paths consult the governor', () => {
       pacing as never,
     );
 
-    await (service as unknown as { processBatch: (id: string) => Promise<void> }).processBatch('b1');
+    await (
+      service as unknown as {
+        processBatch: (id: string, reserved: boolean, lifetime: SessionWriteScope) => Promise<void>;
+      }
+    ).processBatch(
+      'b1',
+      false,
+      captureSessionWrites((service as unknown as { batchRepository: object }).batchRepository, 's1'),
+    );
 
     expect(pacing.assertSendAllowed).toHaveBeenCalledWith('s1', 'c@c.us', { untilSettled: true });
     expect(hookManager.execute).not.toHaveBeenCalledWith('message:sending', expect.anything(), expect.anything());

@@ -20,6 +20,7 @@ import { Template } from '../template/entities/template.entity';
 import { BaileysStoredMessage } from '../../engine';
 import { ChatState } from '../../engine/adapters/baileys-chat-state.entity';
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
+import { closeSessionWrites } from '../../common/utils/session-write-scope';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
@@ -686,6 +687,7 @@ export class SessionEngineControls {
     // sessionErrors (and the recovery budget, Task 8) are cleared ONLY on a committed delete; a
     // rejected 409 from fence #2 leaves them intact (the session still exists).
     let parentDeleted = false;
+    const writes = closeSessionWrites(this.host.dataSource(), id);
 
     try {
       // Stop engine if running — time-bounded + isolated so a stuck Chromium can't wedge the delete;
@@ -724,6 +726,7 @@ export class SessionEngineControls {
         throw fenceError;
       }
 
+      await writes.drain();
       // Execute hook BEFORE delete so plugins can access session data
       await this.hookManager.execute(
         'session:deleted',
@@ -795,6 +798,7 @@ export class SessionEngineControls {
       const nameIsAnId = await this.sessionRepository.exists({ where: { id: session.name } }).catch(() => true);
       await this.engineFactory.purgeSessionData(id, nameIsAnId ? undefined : session.name);
     } finally {
+      writes.release();
       // Always clear the teardown mark so a later recreate/start with this id isn't suppressed. This
       // stop mark was set after fence #1, so clearing it on a rejected 409 only undoes what THIS
       // delete added — it does NOT touch reconnect timer / engine / last status / error / recovery

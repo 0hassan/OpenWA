@@ -63,6 +63,7 @@ import { EventsGateway } from '../events/events.gateway';
 import { WebhookService } from '../webhook/webhook.service';
 import { HookManager } from '../../core/hooks';
 import { StatusStoreService } from '../status-store/status-store.service';
+import { captureSessionWrites } from '../../common/utils/session-write-scope';
 import {
   IncomingMessage,
   EngineEventCallbacks,
@@ -249,6 +250,7 @@ describe('SessionService', () => {
     };
 
     statusStore = {
+      captureWrites: jest.fn().mockImplementation((id: string) => captureSessionWrites(dataSource, id)),
       // Default: nothing freshly inserted (callers only dispatch status.received on created=true).
       ingest: jest.fn().mockResolvedValue({ row: {}, created: false }),
     };
@@ -7112,6 +7114,7 @@ describe('SessionService', () => {
           caption: 'hi',
           postedAt: nowSec * 1000,
         }),
+        expect.any(Object),
       );
       // st-b had no cached name, so the seed backfilled it from getContactById.
       expect(statusStore.ingest).toHaveBeenNthCalledWith(
@@ -7124,6 +7127,7 @@ describe('SessionService', () => {
           contactName: 'Bob',
           contactPushName: 'Bobby',
         }),
+        expect.any(Object),
       );
       // The lookup runs only for the poster that lacked a name; st-a already had one.
       expect(mockEngine.getContactById).toHaveBeenCalledWith('628222@c.us');
@@ -7155,6 +7159,7 @@ describe('SessionService', () => {
       expect(statusStore.ingest).toHaveBeenCalledWith(
         'sess-uuid-1',
         expect.objectContaining({ waStatusId: 'st-c', media }),
+        expect.any(Object),
       );
     });
 
@@ -7224,6 +7229,7 @@ describe('SessionService', () => {
         2,
         'sess-uuid-1',
         expect.objectContaining({ waStatusId: 'st-ok' }),
+        expect.any(Object),
       );
     });
 

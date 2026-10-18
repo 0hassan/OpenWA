@@ -251,6 +251,40 @@ describe('BuiltInFtsProvider (sqlite)', () => {
     expect(excluded.hits).toEqual([]);
   });
 
+  it('applies inclusive millisecond windows to rows and paginated totals', async () => {
+    await ds.getRepository(Message).insert(
+      [-2, -1, 0, 1, 2, 1_700_000_000, 1_700_000_001].map(timestamp => ({
+        sessionId: 's1',
+        chatId: 'c1',
+        from: 'a@c.us',
+        to: 'dest@c.us',
+        body: 'boundarywindow',
+        type: 'text',
+        direction: MessageDirection.OUTGOING,
+        timestamp,
+      })),
+    );
+    const windows = [
+      { dateFrom: 1000, dateTo: 2000, want: [2, 1] },
+      { dateFrom: 1001, dateTo: 1999, want: [] },
+      { dateFrom: 0, dateTo: 0, want: [0] },
+      { dateFrom: -1999, dateTo: -1, want: [-1] },
+      { dateFrom: -2000, dateTo: -1001, want: [-2] },
+      { dateFrom: 0.5, dateTo: 1999.5, want: [1] },
+      { dateFrom: 1000, dateTo: 1000, want: [1] },
+      { dateFrom: 2000, dateTo: 1000, want: [] },
+      { dateFrom: 1_700_000_000_001, dateTo: 1_700_000_001_000, want: [1_700_000_001] },
+    ];
+    for (const { want, ...bounds } of windows) {
+      const result = await provider.search({ q: 'boundarywindow', ...bounds });
+      expect(result.hits.map(hit => hit.timestamp)).toEqual(want);
+      expect(result.total).toBe(want.length);
+      const page = await provider.search({ q: 'boundarywindow', ...bounds, limit: 1, offset: 1 });
+      expect(page.hits.map(hit => hit.timestamp)).toEqual(want.slice(1, 2));
+      expect(page.total).toBe(want.length);
+    }
+  });
+
   it('the FTS UPDATE trigger carries a WHEN body-change guard (not fire on ack-only updates)', async () => {
     // The messages_fts_au trigger must be guarded so it only re-indexes when body actually changes.
     // Without the WHEN clause every ack (SENT→DELIVERED→READ) and reaction does a redundant FTS
