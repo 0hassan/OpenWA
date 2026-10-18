@@ -13,6 +13,7 @@ import {
 import { createLogger } from '../../common/services/logger.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { ConfigService } from '@nestjs/config';
+import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Not, QueryDeepPartialEntity, Repository } from 'typeorm';
 import { createHash, randomUUID } from 'crypto';
@@ -318,110 +319,117 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // Check if this batchId already exists FOR THIS SESSION. Scoping by sessionId (matching how
     // getBatchStatus/cancelBatch already query) makes (sessionId, batchId) the namespace: one session
     // can't deny another a batchId, and the 400-vs-202 difference can't probe another session's ids.
-    const existing = await this.batchRepository.findOne({ where: { batchId, sessionId } });
-    if (existing) {
-      throw new BadRequestException(`Batch ID '${batchId}' already exists`);
-    }
-
-    // Refused from the start of the drain: a batch accepted then would be failed part-sent when the
-    // teardown runs. Checked in the same turn as the registration below: a create that passes here is
-    // either seen by the shutdown fail or failed at its pickup in processBatch.
-    if (this.shuttingDown || this.shutdownService?.isShuttingDown() === true) {
-      throw new ServiceUnavailableException('The server is shutting down; retry the batch shortly');
-    }
-
-    // Reject before persisting a row when too many batches are already processing, so a burst can't
-    // hold an unbounded number of full message sets (base64 media included) in memory at once.
-    const maxConcurrentBatches = resolveMaxConcurrentBatches();
-    if (maxConcurrentBatches > 0 && this.inFlightBatches >= maxConcurrentBatches) {
-      throw new HttpException(
-        `Too many bulk batches in progress (max ${maxConcurrentBatches}); retry shortly`,
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-    const options = {
-      delayBetweenMessages: dto.options?.delayBetweenMessages ?? 3000,
-      randomizeDelay: dto.options?.randomizeDelay ?? true,
-      stopOnError: dto.options?.stopOnError ?? false,
-    };
-
-    const progress: BatchProgress = {
-      total: messages.length,
-      sent: 0,
-      failed: 0,
-      pending: messages.length,
-      cancelled: 0,
-    };
-
-    const batch = this.batchRepository.create({
-      // Assigned here rather than by the database, so the batch is registered below before its row
-      // exists anywhere.
-      id: randomUUID(),
-      batchId,
-      sessionId,
-      status: BatchStatus.PENDING,
-      messages: messages as MessageBatch['messages'],
-      options,
-      progress,
-      results: [],
-      currentIndex: 0,
-    });
-
-    // Registered before the row exists, so a reap for this session (a claim that took the session
-    // from another holder) can never read this process's own batch unregistered. A cancel can only
-    // find the row once it is committed, and the false it sets then stands for the pickup check.
-    this.processingBatches.set(batch.id, true);
-    // Reserve synchronously in the same turn as the cap check. There is deliberately no await between
-    // them, so a burst cannot all observe the same stale count and overshoot the ceiling.
-    this.inFlightBatches++;
+    const lifetime = captureSessionWrites(this.batchRepository.manager?.connection ?? this.batchRepository, sessionId);
+    let handedOff = false;
     try {
-      // No transaction of its own: on SQLite's single shared connection the rollback of the unique
-      // violation handled below would also discard what other callers wrote while it was open.
-      await this.batchRepository.save(batch, { transaction: false });
-    } catch (error) {
-      this.inFlightBatches--;
-      this.processingBatches.delete(batch.id);
-      // Two concurrent creates with the same caller-supplied batchId both pass the read above; the
-      // unique index decides, and the loser gets the same 400 as the sequential case.
-      if (isUniqueViolation(error)) {
+      const existing = await this.batchRepository.findOne({ where: { batchId, sessionId } });
+      if (existing) {
         throw new BadRequestException(`Batch ID '${batchId}' already exists`);
       }
-      throw error;
-    }
-    this.logger.log(
-      `Created batch ${batchId} with ${messages.length} messages` +
-        (messages.length === dto.messages.length
-          ? ''
-          : ` (${dto.messages.length - messages.length} exact duplicate entr${dto.messages.length - messages.length === 1 ? 'y' : 'ies'} dropped)`),
-    );
 
-    // Start processing asynchronously
-    const pickup = this.processBatch(batch.id, true).catch(err => {
-      this.logger.error(`Batch ${batchId} processing error: ${String(err)}`);
-    });
-    // Teardown began during the save, so the pickup only fails the row. Awaited here, because the
-    // HTTP server's close waits for this request and the database closes after it; a detached write
-    // could find the connection gone and leave the row PENDING. Nothing was sent, so the row is then
-    // deleted and the answer is a 503: a retry of the same batchId (an SDK replaying the 503) is not
-    // refused as a duplicate of a batch that never ran. Only this process drives the batch, and the
-    // guard on startedAt keeps any row that began sending.
-    if (this.shuttingDown) {
-      await pickup;
-      const freed = await this.batchRepository.delete({ id: batch.id, startedAt: IsNull() }).then(
-        result => Boolean(result.affected),
-        (error: unknown) => {
-          this.logger.error(`Could not delete unsent batch ${batchId} on shutdown: ${String(error)}`);
-          return false;
-        },
-      );
-      throw new ServiceUnavailableException(
-        freed
-          ? 'The server is shutting down; retry the batch shortly'
-          : `The server is shutting down; batch '${batchId}' was not sent. Retry it shortly under a new batch ID`,
-      );
-    }
+      // Refused from the start of the drain: a batch accepted then would be failed part-sent when the
+      // teardown runs. Checked in the same turn as the registration below: a create that passes here is
+      // either seen by the shutdown fail or failed at its pickup in processBatch.
+      if (this.shuttingDown || this.shutdownService?.isShuttingDown() === true) {
+        throw new ServiceUnavailableException('The server is shutting down; retry the batch shortly');
+      }
 
-    return batch;
+      // Reject before persisting a row when too many batches are already processing, so a burst can't
+      // hold an unbounded number of full message sets (base64 media included) in memory at once.
+      const maxConcurrentBatches = resolveMaxConcurrentBatches();
+      if (maxConcurrentBatches > 0 && this.inFlightBatches >= maxConcurrentBatches) {
+        throw new HttpException(
+          `Too many bulk batches in progress (max ${maxConcurrentBatches}); retry shortly`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      const options = {
+        delayBetweenMessages: dto.options?.delayBetweenMessages ?? 3000,
+        randomizeDelay: dto.options?.randomizeDelay ?? true,
+        stopOnError: dto.options?.stopOnError ?? false,
+      };
+
+      const progress: BatchProgress = {
+        total: messages.length,
+        sent: 0,
+        failed: 0,
+        pending: messages.length,
+        cancelled: 0,
+      };
+
+      const batch = this.batchRepository.create({
+        // Assigned here rather than by the database, so the batch is registered below before its row
+        // exists anywhere.
+        id: randomUUID(),
+        batchId,
+        sessionId,
+        status: BatchStatus.PENDING,
+        messages: messages as MessageBatch['messages'],
+        options,
+        progress,
+        results: [],
+        currentIndex: 0,
+      });
+
+      // Registered before the row exists, so a reap for this session (a claim that took the session
+      // from another holder) can never read this process's own batch unregistered. A cancel can only
+      // find the row once it is committed, and the false it sets then stands for the pickup check.
+      this.processingBatches.set(batch.id, true);
+      // Reserve synchronously in the same turn as the cap check. There is deliberately no await between
+      // them, so a burst cannot all observe the same stale count and overshoot the ceiling.
+      this.inFlightBatches++;
+      try {
+        // No transaction of its own: on SQLite's single shared connection the rollback of the unique
+        // violation handled below would also discard what other callers wrote while it was open.
+        await lifetime.write(() => this.batchRepository.save(batch, { transaction: false }));
+      } catch (error) {
+        this.inFlightBatches--;
+        this.processingBatches.delete(batch.id);
+        // Two concurrent creates with the same caller-supplied batchId both pass the read above; the
+        // unique index decides, and the loser gets the same 400 as the sequential case.
+        if (isUniqueViolation(error)) {
+          throw new BadRequestException(`Batch ID '${batchId}' already exists`);
+        }
+        throw error;
+      }
+      this.logger.log(
+        `Created batch ${batchId} with ${messages.length} messages` +
+          (messages.length === dto.messages.length
+            ? ''
+            : ` (${dto.messages.length - messages.length} exact duplicate entr${dto.messages.length - messages.length === 1 ? 'y' : 'ies'} dropped)`),
+      );
+
+      // Start processing asynchronously
+      const pickup = this.processBatch(batch.id, true, lifetime).catch(err => {
+        this.logger.error(`Batch ${batchId} processing error: ${String(err)}`);
+      });
+      handedOff = true;
+      // Teardown began during the save, so the pickup only fails the row. Awaited here, because the
+      // HTTP server's close waits for this request and the database closes after it; a detached write
+      // could find the connection gone and leave the row PENDING. Nothing was sent, so the row is then
+      // deleted and the answer is a 503: a retry of the same batchId (an SDK replaying the 503) is not
+      // refused as a duplicate of a batch that never ran. Only this process drives the batch, and the
+      // guard on startedAt keeps any row that began sending.
+      if (this.shuttingDown) {
+        await pickup;
+        const freed = await this.batchRepository.delete({ id: batch.id, startedAt: IsNull() }).then(
+          result => Boolean(result.affected),
+          (error: unknown) => {
+            this.logger.error(`Could not delete unsent batch ${batchId} on shutdown: ${String(error)}`);
+            return false;
+          },
+        );
+        throw new ServiceUnavailableException(
+          freed
+            ? 'The server is shutting down; retry the batch shortly'
+            : `The server is shutting down; batch '${batchId}' was not sent. Retry it shortly under a new batch ID`,
+        );
+      }
+
+      return batch;
+    } finally {
+      if (!handedOff) lifetime.close();
+    }
   }
 
   async getBatchStatus(sessionId: string, batchId: string): Promise<MessageBatch> {
@@ -488,13 +496,14 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     return batch;
   }
 
-  private async processBatch(batchDbId: string, reserved = false): Promise<void> {
+  private async processBatch(batchDbId: string, reserved: boolean, lifetime: SessionWriteScope): Promise<void> {
     let batch: MessageBatch | null = null;
     // Always release the in-flight marker on every exit path (engine-not-found early return, a thrown
     // save/send, or normal completion) — otherwise the map leaks an entry per such batch.
     try {
       batch = await this.batchRepository.findOne({ where: { id: batchDbId } });
       if (!batch) return;
+      lifetime.assertCurrent();
       // A cancel that landed before this run picked the batch up must not be revived — neither the
       // in-memory flag nor a persisted CANCELLED may be flipped back. The guarded status UPDATE in
       // executeBatch closes the remaining race (a cancel committing after this read).
@@ -505,40 +514,45 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // Saved while the shutdown fail ran, which could not see the row yet: fail it unsent rather
       // than start a run after this process began tearing down.
       if (this.shuttingDown) {
-        await this.failOrphanedBatch(batch);
+        await lifetime.write(() => this.failOrphanedBatch(batch as MessageBatch));
         this.logger.warn(`Batch ${batch.batchId} was failed before processing started: shutting down`);
         return;
       }
       this.processingBatches.set(batch.id, true);
-      await this.executeBatch(batch);
+      await this.executeBatch(batch, lifetime);
     } catch (error) {
+      lifetime.assertCurrent();
       // A throw here (a DB error on the pickup read, the start transition or a progress write) would
       // leave the row PENDING or PROCESSING, and nothing else moves it on while this process lives:
       // the reapers run only at boot and on a session takeover. Best effort, since the database that
       // just failed may fail again. The row gets what this run sent, so delivered items are not
       // reported as pending.
-      await this.failOrphanedBatch(batch ?? { id: batchDbId }, true).catch((failError: unknown) => {
-        this.logger.error(`Could not mark batch ${batchDbId} FAILED after its run threw: ${String(failError)}`);
-      });
+      await lifetime
+        .write(() => this.failOrphanedBatch(batch ?? { id: batchDbId }, true))
+        .catch((failError: unknown) => {
+          this.logger.error(`Could not mark batch ${batchDbId} FAILED after its run threw: ${String(failError)}`);
+        });
       throw error;
     } finally {
       if (reserved) this.inFlightBatches--;
       this.processingBatches.delete(batchDbId);
+      lifetime.close();
     }
   }
 
-  private async executeBatch(batch: MessageBatch): Promise<void> {
-    if (!(await this.markBatchProcessing(batch))) return;
+  private async executeBatch(batch: MessageBatch, lifetime: SessionWriteScope): Promise<void> {
+    if (!(await lifetime.write(() => this.markBatchProcessing(batch)))) return;
+    lifetime.assertCurrent();
 
     if (!this.engines.get(batch.sessionId)) {
-      await this.failBatchWithoutEngine(batch);
+      await lifetime.write(() => this.failBatchWithoutEngine(batch));
       return;
     }
 
     const results: BatchMessageResult[] = batch.results || [];
     const state: BatchExecutionState = { results, stoppedOnError: false, cancelledByDb: false, endedElsewhere: false };
-    await this.processBatchMessages(batch, state);
-    await this.finalizeBatch(batch, state);
+    await this.processBatchMessages(batch, state, lifetime);
+    await lifetime.write(() => this.finalizeBatch(batch, state));
   }
 
   /** Returns false when the batch left PENDING before this start UPDATE, so nothing is sent. */
@@ -571,9 +585,14 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     } as QueryDeepPartialEntity<MessageBatch>);
   }
 
-  private async processBatchMessages(batch: MessageBatch, state: BatchExecutionState): Promise<void> {
+  private async processBatchMessages(
+    batch: MessageBatch,
+    state: BatchExecutionState,
+    lifetime: SessionWriteScope,
+  ): Promise<void> {
     for (let i = batch.currentIndex; i < batch.messages.length; i++) {
-      if (!(await this.processBatchMessage(batch, i, state))) break;
+      lifetime.assertCurrent();
+      if (!(await this.processBatchMessage(batch, i, state, lifetime))) break;
     }
   }
 
@@ -581,7 +600,12 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
    * Send one batch message through the moderation gate, record the outcome, and persist progress.
    * Returns false when the batch loop must stop (cancellation or stopOnError).
    */
-  private async processBatchMessage(batch: MessageBatch, i: number, state: BatchExecutionState): Promise<boolean> {
+  private async processBatchMessage(
+    batch: MessageBatch,
+    i: number,
+    state: BatchExecutionState,
+    lifetime: SessionWriteScope,
+  ): Promise<boolean> {
     const { results } = state;
     // Check for cancellation
     if (!this.processingBatches.get(batch.id)) {
@@ -659,6 +683,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
 
       // Resolved per item, not once per batch: a session restart or reconnect registers a fresh
       // adapter, and a batch still holding the retired one would fail every remaining item.
+      lifetime.assertCurrent();
       const engine = this.engines.get(batch.sessionId);
       if (!engine) throw new EngineNotReadyError();
 
@@ -695,7 +720,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       // mapping — the engine echo (onMessageCreate) writes its own OUTGOING row, but only with what
       // the engine reported, and a Baileys API send echoes a media-less marker. The two writers
       // dedup on UNIQUE(sessionId, waMessageId).
-      await this.persistSentMessage(batch.sessionId, msg.chatId, msg.type, content, messageResult);
+      await this.persistSentMessage(batch.sessionId, msg.chatId, msg.type, content, messageResult, lifetime);
 
       this.logger.debug(`Batch ${batch.batchId}: Sent message ${i + 1}/${batch.messages.length} to ${msg.chatId}`);
     } catch (error) {
@@ -742,6 +767,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
       }
     }
 
+    lifetime.assertCurrent();
     results.push(result);
     batch.currentIndex = i + 1;
     batch.results = results;
@@ -751,9 +777,11 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // only sees same-process cancels), and a reap that failed the batch after another node took the
     // session over. The guard lives IN the UPDATE (not a read-then-write), so neither can be written
     // over: zero affected rows stops the loop, and the row says which of the two it was.
-    const progressSaved = await this.batchRepository.update(
-      { id: batch.id, status: BatchStatus.PROCESSING },
-      { progress: batch.progress, results, currentIndex: batch.currentIndex },
+    const progressSaved = await lifetime.write(() =>
+      this.batchRepository.update(
+        { id: batch.id, status: BatchStatus.PROCESSING },
+        { progress: batch.progress, results, currentIndex: batch.currentIndex },
+      ),
     );
     if (!progressSaved.affected) {
       await this.noteRowLeftProcessing(batch, state, `at index ${i}`);
@@ -990,6 +1018,7 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     type: string,
     content: BulkMessageContent,
     result: MessageResult,
+    lifetime: SessionWriteScope,
   ): Promise<void> {
     // Store what sendMessage sent: the media under the item's own type key, and the caption for a
     // media item (audio carries none). Other keys on the item were never delivered.
@@ -998,23 +1027,27 @@ export class BulkMessageService implements OnModuleInit, OnApplicationBootstrap,
     // A bulk audio item flagged ptt is a voice note; store it in the 'voice' bucket like inbound PTT.
     const persistType = type === 'audio' && content.audio?.ptt ? 'voice' : type;
     try {
-      await this.messageService.saveOutgoingMessage(sessionId, {
-        waMessageId: result.id,
-        chatId,
-        body: body ?? '',
-        type: persistType,
-        timestamp: result.timestamp,
-        status: MessageStatus.SENT,
-        metadata: media
-          ? {
-              media: {
-                mimetype: this.mediaMimetype(type, content),
-                data: stripBase64DataUri(media.base64) || media.url,
-                filename: media.filename,
-              },
-            }
-          : undefined,
-      });
+      await this.messageService.saveOutgoingMessage(
+        sessionId,
+        {
+          waMessageId: result.id,
+          chatId,
+          body: body ?? '',
+          type: persistType,
+          timestamp: result.timestamp,
+          status: MessageStatus.SENT,
+          metadata: media
+            ? {
+                media: {
+                  mimetype: this.mediaMimetype(type, content),
+                  data: stripBase64DataUri(media.base64) || media.url,
+                  filename: media.filename,
+                },
+              }
+            : undefined,
+        },
+        lifetime,
+      );
     } catch (error) {
       // Losing the dedup race to the own-send echo is no longer an error here — saveOutgoingMessage
       // merges onto the echo's row. Anything reaching this point is a real persistence fault.

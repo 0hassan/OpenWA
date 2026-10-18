@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { DataSource, DeepPartial, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 
 jest.mock('archiver', () => ({ default: jest.fn() }));
@@ -305,13 +305,7 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
     // The in-memory row returned here is exactly what dispatchStatusReceived sends. Every other
     // omission path sets omitReason, so leaving it unset made a real media loss indistinguishable
     // from an unexplained omission — and nothing retries it.
-    const saveSpy = jest.spyOn(repository, 'save');
-    let calls = 0;
-    saveSpy.mockImplementation((row: DeepPartial<StatusUpdate>) => {
-      calls += 1;
-      if (calls === 2) return Promise.reject(new Error('db blip')); // the post-write update
-      return Promise.resolve(row as DeepPartial<StatusUpdate> & StatusUpdate);
-    });
+    const updateSpy = jest.spyOn(repository, 'update').mockRejectedValueOnce(new Error('db blip'));
     try {
       const { row } = await service.ingest('sess', {
         waStatusId: 'w-row-fail',
@@ -324,7 +318,7 @@ describe('StatusStoreService (ingest / list / getMedia)', () => {
       expect(row.omitReason).toBe('write_failed');
       expect(row.mediaPath).toBeFalsy();
     } finally {
-      saveSpy.mockRestore();
+      updateSpy.mockRestore();
     }
   });
 

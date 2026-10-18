@@ -12,6 +12,7 @@ import { isUniqueViolation } from '../../common/utils/db-errors';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { parseWaId, userPart } from '../../engine/identity/wa-id';
 import { createLogger } from '../../common/services/logger.service';
+import { captureSessionWrites, SessionWriteScope } from '../../common/utils/session-write-scope';
 
 /** A status/story lives for 24h from posting, matching WhatsApp's own expiry. Exported for the
  * session service's seed, which skips backfilling statuses that have already run out their TTL. */
@@ -117,49 +118,62 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
    * permanent orphan file; the narrow window between the file write and the row update is the only
    * remaining orphan source, and the reconciliation sweep reaps those.
    */
-  async ingest(sessionId: string, s: IncomingStatus): Promise<{ row: StatusUpdate; created: boolean }> {
-    const existing = await this.repository.findOne({ where: { sessionId, waStatusId: s.waStatusId } });
-    if (existing) return { row: existing, created: false };
-
-    const row = new StatusUpdate();
-    row.sessionId = sessionId;
-    row.contactJid = s.contactJid;
-    row.contactName = s.contactName;
-    row.contactPushName = s.contactPushName;
-    row.waStatusId = s.waStatusId;
-    row.type = s.type;
-    row.caption = s.caption;
-    row.backgroundColor = s.backgroundColor;
-    row.font = s.font;
-    row.postedAt = s.postedAt;
-    row.expiresAt = s.postedAt + STATUS_TTL_MS;
-    // Settles every media outcome that does NOT need a file write; a keepable blob stays
-    // omitted-for-now until attachMedia lands the file and flips it (post-save).
-    const keepMedia = this.applyMediaDecision(row, s);
-
-    let saved: StatusUpdate;
+  async ingest(
+    sessionId: string,
+    s: IncomingStatus,
+    lifetime?: SessionWriteScope,
+  ): Promise<{ row: StatusUpdate; created: boolean }> {
+    const scope = lifetime ?? this.captureWrites(sessionId);
     try {
-      // Without a transaction: a single-row save() wraps itself in one, and on SQLite's single shared
-      // connection the rollback of the unique violation expected below also discards the rows other callers
-      // wrote while it was open, after they were reported stored.
-      saved = await this.repository.save(row, { transaction: false });
-    } catch (error) {
-      // The unique (sessionId, waStatusId) index is the idempotency backstop for a concurrent ingest
-      // of the same status racing past the findOne check above; on a unique-constraint violation the
-      // loser re-reads and returns the row the winner just inserted instead of surfacing the
-      // constraint error to the caller. Any OTHER save error is a genuine persistence failure and
-      // must propagate — never be masked by a coincidentally matching row. No media file has been
-      // written at this point (row-first ordering), so unlike a file-first ingest there is nothing
-      // to reap here — the winner's own call owns its file write.
-      const winner = await this.repository.findOne({ where: { sessionId, waStatusId: s.waStatusId } });
-      if (winner && isUniqueViolation(error)) return { row: winner, created: false };
-      throw error;
-    }
+      const existing = await this.repository.findOne({ where: { sessionId, waStatusId: s.waStatusId } });
+      if (existing) return { row: existing, created: false };
 
-    if (keepMedia) {
-      await this.attachMedia(saved, sessionId, s);
+      const row = new StatusUpdate();
+      row.sessionId = sessionId;
+      row.contactJid = s.contactJid;
+      row.contactName = s.contactName;
+      row.contactPushName = s.contactPushName;
+      row.waStatusId = s.waStatusId;
+      row.type = s.type;
+      row.caption = s.caption;
+      row.backgroundColor = s.backgroundColor;
+      row.font = s.font;
+      row.postedAt = s.postedAt;
+      row.expiresAt = s.postedAt + STATUS_TTL_MS;
+      // Settles every media outcome that does NOT need a file write; a keepable blob stays
+      // omitted-for-now until attachMedia lands the file and flips it (post-save).
+      const keepMedia = this.applyMediaDecision(row, s);
+
+      let saved: StatusUpdate;
+      try {
+        // Without a transaction: a single-row save() wraps itself in one, and on SQLite's single shared
+        // connection the rollback of the unique violation expected below also discards the rows other callers
+        // wrote while it was open, after they were reported stored.
+        saved = await scope.write(() => this.repository.save(row, { transaction: false }));
+      } catch (error) {
+        // The unique (sessionId, waStatusId) index is the idempotency backstop for a concurrent ingest
+        // of the same status racing past the findOne check above; on a unique-constraint violation the
+        // loser re-reads and returns the row the winner just inserted instead of surfacing the
+        // constraint error to the caller. Any OTHER save error is a genuine persistence failure and
+        // must propagate — never be masked by a coincidentally matching row. No media file has been
+        // written at this point (row-first ordering), so unlike a file-first ingest there is nothing
+        // to reap here — the winner's own call owns its file write.
+        const winner = await this.repository.findOne({ where: { sessionId, waStatusId: s.waStatusId } });
+        if (winner && isUniqueViolation(error)) return { row: winner, created: false };
+        throw error;
+      }
+
+      if (keepMedia) {
+        await this.attachMedia(saved, sessionId, s);
+      }
+      return { row: saved, created: true };
+    } finally {
+      if (!lifetime) scope.close();
     }
-    return { row: saved, created: true };
+  }
+
+  captureWrites(sessionId: string): SessionWriteScope {
+    return captureSessionWrites(this.repository.manager?.connection ?? this.repository, sessionId);
   }
 
   /**
@@ -211,7 +225,7 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
         error instanceof Error ? error.stack : String(error),
       );
       row.omitReason = 'write_failed';
-      await this.repository.save(row).catch(err =>
+      await this.repository.update({ id: row.id, sessionId }, { omitReason: row.omitReason }).catch(err =>
         this.logger.warn(`Failed to record the write_failed omission for status ${s.waStatusId}`, {
           error: String(err),
         }),
@@ -223,7 +237,14 @@ export class StatusStoreService implements OnModuleInit, OnModuleDestroy {
     row.mediaMimetype = media.mimetype;
     row.mediaOmitted = false;
     try {
-      await this.repository.save(row);
+      await this.repository.update(
+        { id: row.id, sessionId },
+        {
+          mediaPath: row.mediaPath,
+          mediaMimetype: row.mediaMimetype,
+          mediaOmitted: false,
+        },
+      );
     } catch (error) {
       // The file exists but the row cannot reference it — an orphan the reconciliation sweep reaps
       // after its grace window. The persisted row stays consistent (still omitted from the first
