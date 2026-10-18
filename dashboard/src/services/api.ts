@@ -879,7 +879,32 @@ export const sessionApi = {
   getStats: () => request<SessionStats>('/sessions/stats/overview'),
   getGroups: (id: string) =>
     request<{ id: string; name?: string; linkedParentJID?: string | null }[]>(`/sessions/${id}/groups`),
-  getChats: (id: string) => request<Chat[]>(`/sessions/${id}/chats`),
+  getChats: async (id: string, signal?: AbortSignal) => {
+    let lastError: unknown;
+    const { items, throttled } = await fetchAllPages<Chat>(
+      async (limit, offset) => {
+        signal?.throwIfAborted();
+        try {
+          const data = await request<Chat[]>(`/sessions/${id}/chats?limit=${limit}&offset=${offset}`, { signal });
+          return { data, total: data.length < limit ? offset + data.length : Infinity };
+        } catch (err) {
+          lastError = err;
+          throw err;
+        } finally {
+          signal?.throwIfAborted();
+        }
+      },
+      { pageSize: 1000, maxItems: Infinity },
+    );
+    // A later throttled page must fail the load rather than present an incomplete sidebar.
+    if (throttled) throw lastError;
+    const seen = new Set<string>();
+    return items.filter(chat => {
+      if (seen.has(chat.id)) return false;
+      seen.add(chat.id);
+      return true;
+    });
+  },
   markChatRead: (id: string, chatId: string) =>
     request<{ success: boolean }>(`/sessions/${id}/chats/read`, {
       method: 'POST',

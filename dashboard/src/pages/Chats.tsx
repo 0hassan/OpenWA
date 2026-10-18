@@ -313,6 +313,7 @@ export function Chats() {
   // answer is dropped only once a newer one has landed: dropping every answer a newer call overtook
   // left a burst of realtime refetches with no list at all, each miss firing the next refetch.
   // A realtime refetch runs in the background, keeping the current list on screen.
+  const chatsLoadsRef = useRef(new Set<AbortController>());
   const chatsRequestRef = useRef(0);
   const chatsAppliedRef = useRef(0);
   const chatsSessionRef = useRef('');
@@ -324,15 +325,18 @@ export function Chats() {
   const loadChats = useCallback(
     async (sessionId: string, { background = false } = {}): Promise<boolean> => {
       if (!sessionId) return false;
+      const controller = new AbortController();
+      chatsLoadsRef.current.add(controller);
       const request = ++chatsRequestRef.current;
       chatsSessionRef.current = sessionId;
-      const stale = () => sessionId !== chatsSessionRef.current || request < chatsAppliedRef.current;
+      const stale = () =>
+        controller.signal.aborted || sessionId !== chatsSessionRef.current || request < chatsAppliedRef.current;
       // A stale answer for the session still selected was overtaken by a newer list that has applied,
       // so this session's list on screen is as fresh as this call's would have been.
-      const overtaken = () => sessionId === chatsSessionRef.current;
+      const overtaken = () => !controller.signal.aborted && sessionId === chatsSessionRef.current;
       try {
         if (!background) setLoadingChats(true);
-        const data = await sessionApi.getChats(sessionId);
+        const data = await sessionApi.getChats(sessionId, controller.signal);
         if (stale()) return overtaken();
         chatsAppliedRef.current = request;
         // A live frame can move a row past the snapshot a background refetch was built from while it is
@@ -342,7 +346,9 @@ export function Chats() {
         listedSessionRef.current = sessionId;
         setChats(prev => {
           const live = new Map(merge ? prev.map(c => [c.id, c] as const) : []);
-          return data
+          const fetchedIds = new Set(data.map(c => c.id));
+          const rows = [...data, ...prev.filter(c => merge && moved(c.id) && !fetchedIds.has(c.id))];
+          return rows
             .map(c => {
               const row = live.get(c.id);
               return row && moved(c.id) && (row.timestamp || 0) > (c.timestamp || 0) ? row : c;
@@ -359,9 +365,10 @@ export function Chats() {
         setChats([]);
         return false;
       } finally {
+        chatsLoadsRef.current.delete(controller);
         // Only the call that raised the spinner clears it: a background refetch settling first would
         // otherwise uncover the previous session's list while the switch's own load is still out.
-        if (!background && sessionId === chatsSessionRef.current) setLoadingChats(false);
+        if (!background && !controller.signal.aborted && sessionId === chatsSessionRef.current) setLoadingChats(false);
       }
     },
     [showLoadError],
@@ -376,6 +383,7 @@ export function Chats() {
   }, []);
 
   useEffect(() => {
+    const loads = chatsLoadsRef.current;
     if (selectedSessionId) {
       void loadChats(selectedSessionId);
       setActiveChat(null);
@@ -390,6 +398,10 @@ export function Chats() {
       setReplyingTo(null);
       lastRoomIdRef.current = null;
     }
+    return () => {
+      for (const controller of loads) controller.abort();
+      loads.clear();
+    };
   }, [selectedSessionId, loadChats]);
 
   // Coalesce mark-as-read RPCs per chat: every incoming message in the visible chat raises a
