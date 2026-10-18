@@ -29,6 +29,9 @@ const TTL = {
   SESSIONS_STATS: 15, // 15 sec
 };
 
+/** Max time to await a cache command or release a socket that stops responding. */
+const CACHE_COMMAND_TIMEOUT_MS = 2000;
+
 /** Max time to await a graceful `redis.quit()` on shutdown before force-disconnecting (see onModuleDestroy). */
 export const CACHE_QUIT_TIMEOUT_MS = 2000;
 
@@ -69,6 +72,10 @@ export class CacheService implements OnModuleDestroy {
       // Cache is best-effort: a command issued while disconnected fails fast (the caller falls back to
       // the source of truth) instead of being queued and stalling the request until reconnect.
       enableOfflineQueue: false,
+      commandTimeout: CACHE_COMMAND_TIMEOUT_MS,
+      // Release unanswered commands as well as their callers, then let the client reconnect.
+      socketTimeout: CACHE_COMMAND_TIMEOUT_MS,
+      autoResendUnfulfilledCommands: false,
       maxRetriesPerRequest: 3,
       // Reconnect forever with bounded backoff. Returning null (the previous behavior after 3 tries)
       // makes ioredis abandon reconnection permanently, which is exactly what left the cache dead
